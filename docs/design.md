@@ -4,13 +4,13 @@ A job-search assistant that runs on Claude Code with the user's own Claude subsc
 has no app screens: the user works with it in a Claude Code session, on the computer or from
 a phone through Remote Control.
 
-Each morning it finds new jobs that fit the user and sends one numbered list. The user replies
-with the ones they want ("apply 1 3 4"). It writes a resume for each and applies, and pauses
-only for what needs the user: a CAPTCHA, a site sign-in, or a form question their career file
-cannot answer. It also drafts replies to recruiters' emails for the user to send.
+The user talks to one chat, the `job-hunt` session. It is their orchestrator: it runs the
+finder, the resume writers and the applying workers, several at once, and asks the user only
+when a decision is theirs. Each question is one short message with what it needs shown (the
+job, the resume, the reply, the time), answered with "yes" or a short change.
 
-Success: on a normal day the user spends a minute reading the list and replying, and the
-applications go out without any further step.
+Success: the user answers a few questions a day from their phone, and everything else happens
+without them.
 
 ## Decisions
 
@@ -30,6 +30,29 @@ applications go out without any further step.
 - Nothing is sent without the user's word: applications go out for the jobs they picked, and an
   email reply only after they approve its draft.
 
+## The chat
+
+- The `job-hunt` session runs in `tmux` with Remote Control, so the user reaches it from the
+  Claude app on their phone. A fresh one starts each morning, so its context stays small; the
+  state lives in `data/`, never in the chat.
+- It does the mechanical work through `hunt` commands and starts `claude -p` workers for
+  judgment. It waits for them in the background and asks the user only for decisions.
+- The questions, each a message of its own:
+  - **A new job.** Title, company, area, score and its one-line reason, Easy Apply or company
+    site: "Apply?" Several new jobs come as one numbered list, answered "1 3" or "all".
+  - **A paused application.** A CAPTCHA, a sign-in, or a form question the career file cannot
+    answer, with the Chrome tab: "done" or the answer.
+  - **A recruiter's message**, by email or on LinkedIn. The message, the job description when
+    there is one, and a drafted reply: "Send?"
+  - **A request to talk.** Free times from the user's Google Calendar and the reply offering
+    one, with the resume for that job: "Send?" On yes it sends and adds the time to the
+    calendar as held; when the recruiter confirms, the event is confirmed.
+- Every question also goes out as a push through Pushover when the user set its keys in
+  `/setup`; without them the Claude app's own notification for a waiting session does it.
+- Fewer messages are better: one question per decision, nothing about progress unless asked,
+  one summary at the end of a day.
+- Nothing is sent in the user's name and no time is booked without their yes to that message.
+
 ## Setup
 
 `/setup` is a Claude Code command any user runs once, in about ten minutes:
@@ -39,7 +62,8 @@ applications go out without any further step.
    missing and how to add it.
 2. It reads the user's resume (PDF, Word or pasted text) into `data/career.json` and shows what
    it read for the user to correct. An export in the career shape `hunt career` reads works too.
-3. It asks what to look for: job titles, places, remote or not, the lowest salary. These go in
+3. It asks what to look for: job titles, the areas by name ("Raleigh-Durham-Chapel Hill",
+   "New York City"), remote jobs included, excluded or only, and the lowest salary. These go in
    `data/settings.json`.
 4. It asks the user to turn on job alerts on the boards they use (LinkedIn, Indeed and others)
    for those searches, since the finder reads the alert emails.
@@ -51,8 +75,8 @@ applications go out without any further step.
 
 1. **Finder (on a timer).** At the chosen hour one `claude -p` on Claude Haiku reads the job
    alert emails through the Gmail connector and writes each job's link, title, company and
-   place. A script drops jobs already in the list, wrong titles, and places too far away that
-   are not remote. For each job left it saves the full description from the job page and notes
+   place. The run also says which of the user's areas each job is in. A script drops jobs
+   already in the list, wrong titles, and jobs outside the areas or the remote setting. For each job left it saves the full description from the job page and notes
    whether it is a LinkedIn Easy Apply or a company site.
 2. **Scoring (only when the finder found something).** One `claude -p` reads the new jobs and
    the career file, and gives each a fit score from 1 to 10 with a one-line reason.
@@ -82,13 +106,16 @@ Each piece has one job and talks to the others only through the jobs list and fi
 | `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `status`. It is the coordinator. |
 | Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
-| Settings | `data/settings.json` | Titles, places, remote, salary floor, the timer's hour. |
+| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the timer's hour. |
 | Resume worker | `claude -p` with the `write-resume` skill | Gets the career and one job description and writes `resume-content.json`. |
 | Resume builder | Python (`resume_kit`) | Merges that content with the career, checks it against the resume contract, builds `resume.pdf`. |
 | LinkedIn worker | `claude -p --chrome` with the `apply-linkedin` skill | Opens the job's LinkedIn page, presses Easy Apply, uploads the PDF, answers from the career, submits. |
 | Company-site worker | `claude -p --chrome` with the `apply-site` skill | Opens the site's apply link, uploads the PDF, checks the fields the site read from it, answers, submits. |
 | Reply drafter | `claude -p` with the `draft-reply` skill | Drafts an answer to one recruiter email as a Gmail draft. |
-| Session rules | `.claude/commands` and `CLAUDE.md` | How the `job-hunt` session shows the list and turns replies into `hunt` commands. |
+| The chat | `CLAUDE.md` and `.claude/commands` | The `job-hunt` session: asks the questions, turns answers into `hunt` commands, starts and waits for workers. |
+| Notifier | `hunt notify` | Sends one question as a Pushover push, when the user set its keys. |
+| Scheduler | `claude -p` with the `offer-times` skill | Reads free times from Google Calendar, drafts the reply offering them, adds the held event on yes. |
+| LinkedIn inbox | `claude -p --chrome` with the `read-linkedin-messages` skill | Reads new recruiter messages on LinkedIn, one worker at a time under the LinkedIn lock. |
 
 The coordinator is a script, not a Claude session. It reads the list, starts the workers,
 collects their reports and writes states. Claude is used only for judgment: reading emails,
@@ -166,6 +193,7 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 2. The finder and the jobs list.
 3. Scoring, the `job-hunt` session and picking.
 4. The company-site worker, then the LinkedIn worker.
-5. The morning timer.
+5. The chat: the morning session, its questions and Pushover.
 6. `/setup`, with the resume reader.
-7. Recruiter email replies.
+7. Recruiter replies, by email and on LinkedIn.
+8. Offering times from Google Calendar.

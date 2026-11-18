@@ -18,17 +18,20 @@ $ARGUMENTS
   certifications, skills and `form_answers`, the standing answers and those saved from forms
   (`saved`, each a question in a form's words and its answer).
 - `report`: the file to write at the end.
-- `tab`, only when this job paused before: the title of the tab it paused in. The person has
-  since done what it needed there (solved the CAPTCHA, signed in) or answered its question.
+- `tab` and `tab_id`, only when this job paused before: the title and the id of the tab it
+  paused in. The person has since done what it needed there (solved the CAPTCHA, signed in) or
+  answered its question.
 
 The person picked this job, so applying is what they asked for. Other workers apply to other
-jobs in the same Chrome at the same time: work only in your own tab, the one you open or `tab`.
+jobs in the same Chrome at the same time: work only in your own tab, the one you open or `tab_id`.
 
 ## Apply
 
-1. With `tab`, find that tab among Chrome's tabs and carry on there from where the form is
-   now; the question it paused on now has an answer in the career. Without `tab`, or when no
-   tab has that title, open a new tab of your own and go to `link`. Find the way to apply (an
+1. With `tab_id`, find the tab of that id among Chrome's tabs. When it shows this job's
+   application (the company's site, this job's title), carry on there from where the form is
+   now; the question it paused on now has an answer in the career. Never use a tab by its
+   title alone: another job's tab may have the same one. Without `tab_id`, or when that tab is
+   gone or shows something else, open a new tab of your own and go to `link`. Find the way to apply (an
    "Apply" button, a link to the company's careers site) and follow it in that tab.
 2. If the site says this person has already applied to this job, stop: report `applied`.
 3. Upload `resume` wherever the form asks for a resume or offers to fill the form from one.
@@ -54,13 +57,14 @@ Some things only the person can do. Leave the tab open exactly where it is and r
 
 ## Report
 
-Write `report` with the Write tool, once, as the last thing you do. One of:
+Write `report` with the Write tool, once, as the last thing you do. `tab_id` is the id
+Chrome's tools give the tab, a whole number. One of:
 
 ```json
 {"result": "applied"}
-{"result": "paused", "needs": "captcha", "tab": "<the tab's title>"}
-{"result": "paused", "needs": "sign_in", "tab": "<the tab's title>"}
-{"result": "paused", "needs": "question", "question": "<the form's question>", "tab": "<the tab's title>"}
+{"result": "paused", "needs": "captcha", "tab": "<the tab's title>", "tab_id": <the tab's id>}
+{"result": "paused", "needs": "sign_in", "tab": "<the tab's title>", "tab_id": <the tab's id>}
+{"result": "paused", "needs": "question", "question": "<the form's question>", "tab": "<the tab's title>", "tab_id": <the tab's id>}
 {"result": "failed", "reason": "<one line: what went wrong, for the person to apply by hand>"}
 ```
 

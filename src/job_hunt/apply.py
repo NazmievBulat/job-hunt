@@ -6,7 +6,8 @@ built. Then up to three company-site workers at once (`claude --chrome -p` with 
 skill) each apply to one job in a Chrome tab of their own and write `jobs/<id>/report.json`:
 
     {"result": "applied"}
-    {"result": "paused", "needs": "captcha" | "sign_in" | "question", "question": "...", "tab": "..."}
+    {"result": "paused", "needs": "captcha" | "sign_in" | "question", "question": "...", "tab": "...",
+     "tab_id": 123}
     {"result": "failed", "reason": "..."}
 
 The coordinator saves each report as the job's state. A worker that fails, writes no report or
@@ -58,6 +59,8 @@ class Report:
     needs: str | None = None
     question: str | None = None
     tab: str | None = None
+    # The id Chrome's tools give the tab: two paused tabs may share a title.
+    tab_id: int | None = None
     reason: str | None = None
 
     def pause_reason(self) -> str:
@@ -98,13 +101,15 @@ def resume_command(job: int, root: Path) -> list[str]:
     ]
 
 
-def site_command(job: Job, root: Path, tab: str | None = None) -> list[str]:
-    """With `tab`, the worker carries on in the tab its job paused in, where the user just did
-    what it needed, instead of starting again in a new one."""
+def site_command(job: Job, root: Path, paused: Report | None = None) -> list[str]:
+    """With the report of the job's pause, the worker carries on in the tab it paused in, where
+    the user just did what it needed, instead of starting again in a new one."""
     folder = _folder(root, job.id)
     arguments = {"job": job.id, "link": job.link, "title": job.title, "company": job.company,
                  "resume": str(folder / "resume.pdf"), "career": str(_career(root)),
-                 "report": str(folder / "report.json"), **({"tab": tab} if tab else {})}
+                 "report": str(folder / "report.json")}
+    if paused is not None:
+        arguments |= {"tab": paused.tab, "tab_id": paused.tab_id}
     return [
         "claude", "--chrome", "-p", f"/{SITE_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
         "--model", MODEL,
@@ -140,10 +145,13 @@ def read_report(path: Path) -> Report:
         raise ApplyError(f'the {SITE_SKILL} run paused, but "needs" is not one of {", ".join(NEEDS)}')
     if not (tab := _text(data, "tab")):
         raise ApplyError(f"the {SITE_SKILL} run paused without naming the tab")
+    tab_id = data.get("tab_id")
+    if tab_id is not None and type(tab_id) is not int:
+        raise ApplyError(f'the {SITE_SKILL} run paused with a "tab_id" that is not a whole number')
     question = _text(data, "question")
     if needs == "question" and not question:
         raise ApplyError(f"the {SITE_SKILL} run paused on a question without the question")
-    return Report("paused", needs=needs, question=question if needs == "question" else None, tab=tab)
+    return Report("paused", needs=needs, question=question if needs == "question" else None, tab=tab, tab_id=tab_id)
 
 
 def apply(jobs: JobsList, root: Path, *, run_resume: Run, run_site: Run) -> Summary:
@@ -218,21 +226,21 @@ def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
                 summary.failed += 1
 
 
-def _paused_tab(report: Path) -> str | None:
+def _paused(report: Path) -> Report | None:
     try:
         earlier = read_report(report)
     except ApplyError:
         return None
-    return earlier.tab if earlier.result == "paused" else None
+    return earlier if earlier.result == "paused" else None
 
 
 def _apply_on_site(job: Job, root: Path, run: Run) -> Report:
     report = _folder(root, job.id) / "report.json"
-    tab = _paused_tab(report)
+    paused = _paused(report)
     # A report an earlier try left must not pass for this one's.
     report.unlink(missing_ok=True)
     try:
-        run(site_command(job, root, tab))
+        run(site_command(job, root, paused))
     except ApplyError as error:
         # A worker that wrote its report and then stopped badly still did what it reports: an
         # application it sent must not be sent again.
@@ -265,7 +273,7 @@ def _sites(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
                     waiting.append(job)
 
 
-def _paused(jobs: JobsList, job: int) -> Job:
+def _paused_job(jobs: JobsList, job: int) -> Job:
     try:
         found = jobs.get(job)
     except KeyError as error:
@@ -277,7 +285,7 @@ def _paused(jobs: JobsList, job: int) -> Job:
 
 def resume_job(jobs: JobsList, job: int) -> Job:
     """Put a paused job back once the user did what it needed; the next run applies to it."""
-    _paused(jobs, job)
+    _paused_job(jobs, job)
     jobs.move(job, "resume_ready")
     return jobs.get(job)
 
@@ -285,7 +293,7 @@ def resume_job(jobs: JobsList, job: int) -> Job:
 def answer(jobs: JobsList, root: Path, job: int, text: str) -> Job:
     """Save the answer to a paused job's question in the career's form answers, so no form asks
     it again, and put the job back."""
-    found = _paused(jobs, job)
+    found = _paused_job(jobs, job)
     try:
         report = read_report(_folder(root, job) / "report.json")
     except ApplyError:

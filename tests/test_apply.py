@@ -255,6 +255,7 @@ def test_a_resume_worker_that_ends_without_a_pdf_is_a_failure(project: Path, job
     ('{"result": "paused", "needs": "captcha"}', "tab"),
     ('{"result": "paused", "needs": "question", "tab": "Apply - Example Co"}', "question"),
     ('{"result": "paused", "needs": "a phone call", "tab": "Apply - Example Co"}', "needs"),
+    ('{"result": "paused", "needs": "captcha", "tab": "Apply", "tab_id": "41"}', "tab_id"),
 ])
 def test_a_report_that_cannot_be_read_is_a_failure_saying_why(
     project: Path, jobs: JobsList, written: str | None, words: str
@@ -506,12 +507,14 @@ def test_a_jobs_file_from_before_failures_were_counted_gains_the_count(tmp_path:
 
 
 def test_a_resumed_job_carries_on_in_the_tab_it_paused_in(project: Path, jobs: JobsList) -> None:
-    job = _pause(project, jobs, {"result": "paused", "needs": "captcha", "tab": "Apply - Example Co 1"})
+    job = _pause(project, jobs, {"result": "paused", "needs": "captcha", "tab": "Application", "tab_id": 41})
     resume_job(jobs, job)
     commands: list[list[str]] = []
     sites = Sites(project)
     apply(jobs, project, run_resume=Resumes(project), run_site=lambda command: (commands.append(command), sites(command)))
-    assert json.loads(commands[0][3].removeprefix(f"/{SITE_SKILL} "))["tab"] == "Apply - Example Co 1"
+    sent = json.loads(commands[0][3].removeprefix(f"/{SITE_SKILL} "))
+    # Two jobs may pause on pages titled alike: the id names the tab, the title is for the user.
+    assert (sent["tab"], sent["tab_id"]) == ("Application", 41)
     # A job that did not pause before starts in a new tab.
     assert "tab" not in json.loads(site_command(jobs.get(_picked(jobs, 2)), project)[3].removeprefix(f"/{SITE_SKILL} "))
 

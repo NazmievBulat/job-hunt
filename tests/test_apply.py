@@ -818,3 +818,26 @@ def test_chrome_out_of_reach_pauses_every_job_and_costs_none_a_try(
     resume_job(hunt, picked[0])
     apply(hunt, project, run_resume=Resumes(project), run_site=Sites(project))
     assert hunt.get(picked[0]).state == "applied"
+
+
+def test_a_job_resumed_after_chrome_was_out_of_reach_starts_in_a_new_tab(project: Path, jobs: JobsList) -> None:
+    job = _pause(project, jobs, {"result": "paused", "needs": "chrome"})
+    resume_job(jobs, job)
+    commands: list[list[str]] = []
+    sites = Sites(project)
+    apply(jobs, project, run_resume=Resumes(project), run_site=lambda command: (commands.append(command), sites(command)))
+    # It paused in no tab: the worker is given none, not a tab named null.
+    sent = json.loads(commands[0][3].removeprefix(f"/{SITE_SKILL} "))
+    assert "tab" not in sent and "tab_id" not in sent
+
+
+def test_a_worker_that_crashes_leaving_a_broken_report_is_named_by_its_error(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1)
+    sites = Sites(project, {job: ["{not json"]})
+
+    def wrote_half_then_crashed(command: list[str]) -> None:
+        sites(command)
+        raise ApplyError("the apply-site run failed (1): the connection to Chrome was lost")
+
+    _unsure_after_two_runs(project, jobs, job, wrote_half_then_crashed)
+    assert jobs.get(job).state_reason == UNSURE + "the apply-site run failed (1): the connection to Chrome was lost"

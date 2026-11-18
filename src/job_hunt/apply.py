@@ -123,7 +123,8 @@ def site_command(job: Job, root: Path, paused: Report | None = None) -> list[str
     arguments = {"job": job.id, "link": job.link, "title": job.title, "company": job.company,
                  "resume": str(folder / "resume.pdf"), "career": str(_career(root)),
                  "report": str(folder / "report.json")}
-    if paused is not None:
+    # A pause with no tab (Chrome out of reach) starts again in a new one.
+    if paused is not None and paused.tab is not None:
         arguments |= {"tab": paused.tab, "tab_id": paused.tab_id}
     return [
         "claude", "--chrome", "-p", f"/{SITE_SKILL} {json.dumps(arguments, ensure_ascii=False)}",

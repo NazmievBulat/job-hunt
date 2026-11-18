@@ -98,11 +98,13 @@ def resume_command(job: int, root: Path) -> list[str]:
     ]
 
 
-def site_command(job: Job, root: Path) -> list[str]:
+def site_command(job: Job, root: Path, tab: str | None = None) -> list[str]:
+    """With `tab`, the worker carries on in the tab its job paused in, where the user just did
+    what it needed, instead of starting again in a new one."""
     folder = _folder(root, job.id)
     arguments = {"job": job.id, "link": job.link, "title": job.title, "company": job.company,
                  "resume": str(folder / "resume.pdf"), "career": str(_career(root)),
-                 "report": str(folder / "report.json")}
+                 "report": str(folder / "report.json"), **({"tab": tab} if tab else {})}
     return [
         "claude", "--chrome", "-p", f"/{SITE_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
         "--model", MODEL,
@@ -134,7 +136,7 @@ def read_report(path: Path) -> Report:
             raise ApplyError(f"the {SITE_SKILL} run reported a failure without a reason")
         return Report("failed", reason=reason)
     needs = data.get("needs")
-    if needs not in NEEDS:
+    if not isinstance(needs, str) or needs not in NEEDS:
         raise ApplyError(f'the {SITE_SKILL} run paused, but "needs" is not one of {", ".join(NEEDS)}')
     if not (tab := _text(data, "tab")):
         raise ApplyError(f"the {SITE_SKILL} run paused without naming the tab")
@@ -178,8 +180,8 @@ def _left_applying(jobs: JobsList, root: Path, summary: Summary) -> None:
         try:
             report = read_report(_folder(root, job.id) / "report.json")
         except ApplyError:
-            jobs.move(job.id, "paused", "the last hunt apply stopped while applying: look in Chrome whether it "
-                                        "was sent")
+            jobs.move(job.id, "paused", "a look in Chrome whether it was sent: the last hunt apply stopped "
+                                        "while applying")
             summary.paused += 1
             continue
         _save(jobs, job.id, report, summary)
@@ -216,12 +218,31 @@ def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
                 summary.failed += 1
 
 
+def _paused_tab(report: Path) -> str | None:
+    try:
+        earlier = read_report(report)
+    except ApplyError:
+        return None
+    return earlier.tab if earlier.result == "paused" else None
+
+
 def _apply_on_site(job: Job, root: Path, run: Run) -> Report:
     report = _folder(root, job.id) / "report.json"
+    tab = _paused_tab(report)
     # A report an earlier try left must not pass for this one's.
     report.unlink(missing_ok=True)
     try:
-        run(site_command(job, root))
+        run(site_command(job, root, tab))
+    except ApplyError as error:
+        # A worker that wrote its report and then stopped badly still did what it reports: an
+        # application it sent must not be sent again.
+        if report.exists():
+            try:
+                return read_report(report)
+            except ApplyError:
+                pass
+        return Report("failed", reason=str(error))
+    try:
         return read_report(report)
     except ApplyError as error:
         return Report("failed", reason=str(error))

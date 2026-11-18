@@ -503,3 +503,101 @@ def test_a_jobs_file_from_before_failures_were_counted_gains_the_count(tmp_path:
     assert jobs.get(1).failures == 0
     assert jobs.fail(1, "The site timed out.") == "picked"
     assert jobs.fail(1, "The site timed out again.") == "failed"
+
+
+def test_a_resumed_job_carries_on_in_the_tab_it_paused_in(project: Path, jobs: JobsList) -> None:
+    job = _pause(project, jobs, {"result": "paused", "needs": "captcha", "tab": "Apply - Example Co 1"})
+    resume_job(jobs, job)
+    commands: list[list[str]] = []
+    sites = Sites(project)
+    apply(jobs, project, run_resume=Resumes(project), run_site=lambda command: (commands.append(command), sites(command)))
+    assert json.loads(commands[0][3].removeprefix(f"/{SITE_SKILL} "))["tab"] == "Apply - Example Co 1"
+    # A job that did not pause before starts in a new tab.
+    assert "tab" not in json.loads(site_command(jobs.get(_picked(jobs, 2)), project)[3].removeprefix(f"/{SITE_SKILL} "))
+
+
+def test_a_report_written_before_the_worker_stopped_badly_still_counts(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1)
+    sites = Sites(project)
+
+    def sent_then_timed_out(command: list[str]) -> None:
+        sites(command)
+        raise ApplyError("the apply-site run did not finish in 30 minutes")
+
+    apply(jobs, project, run_resume=Resumes(project), run_site=sent_then_timed_out)
+    assert (sites.ran, jobs.get(job).state) == ([job], "applied")
+
+
+def test_a_needs_that_is_not_a_word_is_a_failure_not_a_crash(project: Path, jobs: JobsList) -> None:
+    job, other = _picked(jobs, 1), _picked(jobs, 2)
+    report = '{"result": "paused", "needs": ["captcha"], "tab": "Apply"}'
+    apply(jobs, project, run_resume=Resumes(project), run_site=Sites(project, {job: [report]}))
+    assert jobs.get(job).state == "failed"
+    assert jobs.get(other).state == "applied"
+
+
+@pytest.mark.parametrize(("left", "state"), [
+    ('{"result": "failed", "reason": "The site showed an error page."}', "applied"),
+    ('{"result": "paused", "needs": "captcha", "tab": "Apply"}', "paused"),
+    ("{not json", "paused"),
+])
+def test_every_report_a_stopped_run_left_is_saved_and_a_broken_one_pauses(
+    project: Path, jobs: JobsList, left: str, state: str
+) -> None:
+    job = _picked(jobs, 1)
+    jobs.move(job, "resume_ready")
+    jobs.move(job, "applying")
+    (project / "jobs" / str(job)).mkdir()
+    (project / "jobs" / str(job) / "report.json").write_text(left)
+    sites = Sites(project)
+    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    # A failure counts once and the job is tried again; a pause or a broken report waits for the user.
+    assert jobs.get(job).state == state
+    assert sites.ran == ([job] if state == "applied" else [])
+    assert jobs.get(job).failures == (1 if state == "applied" else 0)
+
+
+def test_only_a_worker_of_a_picked_or_applying_job_can_fail(jobs: JobsList) -> None:
+    from job_hunt.jobs import MoveError
+
+    job = _picked(jobs, 1)
+    jobs.move(job, "resume_ready")
+    with pytest.raises(MoveError, match="resume_ready"):
+        jobs.fail(job, "why")
+    assert jobs.get(job).failures == 0
+
+
+def test_a_job_whose_way_to_apply_is_not_known_keeps_its_resume_and_waits(project: Path, jobs: JobsList) -> None:
+    job = jobs.add(_found(1))
+    jobs.score(job, 8, "Good match.")
+    jobs.move(job, "picked")
+    sites = Sites(project)
+    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    assert (jobs.get(job).state, sites.ran) == ("resume_ready", [])
+
+
+def test_hunt_resume_job_and_the_status_of_a_stopped_run_on_the_command_line(
+    hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job = _picked(hunt, 1)
+    hunt.move(job, "resume_ready")
+    hunt.move(job, "applying")
+    apply(hunt, project, run_resume=Resumes(project), run_site=Sites(project))
+    capsys.readouterr()
+    cli.main(["status"])
+    assert capsys.readouterr().out.splitlines()[1] == (
+        f"  {job}. QA Engineer 1 at Example Co 1: needs a look in Chrome whether it was sent: the last hunt apply"
+        f" stopped while applying (then: hunt resume-job {job})")
+    assert cli.main(["resume-job", str(job)]) == 0
+    assert capsys.readouterr().out == f"job {job} (QA Engineer 1 at Example Co 1) goes on at the next hunt apply\n"
+    assert hunt.get(job).state == "resume_ready"
+
+
+def test_hunt_apply_while_another_runs_says_so(hunt: JobsList, project: Path,
+                                               capsys: pytest.CaptureFixture[str]) -> None:
+    import fcntl
+
+    with (project / "jobs" / "apply.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        assert cli.main(["apply"]) == 1
+    assert capsys.readouterr().err == "hunt apply: another hunt apply is already running\n"

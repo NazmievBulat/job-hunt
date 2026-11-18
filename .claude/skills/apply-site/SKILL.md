@@ -18,14 +18,18 @@ $ARGUMENTS
   certifications, skills and `form_answers`, the standing answers and those saved from forms
   (`saved`, each a question in a form's words and its answer).
 - `report`: the file to write at the end.
+- `tab`, only when this job paused before: the title of the tab it paused in. The person has
+  since done what it needed there (solved the CAPTCHA, signed in) or answered its question.
 
 The person picked this job, so applying is what they asked for. Other workers apply to other
-jobs in the same Chrome at the same time: work only in the tab you open.
+jobs in the same Chrome at the same time: work only in your own tab, the one you open or `tab`.
 
 ## Apply
 
-1. Open a new tab of your own and go to `link`. Find the way to apply (an "Apply" button, a
-   link to the company's careers site) and follow it in that tab.
+1. With `tab`, find that tab among Chrome's tabs and carry on there from where the form is
+   now; the question it paused on now has an answer in the career. Without `tab`, or when no
+   tab has that title, open a new tab of your own and go to `link`. Find the way to apply (an
+   "Apply" button, a link to the company's careers site) and follow it in that tab.
 2. If the site says this person has already applied to this job, stop: report `applied`.
 3. Upload `resume` wherever the form asks for a resume or offers to fill the form from one.
 4. Check every field the site filled from the resume against the career: name, email, phone,

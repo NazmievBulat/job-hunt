@@ -5,6 +5,10 @@ an alert that sends a job again never lists it twice. The address its page ended
 redirects of a click-tracking link, is its second link (`page_link`) and counts the same when
 the title and company are the same too. A job moves through the day's states only
 along `MOVES`; a pause or a failure carries its reason.
+
+The list the user picks from is numbered when it is shown (`show`), and the numbers are kept
+in the file, so "pick 2" names the second job of the last list shown, also after more jobs
+were scored.
 """
 
 from __future__ import annotations
@@ -46,6 +50,10 @@ TRACKING = re.compile(
 
 class MoveError(ValueError):
     """A state change the jobs list does not allow."""
+
+
+class PickError(ValueError):
+    """A pick or skip the last list shown cannot take, in words for the user."""
 
 
 @dataclass(frozen=True)
@@ -117,6 +125,13 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_page_link ON jobs (page_link);
 CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS shown (
+    number INTEGER PRIMARY KEY,
+    job INTEGER NOT NULL REFERENCES jobs (id)
+);
+CREATE TABLE IF NOT EXISTS lists (
+    shown_at TEXT NOT NULL
 );
 """
 
@@ -237,6 +252,54 @@ class JobsList:
             f"UPDATE jobs SET state = ?, state_reason = ?, updated_at = ?{decision} WHERE id = ?",
             (state, reason, self._stamp(), *((state,) if decision else ()), job),
         )
+
+    def waiting(self) -> list[Job]:
+        """The scored jobs not yet decided, best first; equal scores in the order found."""
+        rows = self._db.execute("SELECT id FROM jobs WHERE state = 'scored' ORDER BY score DESC, id")
+        return [self.get(row["id"]) for row in rows]
+
+    def show(self) -> list[Job]:
+        """The jobs waiting for a pick, numbered from 1 in this order from now on."""
+        waiting = self.waiting()
+        with self._db:
+            self._db.execute("DELETE FROM shown")
+            self._db.executemany("INSERT INTO shown (number, job) VALUES (?, ?)",
+                                 [(number, job.id) for number, job in enumerate(waiting, start=1)])
+            self._db.execute("DELETE FROM lists")
+            self._db.execute("INSERT INTO lists (shown_at) VALUES (?)", (self._stamp(),))
+        return waiting
+
+    def _shown(self) -> dict[int, int]:
+        if self._db.execute("SELECT 1 FROM lists").fetchone() is None:
+            raise PickError("no list has been shown yet: run hunt list")
+        return {row["number"]: row["job"] for row in self._db.execute("SELECT number, job FROM shown")}
+
+    def numbers_above(self, score: int) -> list[int]:
+        """The numbers of the last list whose jobs still wait for a pick and score more than `score`."""
+        shown = self._shown()
+        return [number for number, job in sorted(shown.items())
+                if (each := self.get(job)).state == "scored" and each.score is not None and each.score > score]
+
+    def decide(self, numbers: list[int], decision: Literal["picked", "skipped"]) -> list[tuple[int, Job]]:
+        """Pick or skip the jobs of these numbers of the last list, all of them or, with one
+        refused, none; each number decided once, with its job as it is now."""
+        shown = self._shown()
+        if not shown:
+            raise PickError("the last list was empty")
+        chosen: list[int] = []
+        for number in numbers:
+            if number not in shown:
+                raise PickError(f"there is no {number} on the last list; it has 1 to {len(shown)}")
+            job = self.get(shown[number])
+            # A skipped job may still be picked; a pick, however far it went, stays a pick.
+            if job.state != "scored" and not (job.state == "skipped" and decision == "picked"):
+                raise PickError(f"{number} ({job.title} at {job.company}) is already {job.decision or job.state}")
+            if number not in chosen:
+                chosen.append(number)
+        with self._db:
+            for number in chosen:
+                self._move(shown[number], decision, None)
+        return [(number, self.get(shown[number])) for number in chosen]
 
     def last_run(self) -> datetime | None:
         row = self._db.execute("SELECT max(started_at) FROM runs").fetchone()

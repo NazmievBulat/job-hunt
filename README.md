@@ -10,7 +10,8 @@ you to send.
 There are no app screens. You use it from a Claude Code session, on your computer or from your
 phone through Remote Control.
 
-**Status:** being built. The resume builder and the finder (`hunt find`) work; scoring, applying, the
+**Status:** being built. The resume builder, the finder (`hunt find`), scoring (`hunt score`) and
+the list with picking (`/jobs`, `hunt list`, `hunt pick`, `hunt skip`) work; applying, the
 morning timer and `/setup` are next. See [`docs/design.md`](docs/design.md).
 
 ## What it needs

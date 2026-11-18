@@ -261,17 +261,20 @@ def skill_command(since: datetime, areas: list[str], out: Path) -> list[str]:
     ]
 
 
-def run_claude(command: list[str], folder: Path) -> None:
-    """Run the skill in the project folder, where Claude Code finds `.claude/skills`."""
+def run_claude(
+    command: list[str], folder: Path, *, skill: str = SKILL, error: type[RuntimeError] = FinderError
+) -> None:
+    """Run a skill in the project folder, where Claude Code finds `.claude/skills`; a run that
+    fails raises `error` saying why."""
     try:
         done = subprocess.run(command, cwd=folder, capture_output=True, text=True, timeout=SKILL_MINUTES * 60)
-    except subprocess.TimeoutExpired as error:
-        raise FinderError(f"the {SKILL} run did not finish in {SKILL_MINUTES} minutes") from error
-    except FileNotFoundError as error:
-        raise FinderError("claude is not installed or not on the PATH") from error
+    except subprocess.TimeoutExpired as timeout:
+        raise error(f"the {skill} run did not finish in {SKILL_MINUTES} minutes") from timeout
+    except FileNotFoundError as missing:
+        raise error("claude is not installed or not on the PATH") from missing
     if done.returncode != 0:
         said = (done.stderr.strip() or done.stdout.strip()).splitlines()
-        raise FinderError(f"the {SKILL} run failed ({done.returncode}): {said[-1] if said else 'no message'}")
+        raise error(f"the {skill} run failed ({done.returncode}): {said[-1] if said else 'no message'}")
 
 
 def _posting(job: Job) -> str:

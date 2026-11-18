@@ -114,15 +114,14 @@ def _decide(args: argparse.Namespace) -> int:
                 raise PickError("give the numbers to pick, or --above and a score")
             if not 0 <= above <= 9:
                 raise PickError("--above takes a score from 0 to 9")
-            numbers = jobs.numbers_above(above)
-            if not numbers:
-                print(f"no job of the last list waiting for a pick scores above {above}")
-                return 0
+            numbers = []
         decision = "picked" if args.command == "pick" else "skipped"
-        decided = jobs.decide(numbers, decision)
+        decided = jobs.decide(numbers, decision, above=above)
     except PickError as error:
         print(f"hunt {args.command}: {error}", file=sys.stderr)
         return 1
+    if not decided:
+        print(f"no job of the last list waiting for a pick scores above {above}")
     for number, job in decided:
         print(f"{decision} {number}: {job.title} at {job.company}")
     return 0

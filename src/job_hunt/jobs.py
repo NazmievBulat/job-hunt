@@ -276,15 +276,31 @@ class JobsList:
 
     def numbers_above(self, score: int) -> list[int]:
         """The numbers of the last list whose jobs still wait for a pick and score more than `score`."""
-        shown = self._shown()
+        return self._above(self._shown(), score)
+
+    def _above(self, shown: dict[int, int], score: int) -> list[int]:
         return [number for number, job in sorted(shown.items())
                 if (each := self.get(job)).state == "scored" and each.score is not None and each.score > score]
 
-    def decide(self, numbers: list[int], decision: Literal["picked", "skipped"]) -> list[tuple[int, Job]]:
+    def decide(
+        self, numbers: list[int], decision: Literal["picked", "skipped"], *, above: int | None = None
+    ) -> list[tuple[int, Job]]:
         """Pick or skip the jobs of these numbers of the last list, all of them or, with one
-        refused, none; each number decided once, with its job as it is now."""
+        refused, none; each number decided once, with its job as it is now. With `above`, the
+        numbers are those of `numbers_above`, read from the same list in the same transaction."""
+        with self._db:
+            # The list is read and the decisions recorded under one write lock, so a list shown
+            # by another session in between cannot change what the numbers name.
+            self._db.execute("BEGIN IMMEDIATE")
+            return self._decide(numbers, decision, above)
+
+    def _decide(
+        self, numbers: list[int], decision: Literal["picked", "skipped"], above: int | None
+    ) -> list[tuple[int, Job]]:
         shown = self._shown()
-        if not shown:
+        if above is not None:
+            numbers = self._above(shown, above)
+        elif not shown:
             raise PickError("the last list was empty")
         chosen: list[int] = []
         for number in numbers:
@@ -296,9 +312,8 @@ class JobsList:
                 raise PickError(f"{number} ({job.title} at {job.company}) is already {job.decision or job.state}")
             if number not in chosen:
                 chosen.append(number)
-        with self._db:
-            for number in chosen:
-                self._move(shown[number], decision, None)
+        for number in chosen:
+            self._move(shown[number], decision, None)
         return [(number, self.get(shown[number])) for number in chosen]
 
     def last_run(self) -> datetime | None:

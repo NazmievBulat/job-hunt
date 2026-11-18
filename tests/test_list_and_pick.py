@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -232,3 +233,33 @@ def test_skipping_a_job_skipped_already_is_refused_with_one_line(
     capsys.readouterr()
     assert cli.main(["skip", "1"]) == 1
     assert capsys.readouterr() == ("", "hunt skip: 1 (QA Engineer 1 at Example Labs) is already skipped\n")
+
+
+def test_no_other_session_can_change_the_last_list_while_a_pick_above_reads_and_records_it(
+    hunt: JobsList, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Another session picking the 9 and listing again in between would make the 5 number 1.
+    nine, five = _scored(hunt, 1, 9), _scored(hunt, 2, 5)
+    cli.main(["list"])
+    capsys.readouterr()
+    shown = JobsList._shown
+    other_wrote: list[bool] = []
+
+    def another_session_lists_again(self: JobsList) -> dict[int, int]:
+        mapping = shown(self)
+        other = sqlite3.connect(tmp_path / "jobs.db", timeout=0)
+        try:
+            with other:
+                other.execute("DELETE FROM shown")
+                other.execute("INSERT INTO shown (number, job) VALUES (1, ?)", (five,))
+            other_wrote.append(True)
+        except sqlite3.OperationalError:
+            other_wrote.append(False)
+        finally:
+            other.close()
+        return mapping
+
+    monkeypatch.setattr(JobsList, "_shown", another_session_lists_again)
+    assert cli.main(["pick", "--above", "7"]) == 0
+    assert other_wrote == [False]
+    assert (hunt.get(nine).state, hunt.get(five).state) == ("picked", "scored")

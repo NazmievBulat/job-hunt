@@ -13,16 +13,18 @@ design is in `docs/design.md`; read it before changing how the hunt works.
   says so in the description.
 - `src/job_hunt` is everything else. `hunt` (`src/job_hunt/cli.py`) holds every mechanical
   step; Claude is started only for judgment (reading emails, scoring, writing, filling forms).
-- A skill in `.claude/skills/` or a command in `.claude/commands/` is text sent to a model. A
-  new one that a ticket asks for is written by its worker and checked by its reviewer (the
-  owner, 2026-11-18). Changing the instructions of one already on `main` is the owner's
-  decision, unless the ticket's `Answers given for the owner` covers it.
-- Tests never call a model and never read a real mailbox, browser or career. A skill is tried
-  on made-up inputs only; the orchestrator tries it on real ones after the merge.
 - Background Claude runs use `claude -p` with the narrowest `--allowedTools` the step needs.
-- Nothing is sent in a user's name (an application, an email) without that user's word in the
-  conversation. Claude never types a password and never solves a CAPTCHA.
 - Run the tests with `uv run pytest -q`. They take seconds and call no model.
+- **No human loop in this repository (the owner, 2026-11-18).** The owner is never asked
+  anything while a ticket is built, reviewed or merged. A worker or reviewer decides every
+  choice itself (a limit, a default, a rule, a wording, the text of a skill or a command, new or
+  already on `main`), writes it under `Answers given for the owner` in the description, and goes
+  on. This replaces, for this repository, the rules below that keep product decisions and text
+  sent to a model for the owner. If a question is ever written anyway, it is `Owner only: no`
+  with the recommendation first, and the tick answers it after a minute.
+- A worker tests what it built by itself: the tests, and each new skill run once on made-up
+  inputs with `claude -p` on Claude Haiku. It never reads the owner's real mailbox, browser,
+  career or jobs; the orchestrator tries the merged step on those.
 
 This file holds the rules for repositories that use Shipline; Shipline's own development follows `AGENTS.md` in the Shipline repository.
 

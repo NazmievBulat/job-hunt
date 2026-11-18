@@ -588,6 +588,21 @@ def test_a_report_written_before_the_worker_stopped_badly_still_counts(project: 
     assert (sites.ran, jobs.get(job).state) == ([job], "applied")
 
 
+def test_a_failure_reported_before_the_worker_stopped_badly_is_tried_again(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1)
+    sites = Sites(project, {job: [{"result": "failed", "reason": "The site showed an error page."},
+                                  {"result": "applied"}]})
+
+    def reported_then_timed_out(command: list[str]) -> None:
+        sites(command)
+        raise ApplyError("the apply-site run did not finish in 30 minutes")
+
+    # The worker said it sent nothing: the one case a stop is tried again.
+    apply(jobs, project, run_resume=Resumes(project), run_site=reported_then_timed_out)
+    assert sites.ran == [job, job]
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("applied", 1)
+
+
 def test_a_needs_that_is_not_a_word_pauses_the_job_and_does_not_crash_the_run(project: Path, jobs: JobsList) -> None:
     job, other = _picked(jobs, 1), _picked(jobs, 2)
     report = '{"result": "paused", "needs": ["captcha"], "tab": "Apply"}'
@@ -692,27 +707,31 @@ def test_two_answers_given_at_once_are_both_kept(project: Path, jobs: JobsList, 
     import job_hunt.apply as applying
 
     first, second = _two_questions(project, jobs)
-    read, first_read, second_read, release = applying.read_career, threading.Event(), threading.Event(), threading.Event()
+    read, write = applying.read_career, applying.write_career
+    first_writing, second_read, release = threading.Event(), threading.Event(), threading.Event()
 
-    def held_after_reading(path: Path) -> Career:
-        career = read(path)
-        if threading.current_thread().name == "first":
-            first_read.set()
-            release.wait(5)
-        else:
+    def reading(path: Path) -> Career:
+        if threading.current_thread().name == "second":
             second_read.set()
-        return career
+        return read(path)
 
-    monkeypatch.setattr(applying, "read_career", held_after_reading)
+    def held_before_writing(career: Career, path: Path) -> None:
+        if threading.current_thread().name == "first":
+            first_writing.set()
+            release.wait(5)
+        write(career, path)
+
+    monkeypatch.setattr(applying, "read_career", reading)
+    monkeypatch.setattr(applying, "write_career", held_before_writing)
     # Two hunt answer commands, each with its own connection to the jobs list.
     one = threading.Thread(name="first", target=lambda: answer(
         JobsList(project / "data" / "jobs.db"), project, first, "Yes."))
     two = threading.Thread(name="second", target=lambda: answer(
         JobsList(project / "data" / "jobs.db"), project, second, "Two weeks."))
     one.start()
-    assert first_read.wait(5)
+    assert first_writing.wait(5)
     two.start()
-    # The second waits for the first to write: it does not read the career meanwhile.
+    # The second waits until the first has written: it does not read the career meanwhile.
     assert not second_read.wait(0.3)
     release.set()
     one.join(5)
@@ -730,3 +749,29 @@ def test_the_career_is_replaced_whole_never_written_in_place(project: Path, jobs
     assert career_file.stat().st_ino != before
     assert career_file.stat().st_mode & 0o777 == 0o600
     assert sorted(path.name for path in (project / "data").iterdir()) == ["career.json", "career.lock", "jobs.db"]
+
+
+def test_a_career_that_cannot_be_written_stays_as_it_was(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    career_file = project / "data" / "career.json"
+    before = career_file.read_text()
+    career = read_career(career_file)
+    career.summary = "Changed."
+
+    def full_disk(source: str, target: Path) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", full_disk)
+    with pytest.raises(OSError, match="No space"):
+        write_career(career, career_file)
+    assert career_file.read_text() == before
+    # No copy of the career is left behind in data/.
+    assert sorted(path.name for path in (project / "data").iterdir()) == ["career.json"]
+
+
+def test_hunt_applied_takes_any_paused_job(hunt: JobsList, project: Path) -> None:
+    # The user solved the CAPTCHA and sent the form in the tab themselves.
+    job = _pause(project, hunt, {"result": "paused", "needs": "captcha", "tab": "Apply - Example Co 1"})
+    assert cli.main(["applied", str(job)]) == 0
+    assert hunt.get(job).state == "applied"

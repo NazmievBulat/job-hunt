@@ -146,7 +146,8 @@ def read_report(path: Path) -> Report:
         raise ApplyError(f"the {SITE_SKILL} run wrote no report")
     try:
         data = json.loads(path.read_text())
-    except json.JSONDecodeError as error:
+    # Not UTF-8: cut off inside a character by a worker that stopped while writing it.
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ApplyError(f"the {SITE_SKILL} run wrote a report that is not JSON: {error}") from error
     if not isinstance(data, dict) or data.get("result") not in ("applied", "paused", "failed"):
         raise ApplyError(f'the {SITE_SKILL} run wrote a report whose "result" is not applied, paused or failed')

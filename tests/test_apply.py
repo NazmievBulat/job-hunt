@@ -81,7 +81,7 @@ class Sites:
     """Stands in for the company-site workers: writes each job's report, one after another
     from `reports` (the last one repeats), and counts how many run at once."""
 
-    def __init__(self, project: Path, reports: dict[int, list[dict | str | None]] | None = None,
+    def __init__(self, project: Path, reports: dict[int, list[dict | str | bytes | None]] | None = None,
                  seconds: float = 0.0) -> None:
         self.project, self.reports, self.seconds = project, reports or {}, seconds
         self.ran: list[int] = []
@@ -101,6 +101,8 @@ class Sites:
             out = self.project / "jobs" / str(job) / "report.json"
             if isinstance(report, str):
                 out.write_text(report)
+            elif isinstance(report, bytes):
+                out.write_bytes(report)
             elif report is not None:
                 out.write_text(json.dumps(report))
         finally:
@@ -263,6 +265,8 @@ def _unsure_after_two_runs(project: Path, jobs: JobsList, job: int, run_site) ->
 @pytest.mark.parametrize(("written", "words"), [
     (None, "wrote no report"),
     ("{not json", "not JSON"),
+    # Cut off inside a character by a worker that stopped while writing.
+    (b'{"result": "paused", "tab": "\xc3', "not JSON"),
     ('{"result": "sent"}', "result"),
     ('{"result": "failed"}', "reason"),
     ('{"result": "paused", "needs": "captcha"}', "tab"),
@@ -271,7 +275,7 @@ def _unsure_after_two_runs(project: Path, jobs: JobsList, job: int, run_site) ->
     ('{"result": "paused", "needs": "captcha", "tab": "Apply", "tab_id": "41"}', "tab_id"),
 ])
 def test_a_report_that_cannot_be_read_pauses_the_job_saying_why(
-    project: Path, jobs: JobsList, written: str | None, words: str
+    project: Path, jobs: JobsList, written: str | bytes | None, words: str
 ) -> None:
     job = _picked(jobs, 1)
     sites = Sites(project, {job: [written]})
@@ -615,15 +619,17 @@ def test_a_needs_that_is_not_a_word_pauses_the_job_and_does_not_crash_the_run(pr
     ('{"result": "failed", "reason": "The site showed an error page."}', "applied"),
     ('{"result": "paused", "needs": "captcha", "tab": "Apply"}', "paused"),
     ("{not json", "paused"),
+    (b'{"result": "paused", "tab": "\xc3', "paused"),
 ])
 def test_every_report_a_stopped_run_left_is_saved_and_a_broken_one_pauses(
-    project: Path, jobs: JobsList, left: str, state: str
+    project: Path, jobs: JobsList, left: str | bytes, state: str
 ) -> None:
     job = _picked(jobs, 1)
     jobs.move(job, "resume_ready")
     jobs.move(job, "applying")
     (project / "jobs" / str(job)).mkdir()
-    (project / "jobs" / str(job) / "report.json").write_text(left)
+    report = project / "jobs" / str(job) / "report.json"
+    report.write_bytes(left) if isinstance(left, bytes) else report.write_text(left)
     sites = Sites(project)
     apply(jobs, project, run_resume=Resumes(project), run_site=sites)
     # A failure counts once and the job is tried again; a pause or a broken report waits for the user.

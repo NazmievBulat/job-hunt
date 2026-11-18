@@ -39,7 +39,8 @@ applications go out without any further step.
    missing and how to add it.
 2. It reads the user's resume (PDF, Word or pasted text) into `data/career.json` and shows what
    it read for the user to correct. An export in the career shape `hunt career` reads works too.
-3. It asks what to look for: job titles, places, remote or not, the lowest salary. These go in
+3. It asks what to look for: job titles, the areas by name ("Raleigh-Durham-Chapel Hill",
+   "New York City"), remote jobs included, excluded or only, and the lowest salary. These go in
    `data/settings.json`.
 4. It asks the user to turn on job alerts on the boards they use (LinkedIn, Indeed and others)
    for those searches, since the finder reads the alert emails.
@@ -51,8 +52,8 @@ applications go out without any further step.
 
 1. **Finder (on a timer).** At the chosen hour one `claude -p` on Claude Haiku reads the job
    alert emails through the Gmail connector and writes each job's link, title, company and
-   place. A script drops jobs already in the list, wrong titles, and places too far away that
-   are not remote. For each job left it saves the full description from the job page and notes
+   place. The run also says which of the user's areas each job is in. A script drops jobs
+   already in the list, wrong titles, and jobs outside the areas or the remote setting. For each job left it saves the full description from the job page and notes
    whether it is a LinkedIn Easy Apply or a company site.
 2. **Scoring (only when the finder found something).** One `claude -p` reads the new jobs and
    the career file, and gives each a fit score from 1 to 10 with a one-line reason.
@@ -82,7 +83,7 @@ Each piece has one job and talks to the others only through the jobs list and fi
 | `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `status`. It is the coordinator. |
 | Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
-| Settings | `data/settings.json` | Titles, places, remote, salary floor, the timer's hour. |
+| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the timer's hour. |
 | Resume worker | `claude -p` with the `write-resume` skill | Gets the career and one job description and writes `resume-content.json`. |
 | Resume builder | Python (`resume_kit`) | Merges that content with the career, checks it against the resume contract, builds `resume.pdf`. |
 | LinkedIn worker | `claude -p --chrome` with the `apply-linkedin` skill | Opens the job's LinkedIn page, presses Easy Apply, uploads the PDF, answers from the career, submits. |

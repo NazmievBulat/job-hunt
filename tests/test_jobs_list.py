@@ -72,7 +72,8 @@ def jobs(tmp_path: Path, clock: MovableClock) -> JobsList:
             "https://jobs.example.com/careers/1234?id=7",
         ),
         # A fragment that is a route of the page names the job; it stays.
-        ("https://careers.example.com/#/jobs/123?utm_source=x", "https://careers.example.com/#/jobs/123?utm_source=x"),
+        ("https://careers.example.com/#/jobs/123?utm_source=x&id=9", "https://careers.example.com/#/jobs/123?id=9"),
+        ("https://careers.example.com/#/jobs/123?utm_source=y", "https://careers.example.com/#/jobs/123"),
         ("https://careers.example.com/jobs#!/456", "https://careers.example.com/jobs#!/456"),
     ],
 )
@@ -98,6 +99,18 @@ def test_a_job_is_also_known_by_the_address_its_page_ended_at(jobs: JobsList) ->
     # A page address that is the link itself is not kept twice.
     same = jobs.add(_found("https://jobs.example.com/careers/9"), page_link="https://jobs.example.com/careers/9/")
     assert jobs.get(same).page_link is None
+
+
+def test_two_jobs_whose_pages_end_at_one_page_are_two_jobs_unless_title_and_company_are_the_same(jobs: JobsList) -> None:
+    # An expired posting often sends its link to the careers page.
+    careers = "https://jobs.example.com/careers"
+    first = jobs.add(_found("https://click.example.com/t/1", title="QA Automation Engineer"), page_link=careers)
+    other = jobs.add(_found("https://click.example.com/t/2", title="SDET"), page_link=careers)
+    elsewhere = jobs.add(_found("https://click.example.com/t/4", title="QA Automation Engineer", company="Globex Example"),
+                         page_link=careers)
+    again = jobs.add(_found("https://click.example.com/t/3", title="qa automation engineer"), page_link=careers)
+    assert first is not None and other is not None and elsewhere is not None and again is None
+    assert (jobs.get(first).page_link, jobs.get(other).page_link) == (careers, None)
 
 
 def test_the_same_job_from_two_alerts_is_saved_once(jobs: JobsList) -> None:

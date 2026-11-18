@@ -158,6 +158,13 @@ def test_a_linkedin_page_with_easy_apply_is_easy_apply_and_its_text_is_the_descr
     assert "window.tracking" not in text and "Sign in" not in text and "LinkedIn Corporation" not in text
 
 
+def test_a_posting_with_an_optional_sign_in_form_is_still_read() -> None:
+    html = (HERE / "pages" / "linkedin-easy-apply.html").read_text().replace(
+        "<nav>", '<form action="https://www.linkedin.com/uas/login-submit"><input name="session_key"></form><nav>')
+    text, kind = page_text_and_kind("https://www.linkedin.com/jobs/view/4012345678", html)
+    assert (kind, text.splitlines()[0]) == ("easy_apply", "About the job")
+
+
 def test_a_linkedin_page_that_applies_on_another_site_is_a_company_site() -> None:
     text, kind = page_text_and_kind(*_fetch("https://www.linkedin.com/jobs/view/4012345690"))
     assert (kind, text) == ("company_site", "Initech Example is hiring an SDET to test its payments API.\nRemote in the United States.")
@@ -170,9 +177,10 @@ def test_a_company_page_is_a_company_site_without_scripts_or_page_furniture() ->
     assert "JavaScript" not in text and "©" not in text
 
 
-@pytest.mark.parametrize("quote", ['"', "'"])
-def test_a_sign_in_page_is_a_page_that_cannot_be_read(quote: str) -> None:
-    html = (HERE / "pages" / "linkedin-sign-in.html").read_text().replace('"/authwall"', f"{quote}/authwall{quote}")
+@pytest.mark.parametrize("form", ['<form action="/authwall">', "<form action='/authwall'>", "<FORM ACTION=/authwall>"])
+def test_a_sign_in_page_is_a_page_that_cannot_be_read(form: str) -> None:
+    html = (HERE / "pages" / "linkedin-sign-in.html").read_text().replace('<form action="/authwall">', form)
+    assert form in html
     with pytest.raises(PageError, match="sign in"):
         page_text_and_kind("https://www.linkedin.com/authwall?trk=x", html)
     with pytest.raises(PageError, match="sign in"):
@@ -499,3 +507,31 @@ def test_a_new_job_whose_posting_was_never_written_gets_it_on_the_next_run(
     assert (tmp_path / "jobs" / str(lab.id) / "posting.md").read_text() == written
     # Only a job still new: a scored one has been read already.
     assert not (tmp_path / "jobs" / str(indeed.id) / "posting.md").exists()
+
+
+def test_hunt_find_saves_one_job_for_two_links_to_one_page_and_a_job_whose_page_failed(
+    fake_claude: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    found = json.loads((HERE / "found-jobs.json").read_text())
+    copy = {**found["jobs"][7], "link": "https://click.example.com/t/robot-fleet"}
+    found["jobs"].append(copy)
+    path = tmp_path / "found.json"
+    path.write_text(json.dumps(found))
+    monkeypatch.setenv("FAKE_CLAUDE_FOUND", str(path))
+
+    def fetch(link: str) -> tuple[str, str]:
+        if link == "https://click.example.com/t/robot-fleet":
+            return _fetch("https://jobs.example.com/careers/1234")
+        if link == "https://www.linkedin.com/jobs/view/4012345690":
+            raise ValueError("a bug in reading pages")
+        return _fetch(link)
+
+    monkeypatch.setattr(cli, "fetch_page", fetch)
+    assert cli.main(["find"]) == 0
+    assert capsys.readouterr().out == "4 emails, 9 jobs, 4 new\n"
+    saved = {job.title: job for job in JobsList(fake_claude / "data" / "jobs.db").all()}
+    assert len(saved) == 4
+    sdet = saved["SDET II"]
+    assert (sdet.page_problem, sdet.kind) == ("ValueError: a bug in reading pages", None)
+    posting = (fake_claude / "jobs" / str(sdet.id) / "posting.md").read_text()
+    assert "could not be read (ValueError: a bug in reading pages)" in posting

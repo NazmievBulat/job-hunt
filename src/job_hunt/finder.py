@@ -177,10 +177,12 @@ def _classes(attrs: dict[str, str]) -> set[str]:
     return set(attrs.get("class", "").split())
 
 
-# Where a board keeps the description, then the page's main part, then the whole body.
-DESCRIPTION = (
+# Where a board keeps the description; failing that, the page's main part, then its body.
+BOARD_DESCRIPTION = (
     lambda tag, attrs: "show-more-less-html__markup" in _classes(attrs),
     lambda tag, attrs: attrs.get("id") == "jobDescriptionText",
+)
+PAGE_PARTS = (
     lambda tag, attrs: tag == "main",
     lambda tag, attrs: tag == "body",
 )
@@ -188,17 +190,24 @@ SIGN_IN = re.compile(r"/(authwall|login|signup|uas/login|checkpoint)\b")
 SIGN_IN_FORM = re.compile(r"""<form[^>]+action\s*=\s*["']?[^"'\s>]*/(authwall|login)""", re.IGNORECASE)
 
 
-def page_text_and_kind(link: str, html: str) -> tuple[str, str]:
-    """The description on a fetched page, and whether the job is `easy_apply` or `company_site`."""
-    if SIGN_IN.search(urlsplit(link).path) or SIGN_IN_FORM.search(html):
-        raise PageError("the page asks to sign in")
-    text = ""
-    for wanted in DESCRIPTION:
+def _first_text(html: str, places: tuple[Callable[[str, dict[str, str]], bool], ...]) -> str:
+    for wanted in places:
         parser = _Text(wanted)
         parser.feed(html)
-        text = parser.text()
-        if text:
-            break
+        if text := parser.text():
+            return text
+    return ""
+
+
+def page_text_and_kind(link: str, html: str) -> tuple[str, str]:
+    """The description on a fetched page, and whether the job is `easy_apply` or `company_site`."""
+    if SIGN_IN.search(urlsplit(link).path):
+        raise PageError("the page asks to sign in")
+    text = _first_text(html, BOARD_DESCRIPTION)
+    # A posting may carry an optional sign-in form; without the board's description it is a wall.
+    if not text and SIGN_IN_FORM.search(html):
+        raise PageError("the page asks to sign in")
+    text = text or _first_text(html, PAGE_PARTS)
     if not text:
         raise PageError("the page has no text")
     host = urlsplit(link).netloc.lower()

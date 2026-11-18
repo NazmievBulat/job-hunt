@@ -8,7 +8,12 @@ the file the skill writes for the made-up emails in `tests/finder/emails/`, and 
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
+import sys
+from email import message_from_string
+from urllib.error import HTTPError, URLError
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,10 +21,12 @@ from pathlib import Path
 import pytest
 
 from job_hunt import cli
+from job_hunt import finder
 from job_hunt.finder import (
     GMAIL_READ_TOOLS,
     FinderError,
     PageError,
+    fetch_page,
     find,
     page_text_and_kind,
     place_kept,
@@ -163,8 +170,9 @@ def test_a_company_page_is_a_company_site_without_scripts_or_page_furniture() ->
     assert "JavaScript" not in text and "©" not in text
 
 
-def test_a_sign_in_page_is_a_page_that_cannot_be_read() -> None:
-    html = (HERE / "pages" / "linkedin-sign-in.html").read_text()
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_a_sign_in_page_is_a_page_that_cannot_be_read(quote: str) -> None:
+    html = (HERE / "pages" / "linkedin-sign-in.html").read_text().replace('"/authwall"', f"{quote}/authwall{quote}")
     with pytest.raises(PageError, match="sign in"):
         page_text_and_kind("https://www.linkedin.com/authwall?trk=x", html)
     with pytest.raises(PageError, match="sign in"):
@@ -292,3 +300,202 @@ def test_hunt_help_names_the_find_command(capsys: pytest.CaptureFixture[str], mo
         cli.main(["--help"])
     help_text = capsys.readouterr().out
     assert "find" in help_text and "read-job-alerts" in help_text
+
+
+def test_the_made_up_found_file_is_what_the_made_up_alert_emails_hold() -> None:
+    # The whole email: a company alert names the company only in its sender and subject.
+    emails = {path.name: path.read_text() for path in sorted((HERE / "emails").glob("*.eml"))}
+    alerts = {message_from_string(text)["X-Gmail-Id"]: text for name, text in emails.items() if "recruiter" not in name}
+    found = json.loads((HERE / "found-jobs.json").read_text())
+    assert found["emails"] == len(alerts)
+    for job in found["jobs"]:
+        body = alerts[job["email_id"]]
+        assert job["link"] in body and job["title"] in body and job["company"] in body
+
+
+def test_a_page_with_no_text_cannot_be_read() -> None:
+    with pytest.raises(PageError, match="no text"):
+        page_text_and_kind("https://jobs.example.com/1", "<html><head><title>x</title></head><body> </body></html>")
+
+
+def test_the_skill_may_write_only_its_own_file_when_the_path_is_absolute(tmp_path: Path) -> None:
+    command = skill_command(datetime(2026, 11, 4, tzinfo=UTC), [], tmp_path / "found.json")
+    # `//` starts an absolute path in a permission rule; one slash is the project folder.
+    assert command[command.index("--allowedTools") + 1].split(",")[-1] == f"Edit(/{tmp_path}/found.json)"
+
+
+class _Response:
+    def __init__(self, body: bytes, content_type: str) -> None:
+        self.body, self.content_type = body, content_type
+
+    def __enter__(self) -> "_Response":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def read(self, limit: int) -> bytes:
+        return self.body[:limit]
+
+    def geturl(self) -> str:
+        return "https://jobs.example.com/careers/1234"
+
+    @property
+    def headers(self):  # type: ignore[no-untyped-def]
+        from email.message import Message
+        headers = Message()
+        headers["Content-Type"] = self.content_type
+        return headers
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (HTTPError("https://jobs.example.com", 403, "Forbidden", {}, None), "HTTP 403"),  # type: ignore[arg-type]
+        (URLError("Name or service not known"), "Name or service not known"),
+        (TimeoutError("timed out"), "no answer in 20 seconds"),
+        (ConnectionResetError("reset by peer"), "reset by peer"),
+    ],
+)
+def test_a_fetch_that_fails_is_a_page_that_cannot_be_read(monkeypatch: pytest.MonkeyPatch, error: Exception, reason: str) -> None:
+    def fail(request: object, timeout: float) -> None:
+        raise error
+
+    monkeypatch.setattr(finder, "urlopen", fail)
+    with pytest.raises(PageError, match=reason):
+        fetch_page("https://jobs.example.com/careers/1234")
+
+
+def test_a_page_in_a_charset_python_does_not_know_is_read_as_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(finder, "urlopen", lambda request, timeout: _Response("<p>Café</p>".encode(), "text/html; charset=bogus"))
+    assert fetch_page("https://jobs.example.com/careers/1234") == ("https://jobs.example.com/careers/1234", "<p>Café</p>")
+
+
+def test_an_unexpected_error_while_reading_a_page_still_saves_the_job_and_finishes_the_run(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    def broken(link: str) -> tuple[str, str]:
+        if "4012345678" in link:
+            raise ValueError("a bug in reading pages")
+        return _fetch(link)
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    skill = FakeSkill(tmp_path / "found-jobs.json")
+    summary = find(settings, jobs, tmp_path / "jobs", skill.found, run=skill, fetch=broken, clock=clock)
+    assert summary.new == 4 and jobs.last_run() == clock.now
+    lab = next(job for job in jobs.all() if "4012345678" in job.link)
+    assert lab.page_problem == "ValueError: a bug in reading pages"
+    assert "could not be read (ValueError: a bug in reading pages)" in (tmp_path / "jobs" / str(lab.id) / "posting.md").read_text()
+
+
+FAKE_CLAUDE = """#!{python}
+import json, os, shutil, sys
+with open(os.environ["FAKE_CLAUDE_LOG"], "w") as log:
+    json.dump({{"argv": sys.argv[1:], "cwd": os.getcwd()}}, log)
+if os.environ.get("FAKE_CLAUDE_FAIL"):
+    print("starting", file=sys.stderr)
+    print("Not logged in. Run claude to sign in.", file=sys.stderr)
+    sys.exit(1)
+arguments = json.loads(sys.argv[2].removeprefix("/read-job-alerts "))
+shutil.copy(os.environ["FAKE_CLAUDE_FOUND"], arguments["out"])
+"""
+
+
+@pytest.fixture
+def fake_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A `claude` first on the PATH that records how it was started, then writes the found file."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    claude = folder / "claude"
+    claude.write_text(FAKE_CLAUDE.format(python=sys.executable))
+    claude.chmod(claude.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(tmp_path / "claude.json"))
+    monkeypatch.setenv("FAKE_CLAUDE_FOUND", str(HERE / "found-jobs.json"))
+    project = tmp_path / "project"
+    (project / "data").mkdir(parents=True)
+    shutil.copy(HERE / "settings.json", project / "data" / "settings.json")
+    monkeypatch.setattr(cli, "ROOT", project)
+    monkeypatch.setattr(cli, "DATA", project / "data")
+    monkeypatch.setattr(cli, "fetch_page", _fetch)
+    return project
+
+
+def test_hunt_find_starts_claude_on_haiku_in_the_project_with_only_gmail_reads_and_its_file(
+    fake_claude: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["find"]) == 0
+    assert capsys.readouterr().out == "4 emails, 8 jobs, 4 new\n"
+    started = json.loads((tmp_path / "claude.json").read_text())
+    argv = started["argv"]
+    assert Path(started["cwd"]) == fake_claude
+    assert argv[0] == "-p" and argv[1].startswith("/read-job-alerts {")
+    assert argv[argv.index("--model") + 1] == "claude-haiku-5-5"
+    found = fake_claude / "data" / "found-jobs.json"
+    assert argv[argv.index("--allowedTools") + 1].split(",") == [*GMAIL_READ_TOOLS, f"Edit(/{found})"]
+    assert len(list((fake_claude / "jobs").iterdir())) == 4
+
+
+def test_hunt_find_says_why_the_skill_run_failed_and_reads_from_the_same_time_next(
+    fake_claude: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL", "1")
+    assert cli.main(["find"]) == 1
+    printed = capsys.readouterr()
+    assert printed.out == ""
+    assert printed.err == "hunt find: the read-job-alerts run failed (1): Not logged in. Run claude to sign in.\n"
+    assert JobsList(fake_claude / "data" / "jobs.db").last_run() is None
+
+
+def test_hunt_find_names_what_it_left_out_apart_from_its_one_line(
+    fake_claude: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    found = json.loads((HERE / "found-jobs.json").read_text())
+    found["jobs"][1]["remote"] = "maybe"
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(found))
+    monkeypatch.setenv("FAKE_CLAUDE_FOUND", str(bad))
+    assert cli.main(["find"]) == 0
+    printed = capsys.readouterr()
+    assert printed.out == "4 emails, 7 jobs, 3 new\n"
+    assert printed.err == "hunt find: left out job 2 (SDET II) has remote 'maybe', not one of remote, hybrid, on_site\n"
+
+
+def test_two_tracking_links_that_end_at_the_same_page_are_one_job(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    found = tmp_path / "found.json"
+    job = {**_job().__dict__, "board": "glassdoor"}
+    written = json.dumps({"emails": 2, "jobs": [
+        {**job, "link": "https://click.example.com/t/one"}, {**job, "link": "https://click.example.com/t/two"}]})
+    pages = {"https://click.example.com/t/one": "https://jobs.example.com/careers/1234?utm_source=one",
+             "https://click.example.com/t/two": "https://jobs.example.com/careers/1234?utm_source=two"}
+
+    def redirect(link: str) -> tuple[str, str]:
+        return pages[link], (HERE / "pages" / "company.html").read_text()
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=lambda command: found.write_text(written),
+                   fetch=redirect, clock=clock)
+    assert (summary.jobs, summary.new) == (2, 1)
+    assert [(each.link, each.page_link) for each in jobs.all()] == [
+        ("https://click.example.com/t/one", "https://jobs.example.com/careers/1234")]
+
+
+def test_a_new_job_whose_posting_was_never_written_gets_it_on_the_next_run(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    skill = FakeSkill(tmp_path / "found-jobs.json")
+    find(settings, jobs, tmp_path / "jobs", skill.found, run=skill, fetch=_fetch, clock=clock)
+    # As if the run had stopped after saving the rows and before writing two postings.
+    lab = next(job for job in jobs.all() if "4012345678" in job.link)
+    indeed = next(job for job in jobs.all() if job.board == "indeed")
+    written = (tmp_path / "jobs" / str(lab.id) / "posting.md").read_text()
+    for job in (lab, indeed):
+        (tmp_path / "jobs" / str(job.id) / "posting.md").unlink()
+    jobs.move(indeed.id, "scored")
+    find(settings, jobs, tmp_path / "jobs", skill.found, run=skill, fetch=_fetch, clock=clock)
+    assert (tmp_path / "jobs" / str(lab.id) / "posting.md").read_text() == written
+    # Only a job still new: a scored one has been read already.
+    assert not (tmp_path / "jobs" / str(indeed.id) / "posting.md").exists()

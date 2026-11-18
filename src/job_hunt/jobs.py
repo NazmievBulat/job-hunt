@@ -1,7 +1,8 @@
 """The jobs list, `data/jobs.db`: one row per job, written only by this module.
 
 A job is the same job when its link is, once the tracking parts are removed (`clean_link`), so
-an alert that sends a job again never lists it twice. A job moves through the day's states only
+an alert that sends a job again never lists it twice. The address its page ended at, after the
+redirects of a click-tracking link, is its second link (`page_link`) and counts the same. A job moves through the day's states only
 along `MOVES`; a pause or a failure carries its reason.
 """
 
@@ -35,8 +36,11 @@ WITH_REASON: tuple[State, ...] = ("paused", "failed")
 KINDS = ("easy_apply", "company_site")
 Remote = Literal["remote", "hybrid", "on_site"]
 
-# Query parameters that only say where a click came from.
-TRACKING = re.compile(r"^(utm_.*|trk.*|ref.*|src|source|gh_src|gclid|fbclid|mc_.*)$", re.IGNORECASE)
+# Query parameters that only say where a click came from. Named one by one: a parameter such
+# as `reference` or `gh_jid` names the job itself.
+TRACKING = re.compile(
+    r"^(utm_.*|trk.*|trackingid|ref|refid|referrer|src|source|gh_src|gclid|fbclid|mc_cid|mc_eid)$", re.IGNORECASE
+)
 
 
 class MoveError(ValueError):
@@ -63,6 +67,7 @@ class FoundJob:
 class Job:
     id: int
     link: str
+    page_link: str | None
     title: str
     company: str
     place: str | None
@@ -87,6 +92,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY,
     link TEXT NOT NULL UNIQUE,
+    page_link TEXT UNIQUE,
     title TEXT NOT NULL,
     company TEXT NOT NULL,
     place TEXT,
@@ -131,7 +137,9 @@ def clean_link(link: str) -> str:
         if key:
             return f"https://{'www.indeed.com' if host == 'indeed.com' else host}/viewjob?jk={key}"
     query = urlencode([(name, value) for name, value in parse_qsl(parts.query) if not TRACKING.match(name)])
-    return urlunsplit((parts.scheme.lower(), host, parts.path.rstrip("/") or "/", query, ""))
+    # "#/jobs/123" is a route of the page and names the job; "#apply" only scrolls.
+    fragment = parts.fragment if parts.fragment.startswith(("/", "!")) else ""
+    return urlunsplit((parts.scheme.lower(), host, parts.path.rstrip("/") or "/", query, fragment))
 
 
 class JobsList:
@@ -149,20 +157,37 @@ class JobsList:
         return self._clock().isoformat()
 
     def has(self, link: str) -> bool:
-        return self._db.execute("SELECT 1 FROM jobs WHERE link = ?", (clean_link(link),)).fetchone() is not None
+        link = clean_link(link)
+        return self._db.execute("SELECT 1 FROM jobs WHERE ? IN (link, page_link)", (link,)).fetchone() is not None
 
-    def add(self, found: FoundJob) -> int | None:
-        """Save a new job and return its id, or None when the list already has it."""
+    def add(
+        self,
+        found: FoundJob,
+        *,
+        page_link: str | None = None,
+        description: str | None = None,
+        kind: str | None = None,
+        problem: str | None = None,
+    ) -> int | None:
+        """Save a new job with what its page gave, and return its id, or None when the list
+        already has it by either link."""
+        if kind is not None and kind not in KINDS:
+            raise ValueError(f"kind must be one of {', '.join(KINDS)}, not {kind!r}")
+        link = clean_link(found.link)
+        page = clean_link(page_link) if page_link else None
+        page = None if page == link else page
+        if self.has(link) or (page and self.has(page)):
+            return None
         now = self._stamp()
         with self._db:
             cursor = self._db.execute(
-                "INSERT INTO jobs (link, title, company, place, remote, board, email_id, email_date, area,"
-                " state, found_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)"
-                " ON CONFLICT (link) DO NOTHING",
-                (clean_link(found.link), found.title, found.company, found.place, found.remote, found.board,
-                 found.email_id, found.email_date, found.area, now, now),
+                "INSERT INTO jobs (link, page_link, title, company, place, remote, board, email_id, email_date,"
+                " area, description, kind, page_problem, state, found_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)",
+                (link, page, found.title, found.company, found.place, found.remote, found.board, found.email_id,
+                 found.email_date, found.area, description, kind, problem, now, now),
             )
-        return cursor.lastrowid if cursor.rowcount else None
+        return cursor.lastrowid
 
     def get(self, job: int) -> Job:
         row = self._db.execute("SELECT * FROM jobs WHERE id = ?", (job,)).fetchone()
@@ -172,15 +197,6 @@ class JobsList:
 
     def all(self) -> list[Job]:
         return [self.get(row["id"]) for row in self._db.execute("SELECT id FROM jobs ORDER BY id")]
-
-    def save_page(self, job: int, description: str | None, kind: str | None, problem: str | None) -> None:
-        if kind is not None and kind not in KINDS:
-            raise ValueError(f"kind must be one of {', '.join(KINDS)}, not {kind!r}")
-        with self._db:
-            self._db.execute(
-                "UPDATE jobs SET description = ?, kind = ?, page_problem = ?, updated_at = ? WHERE id = ?",
-                (description, kind, problem, self._stamp(), job),
-            )
 
     def score(self, job: int, score: int, reason: str) -> None:
         if type(score) is not int or not 1 <= score <= 10:

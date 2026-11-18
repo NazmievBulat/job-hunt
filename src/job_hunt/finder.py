@@ -29,7 +29,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from job_hunt.jobs import FoundJob, JobsList, Remote
+from job_hunt.jobs import FoundJob, Job, JobsList, Remote, clean_link
 from job_hunt.settings import Settings
 
 MODEL = "claude-haiku-5-5"
@@ -185,11 +185,12 @@ DESCRIPTION = (
     lambda tag, attrs: tag == "body",
 )
 SIGN_IN = re.compile(r"/(authwall|login|signup|uas/login|checkpoint)\b")
+SIGN_IN_FORM = re.compile(r"""<form[^>]+action\s*=\s*["']?[^"'\s>]*/(authwall|login)""", re.IGNORECASE)
 
 
 def page_text_and_kind(link: str, html: str) -> tuple[str, str]:
     """The description on a fetched page, and whether the job is `easy_apply` or `company_site`."""
-    if SIGN_IN.search(urlsplit(link).path) or re.search(r'<form[^>]+action="[^"]*/(authwall|login)', html):
+    if SIGN_IN.search(urlsplit(link).path) or SIGN_IN_FORM.search(html):
         raise PageError("the page asks to sign in")
     text = ""
     for wanted in DESCRIPTION:
@@ -212,14 +213,19 @@ def fetch_page(link: str) -> tuple[str, str]:
     try:
         with urlopen(request, timeout=PAGE_SECONDS) as response:
             body = response.read(PAGE_BYTES)
+            url = response.geturl()
             charset = response.headers.get_content_charset() or "utf-8"
-            return response.geturl(), body.decode(charset, errors="replace")
     except HTTPError as error:
         raise PageError(f"HTTP {error.code}") from error
     except TimeoutError as error:
         raise PageError(f"no answer in {PAGE_SECONDS} seconds") from error
     except (URLError, OSError) as error:
         raise PageError(str(getattr(error, "reason", error))) from error
+    try:
+        return url, body.decode(charset, errors="replace")
+    except LookupError:
+        # A charset Python does not know; most pages are UTF-8 whatever they say.
+        return url, body.decode("utf-8", errors="replace")
 
 
 def skill_command(since: datetime, areas: list[str], out: Path) -> list[str]:
@@ -247,24 +253,28 @@ def run_claude(command: list[str], folder: Path) -> None:
         raise FinderError(f"the {SKILL} run failed ({done.returncode}): {said[-1] if said else 'no message'}")
 
 
-def _posting(job: FoundJob, link: str, text: str) -> str:
-    where = " · ".join(part for part in (job.company, job.place, REMOTE_WORDS[job.remote]) if part)
-    return f"# {job.title}\n\n{where}\n{link}\n\n{text}\n"
+def _posting(job: Job) -> str:
+    where = " · ".join(part for part in (job.company, job.place, REMOTE_WORDS.get(job.remote or "", "")) if part)
+    body = job.description or f"The job page could not be read ({job.page_problem}), so this is only what the alert gave."
+    return f"# {job.title}\n\n{where}\n{job.link}\n\n{body}\n"
 
 
-def _save_page(jobs: JobsList, job: int, found: FoundJob, folder: Path, fetch: Callable[[str], tuple[str, str]]) -> None:
-    link = jobs.get(job).link
-    try:
-        text, kind = page_text_and_kind(*fetch(link))
-        problem = None
-    except PageError as error:
-        host = urlsplit(link).netloc
-        text, kind, problem = None, None if host.endswith("linkedin.com") else "company_site", str(error)
-    folder = folder / str(job)
+def _write_posting(job: Job, folder: Path) -> None:
+    folder = folder / str(job.id)
     folder.mkdir(parents=True, exist_ok=True)
-    body = text or f"The job page could not be read ({problem}), so this is only what the alert gave."
-    (folder / "posting.md").write_text(_posting(found, link, body))
-    jobs.save_page(job, text, kind=kind, problem=problem)
+    (folder / "posting.md").write_text(_posting(job))
+
+
+def _read_page(link: str, fetch: Callable[[str], tuple[str, str]]) -> tuple[str | None, str | None, str | None, str | None]:
+    """The address the page ended at, its description, the kind and why it could not be read."""
+    try:
+        ended_at, html = fetch(link)
+        text, kind = page_text_and_kind(ended_at, html)
+        return ended_at, text, kind, None
+    except Exception as error:
+        # Whatever went wrong with its page, the job is saved with the reason, never dropped.
+        problem = str(error) if isinstance(error, PageError) else f"{type(error).__name__}: {error}"
+        return None, None, None if urlsplit(link).netloc.endswith("linkedin.com") else "company_site", problem
 
 
 def _now() -> datetime:
@@ -293,9 +303,13 @@ def find(
     for each in found_jobs:
         if jobs.has(each.link) or not title_matches(each.title, settings.titles) or not place_kept(each, settings):
             continue
-        job = jobs.add(each)
+        ended_at, text, kind, problem = _read_page(clean_link(each.link), fetch)
+        job = jobs.add(each, page_link=ended_at, description=text, kind=kind, problem=problem)
         if job is not None:
             new += 1
-            _save_page(jobs, job, each, jobs_folder, fetch)
+    # Every new job has its posting, also one whose run stopped after saving it.
+    for job in jobs.all():
+        if job.state == "new" and not (jobs_folder / str(job.id) / "posting.md").exists():
+            _write_posting(job, jobs_folder)
     jobs.finished_run(started)
     return Summary(emails, len(found_jobs), new, problems)

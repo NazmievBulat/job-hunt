@@ -71,10 +71,33 @@ def jobs(tmp_path: Path, clock: MovableClock) -> JobsList:
             "https://Jobs.Example.com/careers/1234/?utm_source=alert&utm_medium=email&gh_src=x&ref=mail&id=7#apply",
             "https://jobs.example.com/careers/1234?id=7",
         ),
+        # A fragment that is a route of the page names the job; it stays.
+        ("https://careers.example.com/#/jobs/123?utm_source=x", "https://careers.example.com/#/jobs/123?utm_source=x"),
+        ("https://careers.example.com/jobs#!/456", "https://careers.example.com/jobs#!/456"),
     ],
 )
 def test_the_tracking_parts_of_a_link_are_removed(link: str, clean: str) -> None:
     assert clean_link(link) == clean
+
+
+@pytest.mark.parametrize("name", ["reference", "jobId", "gh_jid", "requisition"])
+def test_jobs_that_differ_only_in_a_parameter_that_names_the_job_stay_two_jobs(jobs: JobsList, name: str) -> None:
+    first = jobs.add(_found(f"https://careers.example.com/job?{name}=JR-1&utm_source=alert"))
+    second = jobs.add(_found(f"https://careers.example.com/job?{name}=JR-2&utm_source=alert"))
+    assert first is not None and second is not None and first != second
+    assert jobs.get(first).link == f"https://careers.example.com/job?{name}=JR-1"
+
+
+def test_a_job_is_also_known_by_the_address_its_page_ended_at(jobs: JobsList) -> None:
+    job = jobs.add(_found("https://click.example.com/t/aaa"), page_link="https://jobs.example.com/careers/1234?utm_source=x",
+                   description="We test robots.", kind="company_site")
+    assert jobs.has("https://jobs.example.com/careers/1234")
+    saved = jobs.get(job)
+    assert (saved.link, saved.page_link, saved.description, saved.kind, saved.page_problem) == (
+        "https://click.example.com/t/aaa", "https://jobs.example.com/careers/1234", "We test robots.", "company_site", None)
+    # A page address that is the link itself is not kept twice.
+    same = jobs.add(_found("https://jobs.example.com/careers/9"), page_link="https://jobs.example.com/careers/9/")
+    assert jobs.get(same).page_link is None
 
 
 def test_the_same_job_from_two_alerts_is_saved_once(jobs: JobsList) -> None:
@@ -109,19 +132,18 @@ def test_a_new_job_keeps_what_the_alert_gave(jobs: JobsList, clock: MovableClock
 
 
 def test_the_page_is_saved_with_its_kind_or_the_reason_it_could_not_be_read(jobs: JobsList) -> None:
-    read = jobs.add(_found("https://www.linkedin.com/jobs/view/1"))
-    unread = jobs.add(_found("https://www.linkedin.com/jobs/view/2"))
-    jobs.save_page(read, "We test things.", kind="easy_apply", problem=None)
-    jobs.save_page(unread, "Senior QA Automation Engineer at Example Labs", kind=None, problem="HTTP 999")
+    read = jobs.add(_found("https://www.linkedin.com/jobs/view/1"), description="We test things.", kind="easy_apply")
+    unread = jobs.add(_found("https://www.linkedin.com/jobs/view/2"), problem="HTTP 999")
     assert (jobs.get(read).description, jobs.get(read).kind, jobs.get(read).page_problem) == (
         "We test things.", "easy_apply", None)
-    assert (jobs.get(unread).kind, jobs.get(unread).page_problem) == (None, "HTTP 999")
+    assert (jobs.get(unread).description, jobs.get(unread).kind, jobs.get(unread).page_problem) == (
+        None, None, "HTTP 999")
 
 
 def test_a_kind_other_than_easy_apply_or_company_site_is_refused(jobs: JobsList) -> None:
-    job = jobs.add(_found("https://www.linkedin.com/jobs/view/1"))
     with pytest.raises(ValueError, match="kind"):
-        jobs.save_page(job, "text", kind="quick_apply", problem=None)
+        jobs.add(_found("https://www.linkedin.com/jobs/view/1"), description="text", kind="quick_apply")
+    assert jobs.all() == []
 
 
 def _walk(jobs: JobsList, job: int, *states: str) -> None:

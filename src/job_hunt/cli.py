@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+from job_hunt.apply import RESUME_SKILL, SITE_SKILL, AnswerError, ApplyError, answer, apply, resume_job
 from job_hunt.career import career_from_export, read_career, write_career
 from job_hunt.finder import FinderError, fetch_page, find, run_claude
 from job_hunt.jobs import Job, JobsList, PickError
@@ -127,6 +128,79 @@ def _decide(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_resume(command: list[str]) -> None:
+    run_claude(command, ROOT, skill=RESUME_SKILL, error=ApplyError)
+
+
+def run_site(command: list[str]) -> None:
+    run_claude(command, ROOT, skill=SITE_SKILL, error=ApplyError)
+
+
+def _apply(args: argparse.Namespace) -> int:
+    try:
+        summary = apply(JobsList(DATA / "jobs.db"), ROOT, run_resume=run_resume, run_site=run_site)
+    except ApplyError as error:
+        print(f"hunt apply: {error}", file=sys.stderr)
+        return 1
+    print(summary)
+    return 0
+
+
+def _named(job: Job) -> str:
+    return f"{job.title} at {job.company}"
+
+
+def _answer(args: argparse.Namespace) -> int:
+    jobs = JobsList(DATA / "jobs.db")
+    try:
+        if args.command == "answer":
+            job = answer(jobs, ROOT, args.job, args.text)
+        else:
+            job = resume_job(jobs, args.job)
+    except AnswerError as error:
+        print(f"hunt {args.command}: {error}", file=sys.stderr)
+        return 1
+    done = "saved the answer; " if args.command == "answer" else ""
+    print(f"{done}job {job.id} ({_named(job)}) goes on at the next hunt apply")
+    return 0
+
+
+def _then(job: Job) -> str:
+    if job.state_reason and job.state_reason.startswith("an answer to "):
+        return f'hunt answer {job.id} "<the answer>"'
+    return f"hunt resume-job {job.id}"
+
+
+def _waits_for(job: Job) -> str:
+    if job.state == "picked":
+        return "resume not written yet"
+    if job.state == "applying":
+        return "being applied to"
+    if job.kind == "company_site":
+        return "resume ready, for the next hunt apply"
+    if job.kind == "easy_apply":
+        return "resume ready, for the LinkedIn worker"
+    return "resume ready; the way to apply is not known"
+
+
+def _status(args: argparse.Namespace) -> int:
+    jobs = JobsList(DATA / "jobs.db")
+    groups = [
+        ("Applied", jobs.in_states("applied"), lambda job: ""),
+        ("Paused", jobs.in_states("paused"), lambda job: f": needs {job.state_reason} (then: {_then(job)})"),
+        ("Failed", jobs.in_states("failed"), lambda job: f": {job.state_reason}"),
+        ("Waiting", jobs.in_states("picked", "resume_ready", "applying"), lambda job: f": {_waits_for(job)}"),
+    ]
+    if not any(listed for _, listed, _ in groups):
+        print("No picked jobs yet.")
+    for name, listed, why in groups:
+        if listed:
+            print(f"{name} ({len(listed)}):")
+        for job in listed:
+            print(f"  {job.id}. {_named(job)}{why(job)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hunt", description="Every mechanical step of the job hunt.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -159,6 +233,24 @@ def main(argv: list[str] | None = None) -> int:
     skip = commands.add_parser("skip", help="skip jobs by their number on the last list")
     skip.add_argument("numbers", nargs="*", type=int)
     skip.set_defaults(run=_decide)
+    applying = commands.add_parser(
+        "apply",
+        help="write a resume for every picked job (claude -p with the write-resume skill, all at once), then apply "
+        "to the company-site jobs, up to three at once (claude --chrome -p with the apply-site skill)",
+    )
+    applying.set_defaults(run=_apply)
+    answering = commands.add_parser(
+        "answer", help="save the answer to a paused job's question in the career's form answers and put it back")
+    answering.add_argument("job", type=int, help="the job's number, as hunt status prints it")
+    answering.add_argument("text")
+    answering.set_defaults(run=_answer)
+    resuming = commands.add_parser(
+        "resume-job", help="put a paused job back once its CAPTCHA, sign-in or question is done in Chrome")
+    resuming.add_argument("job", type=int, help="the job's number, as hunt status prints it")
+    resuming.set_defaults(run=_answer)
+    status = commands.add_parser("status", help="print the picked jobs: applied, paused (what each needs), failed "
+                                 "(why) and waiting")
+    status.set_defaults(run=_status)
     args = parser.parse_args(argv)
     return args.run(args)
 

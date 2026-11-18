@@ -1,0 +1,84 @@
+"""The settings a person gave /setup, read from data/settings.json."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from job_hunt.settings import Settings, SettingsError, read_settings
+
+GOOD = {
+    "titles": ["QA Automation Engineer", "SDET"],
+    "areas": ["Raleigh-Durham-Chapel Hill", "New York City"],
+    "remote": "include",
+    "lowest_salary": 120000,
+    "morning_hour": 7,
+}
+
+
+def _write(tmp_path: Path, settings: object) -> Path:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(settings))
+    return path
+
+
+def test_settings_are_read() -> None:
+    path = Path(__file__).parent / "finder" / "settings.json"
+    assert read_settings(path) == Settings(
+        titles=["QA Automation Engineer", "SDET"],
+        areas=["Raleigh-Durham-Chapel Hill", "San Francisco Bay Area"],
+        remote="include",
+        lowest_salary=120000,
+        morning_hour=7,
+    )
+
+
+def test_a_missing_file_names_setup(tmp_path: Path) -> None:
+    with pytest.raises(SettingsError, match="/setup"):
+        read_settings(tmp_path / "settings.json")
+
+
+@pytest.mark.parametrize(
+    ("change", "named"),
+    [
+        ({"titles": []}, "titles"),
+        ({"titles": ["  "]}, "titles"),
+        ({"areas": ["Durham", ""]}, "areas"),
+        ({"areas": "Durham"}, "areas"),
+        ({"remote": "yes"}, "remote"),
+        ({"remote": True}, "remote"),
+        ({"lowest_salary": -1}, "lowest_salary"),
+        ({"lowest_salary": "100k"}, "lowest_salary"),
+        ({"morning_hour": 24}, "morning_hour"),
+        ({"morning_hour": 7.5}, "morning_hour"),
+        ({"miles": 30}, "miles"),
+        # With no area and remote jobs left out, no job could ever be kept.
+        ({"areas": [], "remote": "exclude"}, "areas"),
+    ],
+)
+def test_settings_that_cannot_be_used_are_refused_naming_the_field(
+    tmp_path: Path, change: dict[str, object], named: str
+) -> None:
+    with pytest.raises(SettingsError, match=named):
+        read_settings(_write(tmp_path, {**GOOD, **change}))
+
+
+def test_a_field_left_out_is_refused(tmp_path: Path) -> None:
+    settings = dict(GOOD)
+    del settings["remote"]
+    with pytest.raises(SettingsError, match="remote"):
+        read_settings(_write(tmp_path, settings))
+
+
+def test_a_file_that_is_not_json_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("{titles: ")
+    with pytest.raises(SettingsError, match="not JSON"):
+        read_settings(path)
+
+
+def test_only_remote_jobs_needs_no_area_and_the_salary_floor_may_be_left_empty(tmp_path: Path) -> None:
+    settings = read_settings(_write(tmp_path, {**GOOD, "areas": [], "remote": "only", "lowest_salary": None}))
+    assert (settings.areas, settings.remote, settings.lowest_salary) == ([], "only", None)

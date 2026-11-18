@@ -91,6 +91,10 @@ def _found_job(entry: Any, areas: dict[str, str]) -> FoundJob:
             raise ValueError(f"has no {name}")
     if not entry["link"].startswith(("https://", "http://")):
         raise ValueError(f"has a link that is not a web address: {entry['link']!r}")
+    try:
+        clean_link(entry["link"])
+    except ValueError as error:
+        raise ValueError(f"has a link that is not a web address: {entry['link']!r} ({error})") from error
     if entry.get("remote") not in get_args(Remote):
         raise ValueError(f"has remote {entry.get('remote')!r}, not one of {', '.join(get_args(Remote))}")
     place, area = entry.get("place"), entry.get("area")
@@ -208,15 +212,18 @@ def page_text_and_kind(link: str, html: str) -> tuple[str, str]:
     """The description on a fetched page, and whether the job is `easy_apply` or `company_site`."""
     if SIGN_IN.search(urlsplit(link).path):
         raise PageError("the page asks to sign in")
+    host = urlsplit(link).netloc.lower()
+    linkedin = host == "linkedin.com" or host.endswith(".linkedin.com")
+    board = linkedin or host == "indeed.com" or host.endswith(".indeed.com")
     text = _first_text(html, BOARD_DESCRIPTION)
-    # A posting may carry an optional sign-in form; without the board's description it is a wall.
-    if not text and SIGN_IN_FORM.search(html):
+    # A board's posting may carry an optional sign-in form; without the board's description it
+    # is a wall. Another site has no known description block to tell the two apart, so its
+    # sign-in form alone does not hide its posting.
+    if not text and board and SIGN_IN_FORM.search(html):
         raise PageError("the page asks to sign in")
     text = text or _first_text(html, PAGE_PARTS)
     if not text:
         raise PageError("the page has no text")
-    host = urlsplit(link).netloc.lower()
-    linkedin = host == "linkedin.com" or host.endswith(".linkedin.com")
     offsite = 'id="applyUrl"' in html or "apply-link-offsite" in html
     return text, "easy_apply" if linkedin and not offsite else "company_site"
 

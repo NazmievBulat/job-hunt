@@ -136,10 +136,12 @@ def test_a_job_the_skill_wrote_wrongly_is_left_out_and_named(tmp_path: Path, set
     found = tmp_path / "found.json"
     good = _job().__dict__
     found.write_text(json.dumps({"emails": 2, "jobs": [
-        good, {**good, "remote": "maybe"}, {**good, "title": ""}, {k: v for k, v in good.items() if k != "link"}]}))
+        good, {**good, "remote": "maybe"}, {**good, "title": ""}, {k: v for k, v in good.items() if k != "link"},
+        {**good, "link": "https://[not-an-address"}]}))
     emails, jobs, problems = read_found(found, settings)
     assert (emails, len(jobs)) == (2, 1)
-    assert len(problems) == 3 and "remote" in problems[0] and "title" in problems[1] and "link" in problems[2]
+    assert len(problems) == 4 and "remote" in problems[0] and "title" in problems[1] and "link" in problems[2]
+    assert "link" in problems[3]
 
 
 @pytest.mark.parametrize("content", ["", "[]", '{"jobs": []}', '{"emails": 1, "jobs": {}}'])
@@ -163,6 +165,15 @@ def test_a_posting_with_an_optional_sign_in_form_is_still_read() -> None:
         "<nav>", '<form action="https://www.linkedin.com/uas/login-submit"><input name="session_key"></form><nav>')
     text, kind = page_text_and_kind("https://www.linkedin.com/jobs/view/4012345678", html)
     assert (kind, text.splitlines()[0]) == ("easy_apply", "About the job")
+
+
+def test_a_company_posting_beside_an_optional_sign_in_form_is_read() -> None:
+    # Only a board with a known description block can tell its sign-in wall from a posting.
+    html = (HERE / "pages" / "company.html").read_text().replace(
+        "<body>", '<body><form action="/login"><input name="email"></form>')
+    assert '<form action="/login">' in html
+    text, kind = page_text_and_kind("https://jobs.example.com/careers/1234", html)
+    assert (kind, text.splitlines()[0]) == ("company_site", "QA Automation Engineer, Robot Fleet")
 
 
 def test_a_linkedin_page_that_applies_on_another_site_is_a_company_site() -> None:

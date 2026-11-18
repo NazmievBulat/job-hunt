@@ -503,6 +503,50 @@ def test_two_tracking_links_that_end_at_the_same_page_are_one_job(
         ("https://click.example.com/t/one", "https://jobs.example.com/careers/1234")]
 
 
+def test_a_second_run_while_one_runs_fails_and_neither_reads_the_others_file(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    skill = FakeSkill(tmp_path / "found-jobs.json")
+    refused: list[str] = []
+
+    def first_run(command: list[str]) -> None:
+        with pytest.raises(FinderError, match="already running") as error:
+            find(settings, JobsList(tmp_path / "jobs.db", clock=clock), tmp_path / "jobs", skill.found,
+                 run=skill, fetch=_fetch, clock=clock)
+        refused.append(str(error.value))
+        skill(command)
+
+    summary = find(settings, jobs, tmp_path / "jobs", skill.found, run=first_run, fetch=_fetch, clock=clock)
+    assert refused and len(skill.commands) == 1 and (summary.jobs, summary.new) == (8, 4)
+    assert jobs.last_run() == clock.now
+    # The lock goes with the run: the next one runs.
+    clock.advance(days=1)
+    assert find(settings, jobs, tmp_path / "jobs", skill.found, run=skill, fetch=_fetch, clock=clock).jobs == 8
+
+
+def test_a_posting_cut_short_while_written_is_never_left_as_if_whole(
+    tmp_path: Path, settings: Settings, clock: MovableClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    skill = FakeSkill(tmp_path / "found-jobs.json")
+    write_text = Path.write_text
+
+    def full_disk(path: Path, text: str, *args: object, **kwargs: object) -> int:
+        write_text(path, text[: len(text) // 2])
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", full_disk)
+    with pytest.raises(OSError):
+        find(settings, jobs, tmp_path / "jobs", skill.found, run=skill, fetch=_fetch, clock=clock)
+    assert not list((tmp_path / "jobs").glob("*/posting.md"))
+    monkeypatch.setattr(Path, "write_text", write_text)
+    clock.advance(days=1)
+    find(settings, jobs, tmp_path / "jobs", skill.found, run=skill, fetch=_fetch, clock=clock)
+    lab = next(job for job in jobs.all() if "4012345678" in job.link)
+    assert (tmp_path / "jobs" / str(lab.id) / "posting.md").read_text().endswith(lab.description + "\n")
+
+
 def test_a_new_job_whose_posting_was_never_written_gets_it_on_the_next_run(
     tmp_path: Path, settings: Settings, clock: MovableClock
 ) -> None:

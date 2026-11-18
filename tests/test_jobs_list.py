@@ -109,8 +109,11 @@ def test_two_jobs_whose_pages_end_at_one_page_are_two_jobs_unless_title_and_comp
     elsewhere = jobs.add(_found("https://click.example.com/t/4", title="QA Automation Engineer", company="Globex Example"),
                          page_link=careers)
     again = jobs.add(_found("https://click.example.com/t/3", title="qa automation engineer"), page_link=careers)
-    assert first is not None and other is not None and elsewhere is not None and again is None
-    assert (jobs.get(first).page_link, jobs.get(other).page_link) == (careers, None)
+    # Each job keeps the page, so a later link to the second job is known too, not only one to the first.
+    other_again = jobs.add(_found("https://click.example.com/t/5", title="SDET"), page_link=careers)
+    assert first is not None and other is not None and elsewhere is not None and again is None and other_again is None
+    assert (jobs.get(first).page_link, jobs.get(other).page_link) == (careers, careers)
+    assert len(jobs.all()) == 3
 
 
 def test_the_same_job_from_two_alerts_is_saved_once(jobs: JobsList) -> None:

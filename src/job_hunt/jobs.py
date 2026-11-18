@@ -93,7 +93,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY,
     link TEXT NOT NULL UNIQUE,
-    page_link TEXT UNIQUE,
+    page_link TEXT,
     title TEXT NOT NULL,
     company TEXT NOT NULL,
     place TEXT,
@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     found_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS jobs_page_link ON jobs (page_link);
 CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT NOT NULL
 );
@@ -184,17 +185,14 @@ class JobsList:
         page = None if page == link else page
         if self.has(link):
             return None
-        if page:
-            known = self._db.execute(
-                "SELECT title, company FROM jobs WHERE ? IN (link, page_link)", (page,)).fetchone()
-            # Pages of two jobs may end at one page (an expired posting sends its link to the
-            # careers page): the same page is the same job only under the same title and company.
-            same = known is not None and (known["title"].casefold(), known["company"].casefold()) == (
-                found.title.casefold(), found.company.casefold())
-            if same:
-                return None
-            if known is not None:
-                page = None
+        # Pages of two jobs may end at one page (an expired posting sends its link to the
+        # careers page): the same page is the same job only under the same title and company.
+        # Each job keeps its page, so a later link to any of them is known.
+        if page and any(
+            (known["title"].casefold(), known["company"].casefold()) == (found.title.casefold(), found.company.casefold())
+            for known in self._db.execute("SELECT title, company FROM jobs WHERE ? IN (link, page_link)", (page,))
+        ):
+            return None
         now = self._stamp()
         with self._db:
             cursor = self._db.execute(

@@ -16,6 +16,7 @@ as `new`, and saves each one's page as `jobs/<id>/posting.md`.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import re
 import subprocess
@@ -275,7 +276,10 @@ def _posting(job: Job) -> str:
 def _write_posting(job: Job, folder: Path) -> None:
     folder = folder / str(job.id)
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "posting.md").write_text(_posting(job))
+    # Written whole or not at all: a posting cut short would pass for written on every next run.
+    part = folder / "posting.md.part"
+    part.write_text(_posting(job))
+    part.replace(folder / "posting.md")
 
 
 def _read_page(link: str, fetch: Callable[[str], tuple[str, str]]) -> tuple[str | None, str | None, str | None, str | None]:
@@ -303,6 +307,26 @@ def find(
     run: Callable[[list[str]], None],
     fetch: Callable[[str], tuple[str, str]],
     clock: Callable[[], datetime] = _now,
+) -> Summary:
+    # One run at a time: two would write one jobs file, and one could save the other's jobs and
+    # move the time the next run reads from past alerts it never saved.
+    with found.with_name(found.name + ".lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise FinderError("another hunt find is already running") from error
+        return _find(settings, jobs, jobs_folder, found, run=run, fetch=fetch, clock=clock)
+
+
+def _find(
+    settings: Settings,
+    jobs: JobsList,
+    jobs_folder: Path,
+    found: Path,
+    *,
+    run: Callable[[list[str]], None],
+    fetch: Callable[[str], tuple[str, str]],
+    clock: Callable[[], datetime],
 ) -> Summary:
     started = clock()
     since = jobs.last_run() or started - FIRST_RUN

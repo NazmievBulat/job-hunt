@@ -162,17 +162,24 @@ def test_a_score_file_with_one_wrong_entry_is_refused_and_no_job_is_scored(
 
 def test_a_second_run_while_one_runs_fails_and_neither_reads_the_others_file(project: Path, jobs: JobsList) -> None:
     job = jobs.add(_found(1))
-    second: list[str] = []
-    inner = FakeSkill({"scores": [{"job": job, "score": 7, "reason": "Fine."}]})
+    second = FakeSkill({"scores": []})
 
     def first_run(command: list[str]) -> None:
-        with pytest.raises(ScoreError, match="another hunt score is already running") as refused:
-            score(jobs, project, run=FakeSkill({"scores": []}))
-        second.append(str(refused.value))
-        inner(command)
+        FakeSkill({"scores": [{"job": job, "score": 7, "reason": "Fine."}]})(command)
+        # Started after the first run's skill wrote its file: refused before it touches anything.
+        with pytest.raises(ScoreError, match="another hunt score is already running"):
+            score(jobs, project, run=second)
 
     assert str(score(jobs, project, run=first_run)) == "1 jobs scored"
-    assert second and jobs.get(job).score == 7
+    assert second.commands == [] and jobs.get(job).score == 7
+
+
+def test_a_run_that_failed_does_not_keep_the_next_one_waiting(project: Path, jobs: JobsList) -> None:
+    job = jobs.add(_found(1))
+    with pytest.raises(ScoreError, match="wrote no score file"):
+        score(jobs, project, run=lambda command: None)
+    assert str(score(jobs, project, run=FakeSkill({"scores": [{"job": job, "score": 6, "reason": "Fine."}]}))) == (
+        "1 jobs scored")
 
 
 def test_read_scores_names_the_file_it_refused(tmp_path: Path) -> None:

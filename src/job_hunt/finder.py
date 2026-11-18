@@ -136,36 +136,40 @@ class _Text(HTMLParser):
 
     def __init__(self, wanted: Callable[[str, dict[str, str]], bool]) -> None:
         super().__init__(convert_charrefs=True)
-        self.wanted, self.depth, self.skipping, self.done = wanted, 0, 0, False
+        self.wanted, self.done = wanted, False
+        # The elements open inside the wanted one, it first, each with whether its text is skipped.
+        self.open: list[tuple[str, bool]] = []
         self.parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if self.done or tag in self.VOID:
-            if self.depth and tag == "br":
+            if self.open and tag == "br":
                 self.parts.append("\n")
             return
-        if self.depth:
-            self.depth += 1
-            if tag in self.SKIP or self.skipping:
-                self.skipping += 1
-            elif tag in self.BLOCKS:
+        if self.open:
+            skipping = tag in self.SKIP or self.open[-1][1]
+            self.open.append((tag, skipping))
+            if not skipping and tag in self.BLOCKS:
                 self.parts.append("\n- " if tag == "li" else "\n")
         elif self.wanted(tag, {name: value or "" for name, value in attrs}):
-            self.depth = 1
+            self.open.append((tag, False))
 
     def handle_endtag(self, tag: str) -> None:
-        if not self.depth or tag in self.VOID:
+        # An end tag also closes what HTML leaves open inside it (`<li>` without `</li>`); one
+        # with no open start tag is ignored.
+        if all(name != tag for name, _ in self.open):
             return
-        self.depth -= 1
-        if self.skipping:
-            self.skipping -= 1
-        elif tag in self.BLOCKS:
-            self.parts.append("\n")
-        if not self.depth:
+        while True:
+            name, skipping = self.open.pop()
+            if not skipping and name in self.BLOCKS:
+                self.parts.append("\n")
+            if name == tag:
+                break
+        if not self.open:
             self.done = True
 
     def handle_data(self, data: str) -> None:
-        if self.depth and not self.skipping:
+        if self.open and not self.open[-1][1]:
             self.parts.append(data)
 
     def text(self) -> str:

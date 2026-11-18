@@ -321,6 +321,19 @@ def test_the_made_up_found_file_is_what_the_made_up_alert_emails_hold() -> None:
         assert job["link"] in body and job["title"] in body and job["company"] in body
 
 
+def test_list_items_html_leaves_open_neither_hide_the_page_nor_add_what_follows_the_description() -> None:
+    # HTML may leave `<li>` and `<p>` unclosed; the end of their list or block closes them.
+    company = page_text_and_kind(
+        "https://jobs.example.com/careers/7",
+        "<body><nav><ul><li>Home<li>Jobs</ul></nav><h1>QA Engineer</h1><p>Test the app.<p>Ship it.</body>")
+    assert company == ("QA Engineer\nTest the app.\nShip it.", "company_site")
+    linkedin = page_text_and_kind(
+        "https://www.linkedin.com/jobs/view/4012345678",
+        '<body><div class="show-more-less-html__markup"><ul><li>Write tests<li>Fix bugs</ul></div>'
+        "<section>Similar jobs: Cook</section></body>")
+    assert linkedin == ("- Write tests\n- Fix bugs", "easy_apply")
+
+
 def test_a_page_with_no_text_cannot_be_read() -> None:
     with pytest.raises(PageError, match="no text"):
         page_text_and_kind("https://jobs.example.com/1", "<html><head><title>x</title></head><body> </body></html>")

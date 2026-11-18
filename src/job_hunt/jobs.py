@@ -35,8 +35,9 @@ MOVES: dict[State, tuple[State, ...]] = {
     "resume_ready": ("applying", "failed"),
     # Back to resume_ready: a site worker failed for the first time, and is tried again.
     "applying": ("applied", "paused", "failed", "resume_ready"),
-    # Back to resume_ready: the user answered the question or did what the site needed.
-    "paused": ("applying", "failed", "resume_ready"),
+    # Back to resume_ready: the user answered the question or did what the site needed. To
+    # applied: the user saw in Chrome that the application was sent.
+    "paused": ("applying", "failed", "resume_ready", "applied"),
     "applied": (),
     "failed": (),
 }

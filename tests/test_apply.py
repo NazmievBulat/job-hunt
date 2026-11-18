@@ -247,6 +247,19 @@ def test_a_resume_worker_that_ends_without_a_pdf_is_a_failure(project: Path, job
         "failed", "the write-resume run built no resume.pdf")
 
 
+UNSURE = "a look in Chrome whether it was sent: "
+
+
+def _unsure_after_two_runs(project: Path, jobs: JobsList, job: int, run_site) -> None:
+    """The worker left no report it can be read by: the job waits for the user, in this run and
+    the next, and nothing counts against it."""
+    sites = Sites(project)
+    apply(jobs, project, run_resume=Resumes(project), run_site=run_site)
+    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    assert sites.ran == []
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
+
+
 @pytest.mark.parametrize(("written", "words"), [
     (None, "wrote no report"),
     ("{not json", "not JSON"),
@@ -257,33 +270,76 @@ def test_a_resume_worker_that_ends_without_a_pdf_is_a_failure(project: Path, job
     ('{"result": "paused", "needs": "a phone call", "tab": "Apply - Example Co"}', "needs"),
     ('{"result": "paused", "needs": "captcha", "tab": "Apply", "tab_id": "41"}', "tab_id"),
 ])
-def test_a_report_that_cannot_be_read_is_a_failure_saying_why(
+def test_a_report_that_cannot_be_read_pauses_the_job_saying_why(
     project: Path, jobs: JobsList, written: str | None, words: str
 ) -> None:
     job = _picked(jobs, 1)
-    apply(jobs, project, run_resume=Resumes(project), run_site=Sites(project, {job: [written]}))
-    saved = jobs.get(job)
-    assert saved.state == "failed"
-    assert words in saved.state_reason
+    sites = Sites(project, {job: [written]})
+    # Without a report it can read, nothing says the form was not sent: no second worker.
+    _unsure_after_two_runs(project, jobs, job, sites)
+    assert sites.ran == [job]
+    assert jobs.get(job).state_reason.startswith(UNSURE)
+    assert words in jobs.get(job).state_reason
 
 
 def test_a_report_left_by_an_earlier_try_does_not_pass_for_this_one(project: Path, jobs: JobsList) -> None:
     job = _picked(jobs, 1)
     sites = Sites(project, {job: [{"result": "failed", "reason": "The site showed an error page."}, None]})
     apply(jobs, project, run_resume=Resumes(project), run_site=sites)
-    assert jobs.get(job).state == "failed"
-    assert "wrote no report" in jobs.get(job).state_reason
+    assert sites.ran == [job, job]
+    assert (jobs.get(job).state, jobs.get(job).state_reason) == (
+        "paused", UNSURE + "the apply-site run wrote no report")
+    assert jobs.get(job).failures == 1
 
 
-def test_a_worker_that_crashes_is_a_failure_with_its_error(project: Path, jobs: JobsList) -> None:
+def test_a_worker_that_crashes_without_a_report_pauses_the_job_with_its_error(project: Path, jobs: JobsList) -> None:
     job = _picked(jobs, 1)
+    started: list[int] = []
 
-    def crash(command: list[str]) -> None:
+    def submitted_then_timed_out(command: list[str]) -> None:
+        started.append(_job_of(command, SITE_SKILL))
         raise ApplyError("the apply-site run did not finish in 30 minutes")
 
-    apply(jobs, project, run_resume=Resumes(project), run_site=crash)
-    assert (jobs.get(job).state, jobs.get(job).state_reason) == (
-        "failed", "the apply-site run did not finish in 30 minutes")
+    _unsure_after_two_runs(project, jobs, job, submitted_then_timed_out)
+    assert started == [job]
+    assert jobs.get(job).state_reason == UNSURE + "the apply-site run did not finish in 30 minutes"
+
+
+def test_a_worker_that_ends_cleanly_without_a_report_pauses_the_job(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1)
+    started: list[int] = []
+    _unsure_after_two_runs(project, jobs, job, lambda command: started.append(_job_of(command, SITE_SKILL)))
+    assert started == [job]
+    assert jobs.get(job).state_reason == UNSURE + "the apply-site run wrote no report"
+
+
+def test_a_run_stopped_before_the_retry_started_does_not_count_the_last_failure_twice(
+    project: Path, jobs: JobsList, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = _picked(jobs, 1)
+    sites = Sites(project, {job: [{"result": "failed", "reason": "The site showed an error page."}]})
+    move, tries = jobs.move, []
+
+    class Stopped(BaseException):
+        """The computer went to sleep."""
+
+    def stop_at_the_second_try(number: int, state: str, reason: str | None = None) -> None:
+        move(number, state, reason)
+        if state == "applying":
+            tries.append(number)
+            if len(tries) == 2:
+                raise Stopped
+
+    monkeypatch.setattr(jobs, "move", stop_at_the_second_try)
+    with pytest.raises(Stopped):
+        apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    monkeypatch.undo()
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("applying", 1)
+    # The first try's failure was already counted; its report is gone before the second try.
+    assert not (project / "jobs" / str(job) / "report.json").exists()
+    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 1)
+    assert sites.ran == [job]
 
 
 def _pause(project: Path, jobs: JobsList, report: dict) -> int:
@@ -440,12 +496,13 @@ def test_hunt_status_lines(hunt: JobsList, project: Path, capsys: pytest.Capture
     assert capsys.readouterr().out.splitlines() == [
         "Applied (1):",
         f"  {applied}. QA Engineer 1 at Example Co 1",
-        "Paused (1):",
+        "Paused (2):",
         f'  {paused}. QA Engineer 2 at Example Co 2: needs a CAPTCHA solved, in the Chrome tab "Apply - Example Co 2"'
         f" (then: hunt resume-job {paused})",
-        "Failed (2):",
+        f"  {silent}. QA Engineer 4 at Example Co 4: needs a look in Chrome whether it was sent: the apply-site run"
+        f" wrote no report (then: hunt applied {silent} if it was sent, hunt resume-job {silent} if not)",
+        "Failed (1):",
         f"  {failed}. QA Engineer 3 at Example Co 3: The site showed an error page.",
-        f"  {silent}. QA Engineer 4 at Example Co 4: the apply-site run wrote no report",
         "Waiting (2):",
         f"  {easy}. QA Engineer 5 at Example Co 5: resume ready, for the LinkedIn worker",
         f"  {unwritten}. QA Engineer 6 at Example Co 6: resume not written yet",
@@ -531,11 +588,11 @@ def test_a_report_written_before_the_worker_stopped_badly_still_counts(project: 
     assert (sites.ran, jobs.get(job).state) == ([job], "applied")
 
 
-def test_a_needs_that_is_not_a_word_is_a_failure_not_a_crash(project: Path, jobs: JobsList) -> None:
+def test_a_needs_that_is_not_a_word_pauses_the_job_and_does_not_crash_the_run(project: Path, jobs: JobsList) -> None:
     job, other = _picked(jobs, 1), _picked(jobs, 2)
     report = '{"result": "paused", "needs": ["captcha"], "tab": "Apply"}'
     apply(jobs, project, run_resume=Resumes(project), run_site=Sites(project, {job: [report]}))
-    assert jobs.get(job).state == "failed"
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
     assert jobs.get(other).state == "applied"
 
 
@@ -590,7 +647,7 @@ def test_hunt_resume_job_and_the_status_of_a_stopped_run_on_the_command_line(
     cli.main(["status"])
     assert capsys.readouterr().out.splitlines()[1] == (
         f"  {job}. QA Engineer 1 at Example Co 1: needs a look in Chrome whether it was sent: the last hunt apply"
-        f" stopped while applying (then: hunt resume-job {job})")
+        f" stopped while applying (then: hunt applied {job} if it was sent, hunt resume-job {job} if not)")
     assert cli.main(["resume-job", str(job)]) == 0
     assert capsys.readouterr().out == f"job {job} (QA Engineer 1 at Example Co 1) goes on at the next hunt apply\n"
     assert hunt.get(job).state == "resume_ready"
@@ -604,3 +661,72 @@ def test_hunt_apply_while_another_runs_says_so(hunt: JobsList, project: Path,
         fcntl.flock(lock, fcntl.LOCK_EX)
         assert cli.main(["apply"]) == 1
     assert capsys.readouterr().err == "hunt apply: another hunt apply is already running\n"
+
+
+def test_hunt_applied_ends_a_job_the_user_saw_was_sent(hunt: JobsList, project: Path,
+                                                       capsys: pytest.CaptureFixture[str]) -> None:
+    job = _picked(hunt, 1)
+    _unsure_after_two_runs(project, hunt, job, lambda command: None)
+    capsys.readouterr()
+    assert cli.main(["applied", str(job)]) == 0
+    assert capsys.readouterr().out == f"job {job} (QA Engineer 1 at Example Co 1) is applied to\n"
+    assert (hunt.get(job).state, hunt.get(job).state_reason) == ("applied", None)
+    sites = Sites(project)
+    apply(hunt, project, run_resume=Resumes(project), run_site=sites)
+    assert sites.ran == []
+    assert cli.main(["applied", str(job)]) == 1
+    assert capsys.readouterr().err == f"hunt applied: job {job} is not paused, it is applied\n"
+    assert cli.main(["applied", "99"]) == 1
+    assert capsys.readouterr().err == "hunt applied: there is no job 99\n"
+
+
+def _two_questions(project: Path, jobs: JobsList) -> tuple[int, int]:
+    first, second = _picked(jobs, 1), _picked(jobs, 2)
+    sites = Sites(project, {first: [QUESTION], second: [{**QUESTION, "question": "Notice period?"}]})
+    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    assert {jobs.get(first).state, jobs.get(second).state} == {"paused"}
+    return first, second
+
+
+def test_two_answers_given_at_once_are_both_kept(project: Path, jobs: JobsList, monkeypatch: pytest.MonkeyPatch) -> None:
+    import job_hunt.apply as applying
+
+    first, second = _two_questions(project, jobs)
+    read, first_read, second_read, release = applying.read_career, threading.Event(), threading.Event(), threading.Event()
+
+    def held_after_reading(path: Path) -> Career:
+        career = read(path)
+        if threading.current_thread().name == "first":
+            first_read.set()
+            release.wait(5)
+        else:
+            second_read.set()
+        return career
+
+    monkeypatch.setattr(applying, "read_career", held_after_reading)
+    # Two hunt answer commands, each with its own connection to the jobs list.
+    one = threading.Thread(name="first", target=lambda: answer(
+        JobsList(project / "data" / "jobs.db"), project, first, "Yes."))
+    two = threading.Thread(name="second", target=lambda: answer(
+        JobsList(project / "data" / "jobs.db"), project, second, "Two weeks."))
+    one.start()
+    assert first_read.wait(5)
+    two.start()
+    # The second waits for the first to write: it does not read the career meanwhile.
+    assert not second_read.wait(0.3)
+    release.set()
+    one.join(5)
+    two.join(5)
+    saved = read_career(project / "data" / "career.json").form_answers["saved"]
+    assert sorted(entry["answer"] for entry in saved) == ["Two weeks.", "Yes."]
+
+
+def test_the_career_is_replaced_whole_never_written_in_place(project: Path, jobs: JobsList) -> None:
+    job = _pause(project, jobs, QUESTION)
+    career_file = project / "data" / "career.json"
+    before = career_file.stat().st_ino
+    answer(jobs, project, job, "Yes.")
+    # A site worker reading it meanwhile sees the old file or the new one, never half of one.
+    assert career_file.stat().st_ino != before
+    assert career_file.stat().st_mode & 0o777 == 0o600
+    assert sorted(path.name for path in (project / "data").iterdir()) == ["career.json", "career.lock", "jobs.db"]

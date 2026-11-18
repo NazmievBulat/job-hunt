@@ -10,10 +10,13 @@ skill) each apply to one job in a Chrome tab of their own and write `jobs/<id>/r
      "tab_id": 123}
     {"result": "failed", "reason": "..."}
 
-The coordinator saves each report as the job's state. A worker that fails, writes no report or
-one that cannot be read counts against its job (`JobsList.fail`): tried once more, then `failed`.
-Run again, it picks up from each job's state and never starts a second worker on a job that was
-being applied to. Easy Apply jobs keep their resume for the LinkedIn worker.
+The coordinator saves each report as the job's state. A `failed` report counts against its job
+(`JobsList.fail`): tried once more, then `failed`. A worker that stops or ends with no report it
+can be read by may have sent the application, so its job is paused for the user to look in
+Chrome (`UNSURE`) and never tried again on its own. Run again, it picks up from each job's state
+and never starts a second worker on a job that was being applied to. A resume worker sends
+nothing: one that fails counts against its job. Easy Apply jobs keep their resume for the
+LinkedIn worker.
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ CHROME_TOOLS = tuple(f"mcp__claude-in-chrome__{name}" for name in (
     "computer", "file_upload",
 ))
 NEEDS = {"captcha": "a CAPTCHA solved", "sign_in": "a sign-in or a new account", "question": "an answer"}
+# What a job paused with no report it can be read by needs: the application may have been sent.
+UNSURE = "a look in Chrome whether it was sent"
 
 Run = Callable[[list[str]], None]
 
@@ -64,6 +69,8 @@ class Report:
     reason: str | None = None
 
     def pause_reason(self) -> str:
+        if self.needs is None:
+            return f"{UNSURE}: {self.reason}"
         what = f'an answer to "{self.question}"' if self.needs == "question" else NEEDS[self.needs or ""]
         return f'{what}, in the Chrome tab "{self.tab}"'
 
@@ -188,8 +195,7 @@ def _left_applying(jobs: JobsList, root: Path, summary: Summary) -> None:
         try:
             report = read_report(_folder(root, job.id) / "report.json")
         except ApplyError:
-            jobs.move(job.id, "paused", "a look in Chrome whether it was sent: the last hunt apply stopped "
-                                        "while applying")
+            jobs.move(job.id, "paused", f"{UNSURE}: the last hunt apply stopped while applying")
             summary.paused += 1
             continue
         _save(jobs, job.id, report, summary)
@@ -234,26 +240,25 @@ def _paused(report: Path) -> Report | None:
     return earlier if earlier.result == "paused" else None
 
 
-def _apply_on_site(job: Job, root: Path, run: Run) -> Report:
+def _unsure(error: ApplyError) -> Report:
+    return Report("paused", reason=str(error))
+
+
+def _apply_on_site(job: Job, root: Path, run: Run, paused: Report | None) -> Report:
     report = _folder(root, job.id) / "report.json"
-    paused = _paused(report)
-    # A report an earlier try left must not pass for this one's.
-    report.unlink(missing_ok=True)
     try:
         run(site_command(job, root, paused))
     except ApplyError as error:
         # A worker that wrote its report and then stopped badly still did what it reports: an
         # application it sent must not be sent again.
-        if report.exists():
-            try:
-                return read_report(report)
-            except ApplyError:
-                pass
-        return Report("failed", reason=str(error))
+        try:
+            return read_report(report)
+        except ApplyError:
+            return _unsure(error)
     try:
         return read_report(report)
     except ApplyError as error:
-        return Report("failed", reason=str(error))
+        return _unsure(error)
 
 
 def _sites(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
@@ -264,8 +269,13 @@ def _sites(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
         while waiting or running:
             while waiting and len(running) < SITE_WORKERS:
                 job = waiting.pop(0)
+                report = _folder(root, job) / "report.json"
+                paused = _paused(report)
+                # Gone before the job is `applying`: a run stopped in between must not take an
+                # earlier try's report for this one's.
+                report.unlink(missing_ok=True)
                 jobs.move(job, "applying")
-                running[pool.submit(_apply_on_site, jobs.get(job), root, run)] = job
+                running[pool.submit(_apply_on_site, jobs.get(job), root, run, paused)] = job
             done, _ = wait(running, return_when=FIRST_COMPLETED)
             for future in done:
                 job = running.pop(future)
@@ -281,6 +291,13 @@ def _paused_job(jobs: JobsList, job: int) -> Job:
     if found.state != "paused":
         raise AnswerError(f"job {job} is not paused, it is {found.state}")
     return found
+
+
+def applied(jobs: JobsList, job: int) -> Job:
+    """End a paused job the user saw was sent in Chrome; no worker applies to it again."""
+    _paused_job(jobs, job)
+    jobs.move(job, "applied")
+    return jobs.get(job)
 
 
 def resume_job(jobs: JobsList, job: int) -> Job:
@@ -305,11 +322,14 @@ def answer(jobs: JobsList, root: Path, job: int, text: str) -> Job:
                           "answer it in the Chrome tab, then run hunt resume-job " + str(job))
     if not (text := " ".join(text.split())):
         raise AnswerError("the answer is empty")
-    career = read_career(_career(root))
-    saved = [entry for entry in career.form_answers.get("saved") or []
-             if entry.get("question", "").casefold() != report.question.casefold()]
-    saved.append({"question": report.question, "answer": text, "company": found.company})
-    career.form_answers = {**career.form_answers, "saved": saved}
-    write_career(career, _career(root))
+    # One answer at a time: two read at once would each write the career without the other's.
+    with (root / "data" / "career.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        career = read_career(_career(root))
+        saved = [entry for entry in career.form_answers.get("saved") or []
+                 if entry.get("question", "").casefold() != report.question.casefold()]
+        saved.append({"question": report.question, "answer": text, "company": found.company})
+        career.form_answers = {**career.form_answers, "saved": saved}
+        write_career(career, _career(root))
     jobs.move(job, "resume_ready")
     return jobs.get(job)

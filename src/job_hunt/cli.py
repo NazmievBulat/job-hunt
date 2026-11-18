@@ -7,7 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from job_hunt.apply import RESUME_SKILL, SITE_SKILL, AnswerError, ApplyError, answer, apply, resume_job
+from job_hunt.apply import (
+    RESUME_SKILL, SITE_SKILL, UNSURE, AnswerError, ApplyError, answer, apply, applied, resume_job,
+)
 from job_hunt.career import career_from_export, read_career, write_career
 from job_hunt.finder import FinderError, fetch_page, find, run_claude
 from job_hunt.jobs import Job, JobsList, PickError
@@ -155,11 +157,16 @@ def _answer(args: argparse.Namespace) -> int:
     try:
         if args.command == "answer":
             job = answer(jobs, ROOT, args.job, args.text)
+        elif args.command == "applied":
+            job = applied(jobs, args.job)
         else:
             job = resume_job(jobs, args.job)
     except AnswerError as error:
         print(f"hunt {args.command}: {error}", file=sys.stderr)
         return 1
+    if args.command == "applied":
+        print(f"job {job.id} ({_named(job)}) is applied to")
+        return 0
     done = "saved the answer; " if args.command == "answer" else ""
     print(f"{done}job {job.id} ({_named(job)}) goes on at the next hunt apply")
     return 0
@@ -168,6 +175,8 @@ def _answer(args: argparse.Namespace) -> int:
 def _then(job: Job) -> str:
     if job.state_reason and job.state_reason.startswith("an answer to "):
         return f'hunt answer {job.id} "<the answer>"'
+    if job.state_reason and job.state_reason.startswith(UNSURE):
+        return f"hunt applied {job.id} if it was sent, hunt resume-job {job.id} if not"
     return f"hunt resume-job {job.id}"
 
 
@@ -248,6 +257,10 @@ def main(argv: list[str] | None = None) -> int:
         "resume-job", help="put a paused job back once its CAPTCHA, sign-in or question is done in Chrome")
     resuming.add_argument("job", type=int, help="the job's number, as hunt status prints it")
     resuming.set_defaults(run=_answer)
+    sent = commands.add_parser(
+        "applied", help="end a paused job as applied once Chrome shows its application was sent")
+    sent.add_argument("job", type=int, help="the job's number, as hunt status prints it")
+    sent.set_defaults(run=_answer)
     status = commands.add_parser("status", help="print the picked jobs: applied, paused (what each needs), failed "
                                  "(why) and waiting")
     status.set_defaults(run=_status)

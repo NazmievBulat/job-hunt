@@ -103,7 +103,7 @@ Each piece has one job and talks to the others only through the jobs list and fi
 
 | Piece | Kind | What it does |
 |---|---|---|
-| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `status`. It is the coordinator. |
+| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`. It is the coordinator. |
 | Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
 | Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the timer's hour. |
@@ -159,6 +159,9 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 
 - A job whose worker fails twice (the site errors, the form breaks) is marked failed with the
   reason, and is named in the summary for the user to apply by hand.
+- A worker that stops without saying what happened (a timeout, a crash, no report) may have
+  sent the application. Its job is never tried again on its own: it pauses for the user to look
+  in Chrome, and the user says it was sent or tries it again.
 - If Chrome is closed or the computer is asleep, applying waits and says so once.
 - Everything is files on the computer. If a session or worker stops halfway, `hunt apply`
   picks up from each job's state.

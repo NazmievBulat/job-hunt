@@ -23,6 +23,12 @@ design is in `docs/design.md`; read it before changing how the hunt works.
 - Nothing is sent in a user's name (an application, an email) without that user's word in the
   conversation. Claude never types a password and never solves a CAPTCHA.
 - Run the tests with `uv run pytest -q`. They take seconds and call no model.
+- Product choices inside `docs/design.md` and a ticket (a limit, a default, a matching rule,
+  a wording) are the orchestrator's in this repository (the owner, 2026-11-18): a worker or
+  reviewer takes its own recommendation, writes it under `Answers given for the owner` in the
+  description and goes on. A question it still has to ask is `Owner only: no`, so the tick
+  answers it with the recommendation. `Owner only: yes` is only for money, privacy, legal text,
+  a change to a skill or command already on `main`, or something that contradicts the design.
 
 This file holds the rules for repositories that use Shipline; Shipline's own development follows `AGENTS.md` in the Shipline repository.
 

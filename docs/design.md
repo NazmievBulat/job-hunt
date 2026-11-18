@@ -4,13 +4,13 @@ A job-search assistant that runs on Claude Code with the user's own Claude subsc
 has no app screens: the user works with it in a Claude Code session, on the computer or from
 a phone through Remote Control.
 
-Each morning it finds new jobs that fit the user and sends one numbered list. The user replies
-with the ones they want ("apply 1 3 4"). It writes a resume for each and applies, and pauses
-only for what needs the user: a CAPTCHA, a site sign-in, or a form question their career file
-cannot answer. It also drafts replies to recruiters' emails for the user to send.
+The user talks to one chat, the `job-hunt` session. It is their orchestrator: it runs the
+finder, the resume writers and the applying workers, several at once, and asks the user only
+when a decision is theirs. Each question is one short message with what it needs shown (the
+job, the resume, the reply, the time), answered with "yes" or a short change.
 
-Success: on a normal day the user spends a minute reading the list and replying, and the
-applications go out without any further step.
+Success: the user answers a few questions a day from their phone, and everything else happens
+without them.
 
 ## Decisions
 
@@ -29,6 +29,29 @@ applications go out without any further step.
   on company sites, up to three at once.
 - Nothing is sent without the user's word: applications go out for the jobs they picked, and an
   email reply only after they approve its draft.
+
+## The chat
+
+- The `job-hunt` session runs in `tmux` with Remote Control, so the user reaches it from the
+  Claude app on their phone. A fresh one starts each morning, so its context stays small; the
+  state lives in `data/`, never in the chat.
+- It does the mechanical work through `hunt` commands and starts `claude -p` workers for
+  judgment. It waits for them in the background and asks the user only for decisions.
+- The questions, each a message of its own:
+  - **A new job.** Title, company, area, score and its one-line reason, Easy Apply or company
+    site: "Apply?" Several new jobs come as one numbered list, answered "1 3" or "all".
+  - **A paused application.** A CAPTCHA, a sign-in, or a form question the career file cannot
+    answer, with the Chrome tab: "done" or the answer.
+  - **A recruiter's message**, by email or on LinkedIn. The message, the job description when
+    there is one, and a drafted reply: "Send?"
+  - **A request to talk.** Free times from the user's Google Calendar and the reply offering
+    one, with the resume for that job: "Send?" On yes it sends and adds the time to the
+    calendar as held; when the recruiter confirms, the event is confirmed.
+- Every question also goes out as a push through Pushover when the user set its keys in
+  `/setup`; without them the Claude app's own notification for a waiting session does it.
+- Fewer messages are better: one question per decision, nothing about progress unless asked,
+  one summary at the end of a day.
+- Nothing is sent in the user's name and no time is booked without their yes to that message.
 
 ## Setup
 
@@ -89,7 +112,10 @@ Each piece has one job and talks to the others only through the jobs list and fi
 | LinkedIn worker | `claude -p --chrome` with the `apply-linkedin` skill | Opens the job's LinkedIn page, presses Easy Apply, uploads the PDF, answers from the career, submits. |
 | Company-site worker | `claude -p --chrome` with the `apply-site` skill | Opens the site's apply link, uploads the PDF, checks the fields the site read from it, answers, submits. |
 | Reply drafter | `claude -p` with the `draft-reply` skill | Drafts an answer to one recruiter email as a Gmail draft. |
-| Session rules | `.claude/commands` and `CLAUDE.md` | How the `job-hunt` session shows the list and turns replies into `hunt` commands. |
+| The chat | `CLAUDE.md` and `.claude/commands` | The `job-hunt` session: asks the questions, turns answers into `hunt` commands, starts and waits for workers. |
+| Notifier | `hunt notify` | Sends one question as a Pushover push, when the user set its keys. |
+| Scheduler | `claude -p` with the `offer-times` skill | Reads free times from Google Calendar, drafts the reply offering them, adds the held event on yes. |
+| LinkedIn inbox | `claude -p --chrome` with the `read-linkedin-messages` skill | Reads new recruiter messages on LinkedIn, one worker at a time under the LinkedIn lock. |
 
 The coordinator is a script, not a Claude session. It reads the list, starts the workers,
 collects their reports and writes states. Claude is used only for judgment: reading emails,
@@ -167,6 +193,7 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 2. The finder and the jobs list.
 3. Scoring, the `job-hunt` session and picking.
 4. The company-site worker, then the LinkedIn worker.
-5. The morning timer.
+5. The chat: the morning session, its questions and Pushover.
 6. `/setup`, with the resume reader.
-7. Recruiter email replies.
+7. Recruiter replies, by email and on LinkedIn.
+8. Offering times from Google Calendar.

@@ -13,7 +13,12 @@ design is in `docs/design.md`; read it before changing how the hunt works.
   says so in the description.
 - `src/job_hunt` is everything else. `hunt` (`src/job_hunt/cli.py`) holds every mechanical
   step; Claude is started only for judgment (reading emails, scoring, writing, filling forms).
-- A skill in `.claude/skills/` is text sent to a model: a change to it is the owner's decision.
+- A skill in `.claude/skills/` or a command in `.claude/commands/` is text sent to a model. A
+  new one that a ticket asks for is written by its worker and checked by its reviewer (the
+  owner, 2026-11-18). Changing the instructions of one already on `main` is the owner's
+  decision, unless the ticket's `Answers given for the owner` covers it.
+- Tests never call a model and never read a real mailbox, browser or career. A skill is tried
+  on made-up inputs only; the orchestrator tries it on real ones after the merge.
 - Background Claude runs use `claude -p` with the narrowest `--allowedTools` the step needs.
 - Nothing is sent in a user's name (an application, an email) without that user's word in the
   conversation. Claude never types a password and never solves a CAPTCHA.

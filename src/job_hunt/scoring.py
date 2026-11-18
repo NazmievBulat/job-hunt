@@ -12,6 +12,7 @@ out stays `new` too, and is named.
 
 from __future__ import annotations
 
+import fcntl
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -96,11 +97,21 @@ def _sent(job: Job, folders: Path) -> dict[str, Any]:
 
 
 def score(jobs: JobsList, root: Path, *, run: Callable[[list[str]], None]) -> Summary:
+    folders, _, out = _paths(root)
+    folders.mkdir(exist_ok=True)
+    # One run at a time: two would score the same new jobs and write one score file.
+    with out.with_name(out.name + ".lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ScoreError("another hunt score is already running") from error
+        return _score(jobs, folders, out, root, run=run)
+
+
+def _score(jobs: JobsList, folders: Path, out: Path, root: Path, *, run: Callable[[list[str]], None]) -> Summary:
     new = [job for job in jobs.all() if job.state == "new"]
     if not new:
         return Summary(0, asked=False)
-    folders, _, out = _paths(root)
-    folders.mkdir(exist_ok=True)
     # A file an earlier run left must not pass for this run's.
     out.unlink(missing_ok=True)
     run(skill_command([_sent(job, folders) for job in new], root))

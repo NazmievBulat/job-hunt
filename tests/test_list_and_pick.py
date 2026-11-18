@@ -198,6 +198,8 @@ def test_hunt_pick_above(hunt: JobsList, capsys: pytest.CaptureFixture[str]) -> 
         (["pick"], "hunt pick: give the numbers to pick, or --above and a score\n"),
         (["pick", "1", "--above", "7"], "hunt pick: give the numbers to pick, or --above and a score\n"),
         (["pick", "--above", "11"], "hunt pick: --above takes a score from 0 to 9\n"),
+        (["pick", "--above", "-1"], "hunt pick: --above takes a score from 0 to 9\n"),
+        (["skip"], "hunt skip: give the numbers to skip\n"),
     ],
 )
 def test_hunt_pick_refuses_with_one_clear_line(
@@ -209,3 +211,24 @@ def test_hunt_pick_refuses_with_one_clear_line(
     assert cli.main(argv) == 1
     assert capsys.readouterr() == ("", error)
     assert hunt.get(1).state == "scored"
+
+
+def test_hunt_pick_above_0_picks_every_job_waiting_on_the_last_list(
+    hunt: JobsList, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for number, score in ((1, 9), (2, 1), (3, 5)):
+        _scored(hunt, number, score)
+    cli.main(["list"])
+    assert cli.main(["pick", "--above", "0"]) == 0
+    assert [job.state for job in hunt.all()] == ["picked", "picked", "picked"]
+
+
+def test_skipping_a_job_skipped_already_is_refused_with_one_line(
+    hunt: JobsList, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _scored(hunt, 1, 4)
+    cli.main(["list"])
+    assert cli.main(["skip", "1"]) == 0
+    capsys.readouterr()
+    assert cli.main(["skip", "1"]) == 1
+    assert capsys.readouterr() == ("", "hunt skip: 1 (QA Engineer 1 at Example Labs) is already skipped\n")

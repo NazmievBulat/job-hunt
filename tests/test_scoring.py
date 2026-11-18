@@ -139,9 +139,11 @@ def test_a_score_file_that_is_not_the_skills_shape_is_refused(
     [
         ("job 2 is a 5", "entry 2 is not an object"),
         ({"job": "2", "score": 5, "reason": "Fine."}, "entry 2 names no job"),
+        ({"job": True, "score": 5, "reason": "Fine."}, "entry 2 names no job"),
         ({"job": 99, "score": 5, "reason": "Fine."}, "job 99, which was not sent to be scored"),
         ({"job": 1, "score": 6, "reason": "Again."}, "scores job 1 twice"),
         ({"job": 2, "score": 11, "reason": "Fine."}, "a whole number from 1 to 10"),
+        ({"job": 2, "score": 0, "reason": "Fine."}, "a whole number from 1 to 10"),
         ({"job": 2, "score": 7.5, "reason": "Fine."}, "a whole number from 1 to 10"),
         ({"job": 2, "score": True, "reason": "Fine."}, "a whole number from 1 to 10"),
         ({"job": 2, "score": 5, "reason": "  "}, "no reason"),
@@ -156,6 +158,21 @@ def test_a_score_file_with_one_wrong_entry_is_refused_and_no_job_is_scored(
     with pytest.raises(ScoreError, match=error):
         score(jobs, project, run=FakeSkill({"scores": [good, entry]}))
     assert [job.state for job in jobs.all()] == ["new", "new"]
+
+
+def test_a_second_run_while_one_runs_fails_and_neither_reads_the_others_file(project: Path, jobs: JobsList) -> None:
+    job = jobs.add(_found(1))
+    second: list[str] = []
+    inner = FakeSkill({"scores": [{"job": job, "score": 7, "reason": "Fine."}]})
+
+    def first_run(command: list[str]) -> None:
+        with pytest.raises(ScoreError, match="another hunt score is already running") as refused:
+            score(jobs, project, run=FakeSkill({"scores": []}))
+        second.append(str(refused.value))
+        inner(command)
+
+    assert str(score(jobs, project, run=first_run)) == "1 jobs scored"
+    assert second and jobs.get(job).score == 7
 
 
 def test_read_scores_names_the_file_it_refused(tmp_path: Path) -> None:

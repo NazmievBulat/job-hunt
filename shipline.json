@@ -1,0 +1,6 @@
+{
+  "repository": "NazmievBulat/job-hunt",
+  "commands": {
+    "test": "uv run --frozen pytest -q -p no:cacheprovider"
+  }
+}

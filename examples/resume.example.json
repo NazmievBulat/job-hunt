@@ -1,0 +1,68 @@
+{
+  "person": {
+    "name": "John Doe",
+    "email": "john.doe@example.com",
+    "phone": "+1 555 123 4567",
+    "links": [
+      {
+        "label": "GitHub",
+        "url": "https://github.com/john-doe"
+      },
+      {
+        "label": "LinkedIn",
+        "url": "https://www.linkedin.com/in/john-doe"
+      }
+    ],
+    "location": "New York, NY"
+  },
+  "summary": {
+    "text": "Software Engineer",
+    "summary_description": "Software engineer who builds reliable web applications."
+  },
+  "technical_skills": {
+    "skills": [
+      {
+        "title": "Languages",
+        "bullets": ["JavaScript", "TypeScript", "Python"]
+      },
+      {
+        "title": "Frameworks",
+        "bullets": ["FastAPI", "LangGraph", "React"]
+      }
+    ]
+  },
+  "professional_experience": [
+    {
+      "work_title": "Software Engineer",
+      "company_name": "Example Inc.",
+      "location": "New York, NY",
+      "start_date": "2020-01",
+      "end_date": null,
+      "bullets": [
+        "Built a web application used by thousands of customers.",
+        "Improved application performance and reliability."
+      ]
+    },
+    {
+      "work_title": "Junior Software Engineer",
+      "company_name": "Another Inc.",
+      "location": "Boston, MA",
+      "start_date": "2018-01",
+      "end_date": "2019-12",
+      "bullets": ["Delivered features and fixed production bugs."]
+    }
+  ],
+  "education": [
+    {
+      "school_name": "University of California, Los Angeles",
+      "degree": "Bachelor of Science",
+      "field_of_study": "Computer Science",
+      "start_date": "2010-01",
+      "end_date": "2014-01",
+      "bullets": ["Graduated with honors."]
+    }
+  ],
+  "certifications": {
+    "certifications": ["AWS Certified Developer"]
+  }
+}

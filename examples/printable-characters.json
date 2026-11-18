@@ -1,0 +1,218 @@
+[
+  {
+    "case": "plain keyboard text",
+    "text": "Built APIs & cut costs 40% (2019-2023).",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "empty",
+    "text": "",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "an arrow and a check mark, each once",
+    "text": "Cut latency \u2192 40 ms \u2713, then \u2192 20 ms.",
+    "named": ["\u2192", "\u2713"],
+    "shown": ["\u2192", "\u2713"]
+  },
+  {
+    "case": "typographic punctuation",
+    "text": "\u2018single\u2019 \u201cdouble\u201d \u2013 \u2014 \u2026 \u00b7 \u2022",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "currency and measures",
+    "text": "\u00bd \u2153 20\u00b0C \u00b15% \u00d7 \u00f7 \u2030 \u2116 \u2122 \u00a9 \u00ae \u20ac \u00a3 \u20b9 \u20bd \u20bf",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "letters of alphabets the fonts hold",
+    "text": "M\u00fcller S\u00f8ren \u0141ukasz \u0416\u0430\u043d\u043d\u0430 \u0391\u03b8\u03ae\u03bd\u03b1",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "a letter and a separate accent",
+    "text": "e\u0301 Zoe\u0308",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "invisible characters of copied text",
+    "text": "Zero\u200bwidth, soft\u00adhyphen, word\u2060joiner, hy\u2011phen",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "spaces of every width",
+    "text": "a\tb\nc\u00a0d\u2009e\u202ff\u3000g\u001ch\u0085i",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "ligatures of a copied PDF",
+    "text": "ef\ufb01cient work\ufb02ow",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "the minus sign of Word",
+    "text": "Cut costs \u221230%",
+    "named": ["\u2212"],
+    "shown": ["\u2212"]
+  },
+  {
+    "case": "bullets the fonts lack",
+    "text": "\u25aa square \u27a2 arrowhead \u25e6 white",
+    "named": ["\u25aa", "\u27a2", "\u25e6"],
+    "shown": ["\u25aa", "\u27a2", "\u25e6"]
+  },
+  {
+    "case": "comparison signs",
+    "text": "\u2265 \u2264 \u2248 \u2260 \u221e \u221a",
+    "named": ["\u2265", "\u2264", "\u2248", "\u2260", "\u221e", "\u221a"],
+    "shown": ["\u2265", "\u2264", "\u2248", "\u2260", "\u221e", "\u221a"]
+  },
+  {
+    "case": "Chinese",
+    "text": "\u674e\u660e built it",
+    "named": ["\u674e", "\u660e"],
+    "shown": ["\u674e", "\u660e"]
+  },
+  {
+    "case": "Hebrew",
+    "text": "\u05e2\u05d1\u05e8\u05d9\u05ea",
+    "named": ["\u05e2", "\u05d1", "\u05e8", "\u05d9", "\u05ea"],
+    "shown": ["\u05e2", "\u05d1", "\u05e8", "\u05d9", "\u05ea"]
+  },
+  {
+    "case": "Korean",
+    "text": "\ud55c\uad6d\uc5b4",
+    "named": ["\ud55c", "\uad6d", "\uc5b4"],
+    "shown": ["\ud55c", "\uad6d", "\uc5b4"]
+  },
+  {
+    "case": "Arabic with spaces",
+    "text": "\u0639\u0644\u064a \u0628\u0646",
+    "named": ["\u0639", "\u0644", "\u064a", "\u0628", "\u0646"],
+    "shown": ["\u0639", "\u0644", "\u064a", "\u0628", "\u0646"]
+  },
+  {
+    "case": "an emoji is one character",
+    "text": "Shipped \ud83d\ude80 fast \ud83d\ude80",
+    "named": ["\ud83d\ude80"],
+    "shown": ["\ud83d\ude80"]
+  },
+  {
+    "case": "an emoji made of several, without the joiner",
+    "text": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67",
+    "named": ["\ud83d\udc68", "\ud83d\udc69", "\ud83d\udc67"],
+    "shown": ["\ud83d\udc68", "\ud83d\udc69", "\ud83d\udc67"]
+  },
+  {
+    "case": "an emoji with a skin tone",
+    "text": "\ud83d\udc4d\ud83c\udffd",
+    "named": ["\ud83d\udc4d", "\ud83c\udffd"],
+    "shown": ["\ud83d\udc4d", "\ud83c\udffd"]
+  },
+  {
+    "case": "a sign typed on a phone, with its invisible mark",
+    "text": "Acme\u00a9\ufe0f and Beta\u2122\ufe0f",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "a sign the fonts lack, named without its mark",
+    "text": "Done \u2714\ufe0f",
+    "named": ["\u2714"],
+    "shown": ["\u2714"]
+  },
+  {
+    "case": "several marks after one character",
+    "text": "Acme\u00a9\ufe0f\ufe0f",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "a mark alone",
+    "text": "\ufe0f",
+    "named": ["\ufe0f"],
+    "shown": ["U+FE0F (invisible)"]
+  },
+  {
+    "case": "a mark at the start",
+    "text": "\ufe0fAcme",
+    "named": ["\ufe0f"],
+    "shown": ["U+FE0F (invisible)"]
+  },
+  {
+    "case": "a mark after a space",
+    "text": "Acme \ufe0f Inc.",
+    "named": ["\ufe0f"],
+    "shown": ["U+FE0F (invisible)"]
+  },
+  {
+    "case": "a mark after a line break",
+    "text": "line\n\ufe0f",
+    "named": ["\ufe0f"],
+    "shown": ["U+FE0F (invisible)"]
+  },
+  {
+    "case": "a keycap",
+    "text": "1\ufe0f\u20e3",
+    "named": ["\u20e3"],
+    "shown": ["\u20e3"]
+  },
+  {
+    "case": "a letter whose capital the fonts lack is still printable itself",
+    "text": "\u2184",
+    "named": [],
+    "shown": []
+  },
+  {
+    "case": "a mark from the second range, alone",
+    "text": "\udb40\udd00",
+    "named": ["\udb40\udd00"],
+    "shown": ["U+E0100 (invisible)"]
+  },
+  {
+    "case": "a control character from badly decoded text",
+    "text": "don\u0092t",
+    "named": ["\u0092"],
+    "shown": ["U+0092 (invisible)"]
+  },
+  {
+    "case": "an invisible format character the fonts lack",
+    "text": "Acme\u061c Inc.",
+    "named": ["\u061c"],
+    "shown": ["U+061C (invisible)"]
+  },
+  {
+    "case": "a Mongolian letter with its style mark",
+    "text": "\u182e\u180b",
+    "named": ["\u182e"],
+    "shown": ["\u182e"]
+  },
+  {
+    "case": "a Mongolian style mark alone",
+    "text": "\u180b",
+    "named": ["\u180b"],
+    "shown": ["U+180B (invisible)"]
+  },
+  {
+    "case": "an invisible tag character",
+    "text": "Flag \udb40\udc67",
+    "named": ["\udb40\udc67"],
+    "shown": ["U+E0067 (invisible)"]
+  },
+  {
+    "case": "a combining mark the fonts lack is shown as it is",
+    "text": "a\u20e3",
+    "named": ["\u20e3"],
+    "shown": ["\u20e3"]
+  }
+]

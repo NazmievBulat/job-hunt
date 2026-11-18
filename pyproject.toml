@@ -1,0 +1,30 @@
+[project]
+name = "job-hunt"
+version = "0.1.0"
+description = "Personal job search on Claude Code"
+requires-python = ">=3.14"
+dependencies = [
+    "pillow>=13.0.0,<14",
+    "pydantic[email]>=2.14.3",
+    "pypdf>=6.21.4,<7",
+    "pypdfium2>=5.14.0,<6",
+    "python-docx>=1.2.0",
+    "reportlab>=5.1.0,<6",
+]
+
+[project.scripts]
+hunt = "job_hunt.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/resume_kit", "src/job_hunt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

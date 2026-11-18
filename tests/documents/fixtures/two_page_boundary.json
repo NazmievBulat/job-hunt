@@ -1,0 +1,144 @@
+{
+  "person": {
+    "name": "John Doe",
+    "email": "john.doe@example.com",
+    "phone": "+1 555 123 4567",
+    "links": [
+      {
+        "label": "GitHub",
+        "url": "https://github.com/john-doe"
+      },
+      {
+        "label": "LinkedIn",
+        "url": "https://www.linkedin.com/in/john-doe"
+      }
+    ],
+    "location": "New York, NY"
+  },
+  "summary": {
+    "text": "Software Engineer",
+    "summary_description": "Software engineer who builds reliable web applications."
+  },
+  "technical_skills": {
+    "skills": [
+      {
+        "title": "Languages",
+        "bullets": ["JavaScript", "TypeScript", "Python"]
+      },
+      {
+        "title": "Frameworks",
+        "bullets": ["FastAPI", "LangGraph", "React"]
+      }
+    ]
+  },
+  "professional_experience": [
+    {
+      "work_title": "Platform Engineer 0",
+      "company_name": "Sample Company 0",
+      "location": "Seattle, WA",
+      "start_date": "2020-01",
+      "end_date": "2022-08",
+      "bullets": [
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 0 segment 0. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 0 segment 1. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 0 segment 2. System performance improved."
+      ]
+    },
+    {
+      "work_title": "Platform Engineer 1",
+      "company_name": "Sample Company 1",
+      "location": "Seattle, WA",
+      "start_date": "2020-01",
+      "end_date": "2022-08",
+      "bullets": [
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 1 segment 0. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 1 segment 1. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 1 segment 2. System performance improved."
+      ]
+    },
+    {
+      "work_title": "Platform Engineer 2",
+      "company_name": "Sample Company 2",
+      "location": "Seattle, WA",
+      "start_date": "2020-01",
+      "end_date": "2022-08",
+      "bullets": [
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 2 segment 0. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 2 segment 1. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 2 segment 2. System performance improved."
+      ]
+    },
+    {
+      "work_title": "Platform Engineer 3",
+      "company_name": "Sample Company 3",
+      "location": "Seattle, WA",
+      "start_date": "2020-01",
+      "end_date": "2022-08",
+      "bullets": [
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 3 segment 0. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 3 segment 1. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 3 segment 2. System performance improved."
+      ]
+    },
+    {
+      "work_title": "Platform Engineer 4",
+      "company_name": "Sample Company 4",
+      "location": "Seattle, WA",
+      "start_date": "2020-01",
+      "end_date": "2022-08",
+      "bullets": [
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 4 segment 0. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 4 segment 1. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 4 segment 2. System performance improved."
+      ]
+    },
+    {
+      "work_title": "Platform Engineer 5",
+      "company_name": "Sample Company 5",
+      "location": "Seattle, WA",
+      "start_date": "2020-01",
+      "end_date": "2022-08",
+      "bullets": [
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 5 segment 0. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 5 segment 1. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 5 segment 2. System performance improved."
+      ]
+    },
+    {
+      "work_title": "Platform Engineer 6",
+      "company_name": "Sample Company 6",
+      "location": "Seattle, WA",
+      "start_date": "2020-01",
+      "end_date": "2022-08",
+      "bullets": [
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 6 segment 0. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 6 segment 1. System performance improved.",
+        "Delivered operational tooling for resilient production services across distributed teams, iteration 6 segment 2. System performance improved."
+      ]
+    },
+    {
+      "work_title": "Final Role",
+      "company_name": "Boundary Company",
+      "location": "Remote",
+      "start_date": "2023-01",
+      "end_date": null,
+      "bullets": [
+        "Boundary first bullet anchors its role heading on the next page.",
+        "Boundary continuation bullet records a distinct checkable fact."
+      ]
+    }
+  ],
+  "education": [
+    {
+      "school_name": "University of California, Los Angeles",
+      "degree": "Bachelor of Science",
+      "field_of_study": "Computer Science",
+      "start_date": "2010-01",
+      "end_date": "2014-01",
+      "bullets": ["Graduated with honors."]
+    }
+  ],
+  "certifications": {
+    "certifications": ["AWS Certified Developer"]
+  }
+}

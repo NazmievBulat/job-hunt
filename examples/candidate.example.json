@@ -1,0 +1,140 @@
+{
+  "person": {
+    "name": "John Doe",
+    "email": "john.doe@example.com",
+    "phone": "+1 555 123 4567",
+    "links": [
+      {
+        "url": "https://github.com/john-doe",
+        "label": "GitHub"
+      },
+      {
+        "url": "https://www.linkedin.com/in/john-doe",
+        "label": "LinkedIn"
+      }
+    ],
+    "location": "New York, NY"
+  },
+  "career": {
+    "roles": [
+      {
+        "kind": "job",
+        "organization": "Example Inc.",
+        "title": "Software Engineer",
+        "start_date": "2020-01",
+        "end_date": null,
+        "location": "New York, NY",
+        "id": "role-1",
+        "bullets": [
+          {
+            "text": "Built a web application used by thousands of customers.",
+            "skills": [],
+            "source": "manual",
+            "id": "bullet-1",
+            "role_id": "role-1"
+          },
+          {
+            "text": "Improved application performance and reliability.",
+            "skills": [],
+            "source": "manual",
+            "id": "bullet-2",
+            "role_id": "role-1"
+          },
+          {
+            "text": "Partnered with product and design on feature delivery.",
+            "skills": [],
+            "source": "manual",
+            "id": "bullet-3",
+            "role_id": "role-1"
+          }
+        ]
+      },
+      {
+        "kind": "job",
+        "organization": "Another Inc.",
+        "title": "Junior Software Engineer",
+        "start_date": "2018-01",
+        "end_date": "2019-12",
+        "location": "Boston, MA",
+        "id": "role-2",
+        "bullets": [
+          {
+            "text": "Delivered features and fixed production bugs.",
+            "skills": [],
+            "source": "manual",
+            "id": "bullet-4",
+            "role_id": "role-2"
+          },
+          {
+            "text": "Wrote unit tests for backend services.",
+            "skills": [],
+            "source": "manual",
+            "id": "bullet-5",
+            "role_id": "role-2"
+          }
+        ]
+      },
+      {
+        "kind": "education",
+        "organization": "University of California, Los Angeles",
+        "title": "Bachelor of Science in Computer Science",
+        "start_date": "2010-01",
+        "end_date": "2014-01",
+        "location": null,
+        "id": "role-3",
+        "bullets": [
+          {
+            "text": "Graduated with honors.",
+            "skills": [],
+            "source": "manual",
+            "id": "bullet-6",
+            "role_id": "role-3"
+          }
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "name": "Python",
+        "category": "Languages",
+        "id": "skill-1"
+      },
+      {
+        "name": "TypeScript",
+        "category": "Languages",
+        "id": "skill-2"
+      },
+      {
+        "name": "SQL",
+        "category": "Languages",
+        "id": "skill-3"
+      },
+      {
+        "name": "FastAPI",
+        "category": "Frameworks",
+        "id": "skill-4"
+      },
+      {
+        "name": "LangGraph",
+        "category": "Frameworks",
+        "id": "skill-5"
+      },
+      {
+        "name": "React",
+        "category": "Frameworks",
+        "id": "skill-6"
+      },
+      {
+        "name": "Structured outputs",
+        "category": "Practices",
+        "id": "skill-7"
+      },
+      {
+        "name": "Automated testing",
+        "category": "Practices",
+        "id": "skill-8"
+      }
+    ],
+    "titles": []
+  }
+}

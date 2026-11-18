@@ -1,0 +1,18 @@
+JOHN DOE
+New York, NY · +1 555 123 4567 · john.doe@example.com · github.com/john-doe · linkedin.com/in/john-doe
+SOFTWARE ENGINEER
+SUMMARY
+Software engineer who builds reliable web applications.
+SKILLS
+Languages: JavaScript · TypeScript · Python · Frameworks: FastAPI · LangGraph · React
+PROFESSIONAL EXPERIENCE
+EXAMPLE INC. — Software Engineer · Jan 2020 – Present · New York, NY
+Built a web application used by thousands of customers.
+Improved application performance and reliability.
+ANOTHER INC. — Junior Software Engineer · Jan 2018 – Dec 2019 · Boston, MA
+Delivered features and fixed production bugs.
+EDUCATION & CREDENTIALS
+Bachelor of Science — University of California, Los Angeles · Computer Science
+Jan 2010 – Jan 2014
+Graduated with honors.
+Certifications: AWS Certified Developer

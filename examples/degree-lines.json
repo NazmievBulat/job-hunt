@@ -1,0 +1,37 @@
+[
+  {
+    "degree": "Bachelor of Science in Computer Science",
+    "field": "Computer Science",
+    "printed": null
+  },
+  {
+    "degree": "BACHELOR OF SCIENCE IN COMPUTER SCIENCE",
+    "field": "computer science",
+    "printed": null
+  },
+  { "degree": "B.S. Computer  Science", "field": "Computer Science", "printed": null },
+  { "degree": "Master of Arts (History)", "field": "History", "printed": null },
+  { "degree": "Diplom-Informatiker, Informatik", "field": "Informatik", "printed": null },
+  { "degree": "Магистр, прикладная математика", "field": "Прикладная математика", "printed": null },
+  { "degree": "Certificate in C++ (C++)", "field": "C++", "printed": null },
+  { "degree": "Lisans, İşletme", "field": "İŞLETME", "printed": null },
+  { "degree": "Bachelor of Science", "field": null, "printed": null },
+  { "degree": "Bachelor of Science", "field": "   ", "printed": null },
+  { "degree": "Bachelor of Science", "field": "Computer Science", "printed": "Computer Science" },
+  { "degree": "", "field": "Computer Science", "printed": "Computer Science" },
+  {
+    "degree": "Bachelor of Science in Computer Science",
+    "field": "Science and Engineering",
+    "printed": "Science and Engineering"
+  },
+  { "degree": "Bachelor of Science", "field": "Sci", "printed": "Sci" },
+  { "degree": "Bachelor of Sciences", "field": "Science", "printed": "Science" },
+  {
+    "degree": "Bachelor of Science in Computer Science",
+    "field": "Computer Sciences",
+    "printed": "Computer Sciences"
+  },
+  { "degree": "B.S. Data-Science", "field": "Data", "printed": "Data" },
+  { "degree": "BSc Biochemistry", "field": "Chemistry", "printed": "Chemistry" },
+  { "degree": "Lisans, Istanbul Üniversitesi", "field": "İstanbul", "printed": "İstanbul" }
+]

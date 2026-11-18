@@ -1,0 +1,650 @@
+[
+  {
+    "input": "Example City, Alabama, United States",
+    "printed": "Example City, AL"
+  },
+  {
+    "input": "Example City, al, USA",
+    "printed": "Example City, AL"
+  },
+  {
+    "input": "Example City, Alaska, United States",
+    "printed": "Example City, AK"
+  },
+  {
+    "input": "Example City, ak, USA",
+    "printed": "Example City, AK"
+  },
+  {
+    "input": "Example City, Arizona, United States",
+    "printed": "Example City, AZ"
+  },
+  {
+    "input": "Example City, az, USA",
+    "printed": "Example City, AZ"
+  },
+  {
+    "input": "Example City, Arkansas, United States",
+    "printed": "Example City, AR"
+  },
+  {
+    "input": "Example City, ar, USA",
+    "printed": "Example City, AR"
+  },
+  {
+    "input": "Example City, California, United States",
+    "printed": "Example City, CA"
+  },
+  {
+    "input": "Example City, ca, USA",
+    "printed": "Example City, CA"
+  },
+  {
+    "input": "Example City, Colorado, United States",
+    "printed": "Example City, CO"
+  },
+  {
+    "input": "Example City, co, USA",
+    "printed": "Example City, CO"
+  },
+  {
+    "input": "Example City, Connecticut, United States",
+    "printed": "Example City, CT"
+  },
+  {
+    "input": "Example City, ct, USA",
+    "printed": "Example City, CT"
+  },
+  {
+    "input": "Example City, Delaware, United States",
+    "printed": "Example City, DE"
+  },
+  {
+    "input": "Example City, de, USA",
+    "printed": "Example City, DE"
+  },
+  {
+    "input": "Example City, Florida, United States",
+    "printed": "Example City, FL"
+  },
+  {
+    "input": "Example City, fl, USA",
+    "printed": "Example City, FL"
+  },
+  {
+    "input": "Example City, Georgia, United States",
+    "printed": "Example City, GA"
+  },
+  {
+    "input": "Example City, ga, USA",
+    "printed": "Example City, GA"
+  },
+  {
+    "input": "Example City, Hawaii, United States",
+    "printed": "Example City, HI"
+  },
+  {
+    "input": "Example City, hi, USA",
+    "printed": "Example City, HI"
+  },
+  {
+    "input": "Example City, Idaho, United States",
+    "printed": "Example City, ID"
+  },
+  {
+    "input": "Example City, id, USA",
+    "printed": "Example City, ID"
+  },
+  {
+    "input": "Example City, Illinois, United States",
+    "printed": "Example City, IL"
+  },
+  {
+    "input": "Example City, il, USA",
+    "printed": "Example City, IL"
+  },
+  {
+    "input": "Example City, Indiana, United States",
+    "printed": "Example City, IN"
+  },
+  {
+    "input": "Example City, in, USA",
+    "printed": "Example City, IN"
+  },
+  {
+    "input": "Example City, Iowa, United States",
+    "printed": "Example City, IA"
+  },
+  {
+    "input": "Example City, ia, USA",
+    "printed": "Example City, IA"
+  },
+  {
+    "input": "Example City, Kansas, United States",
+    "printed": "Example City, KS"
+  },
+  {
+    "input": "Example City, ks, USA",
+    "printed": "Example City, KS"
+  },
+  {
+    "input": "Example City, Kentucky, United States",
+    "printed": "Example City, KY"
+  },
+  {
+    "input": "Example City, ky, USA",
+    "printed": "Example City, KY"
+  },
+  {
+    "input": "Example City, Louisiana, United States",
+    "printed": "Example City, LA"
+  },
+  {
+    "input": "Example City, la, USA",
+    "printed": "Example City, LA"
+  },
+  {
+    "input": "Example City, Maine, United States",
+    "printed": "Example City, ME"
+  },
+  {
+    "input": "Example City, me, USA",
+    "printed": "Example City, ME"
+  },
+  {
+    "input": "Example City, Maryland, United States",
+    "printed": "Example City, MD"
+  },
+  {
+    "input": "Example City, md, USA",
+    "printed": "Example City, MD"
+  },
+  {
+    "input": "Example City, Massachusetts, United States",
+    "printed": "Example City, MA"
+  },
+  {
+    "input": "Example City, ma, USA",
+    "printed": "Example City, MA"
+  },
+  {
+    "input": "Example City, Michigan, United States",
+    "printed": "Example City, MI"
+  },
+  {
+    "input": "Example City, mi, USA",
+    "printed": "Example City, MI"
+  },
+  {
+    "input": "Example City, Minnesota, United States",
+    "printed": "Example City, MN"
+  },
+  {
+    "input": "Example City, mn, USA",
+    "printed": "Example City, MN"
+  },
+  {
+    "input": "Example City, Mississippi, United States",
+    "printed": "Example City, MS"
+  },
+  {
+    "input": "Example City, ms, USA",
+    "printed": "Example City, MS"
+  },
+  {
+    "input": "Example City, Missouri, United States",
+    "printed": "Example City, MO"
+  },
+  {
+    "input": "Example City, mo, USA",
+    "printed": "Example City, MO"
+  },
+  {
+    "input": "Example City, Montana, United States",
+    "printed": "Example City, MT"
+  },
+  {
+    "input": "Example City, mt, USA",
+    "printed": "Example City, MT"
+  },
+  {
+    "input": "Example City, Nebraska, United States",
+    "printed": "Example City, NE"
+  },
+  {
+    "input": "Example City, ne, USA",
+    "printed": "Example City, NE"
+  },
+  {
+    "input": "Example City, Nevada, United States",
+    "printed": "Example City, NV"
+  },
+  {
+    "input": "Example City, nv, USA",
+    "printed": "Example City, NV"
+  },
+  {
+    "input": "Example City, New Hampshire, United States",
+    "printed": "Example City, NH"
+  },
+  {
+    "input": "Example City, nh, USA",
+    "printed": "Example City, NH"
+  },
+  {
+    "input": "Example City, New Jersey, United States",
+    "printed": "Example City, NJ"
+  },
+  {
+    "input": "Example City, nj, USA",
+    "printed": "Example City, NJ"
+  },
+  {
+    "input": "Example City, New Mexico, United States",
+    "printed": "Example City, NM"
+  },
+  {
+    "input": "Example City, nm, USA",
+    "printed": "Example City, NM"
+  },
+  {
+    "input": "Example City, New York, United States",
+    "printed": "Example City, NY"
+  },
+  {
+    "input": "Example City, ny, USA",
+    "printed": "Example City, NY"
+  },
+  {
+    "input": "Example City, North Carolina, United States",
+    "printed": "Example City, NC"
+  },
+  {
+    "input": "Example City, nc, USA",
+    "printed": "Example City, NC"
+  },
+  {
+    "input": "Example City, North Dakota, United States",
+    "printed": "Example City, ND"
+  },
+  {
+    "input": "Example City, nd, USA",
+    "printed": "Example City, ND"
+  },
+  {
+    "input": "Example City, Ohio, United States",
+    "printed": "Example City, OH"
+  },
+  {
+    "input": "Example City, oh, USA",
+    "printed": "Example City, OH"
+  },
+  {
+    "input": "Example City, Oklahoma, United States",
+    "printed": "Example City, OK"
+  },
+  {
+    "input": "Example City, ok, USA",
+    "printed": "Example City, OK"
+  },
+  {
+    "input": "Example City, Oregon, United States",
+    "printed": "Example City, OR"
+  },
+  {
+    "input": "Example City, or, USA",
+    "printed": "Example City, OR"
+  },
+  {
+    "input": "Example City, Pennsylvania, United States",
+    "printed": "Example City, PA"
+  },
+  {
+    "input": "Example City, pa, USA",
+    "printed": "Example City, PA"
+  },
+  {
+    "input": "Example City, Rhode Island, United States",
+    "printed": "Example City, RI"
+  },
+  {
+    "input": "Example City, ri, USA",
+    "printed": "Example City, RI"
+  },
+  {
+    "input": "Example City, South Carolina, United States",
+    "printed": "Example City, SC"
+  },
+  {
+    "input": "Example City, sc, USA",
+    "printed": "Example City, SC"
+  },
+  {
+    "input": "Example City, South Dakota, United States",
+    "printed": "Example City, SD"
+  },
+  {
+    "input": "Example City, sd, USA",
+    "printed": "Example City, SD"
+  },
+  {
+    "input": "Example City, Tennessee, United States",
+    "printed": "Example City, TN"
+  },
+  {
+    "input": "Example City, tn, USA",
+    "printed": "Example City, TN"
+  },
+  {
+    "input": "Example City, Texas, United States",
+    "printed": "Example City, TX"
+  },
+  {
+    "input": "Example City, tx, USA",
+    "printed": "Example City, TX"
+  },
+  {
+    "input": "Example City, Utah, United States",
+    "printed": "Example City, UT"
+  },
+  {
+    "input": "Example City, ut, USA",
+    "printed": "Example City, UT"
+  },
+  {
+    "input": "Example City, Vermont, United States",
+    "printed": "Example City, VT"
+  },
+  {
+    "input": "Example City, vt, USA",
+    "printed": "Example City, VT"
+  },
+  {
+    "input": "Example City, Virginia, United States",
+    "printed": "Example City, VA"
+  },
+  {
+    "input": "Example City, va, USA",
+    "printed": "Example City, VA"
+  },
+  {
+    "input": "Example City, Washington, United States",
+    "printed": "Example City, WA"
+  },
+  {
+    "input": "Example City, wa, USA",
+    "printed": "Example City, WA"
+  },
+  {
+    "input": "Example City, West Virginia, United States",
+    "printed": "Example City, WV"
+  },
+  {
+    "input": "Example City, wv, USA",
+    "printed": "Example City, WV"
+  },
+  {
+    "input": "Example City, Wisconsin, United States",
+    "printed": "Example City, WI"
+  },
+  {
+    "input": "Example City, wi, USA",
+    "printed": "Example City, WI"
+  },
+  {
+    "input": "Example City, Wyoming, United States",
+    "printed": "Example City, WY"
+  },
+  {
+    "input": "Example City, wy, USA",
+    "printed": "Example City, WY"
+  },
+  {
+    "input": "Example City, District of Columbia, United States",
+    "printed": "Example City, DC"
+  },
+  {
+    "input": "Example City, dc, USA",
+    "printed": "Example City, DC"
+  },
+  {
+    "input": "Seattle, Washington, United States",
+    "printed": "Seattle, WA"
+  },
+  {
+    "input": "Durham, North Carolina, United States",
+    "printed": "Durham, NC"
+  },
+  {
+    "input": "Loveland, Colorado, United States",
+    "printed": "Loveland, CO"
+  },
+  {
+    "input": "Washington, District of Columbia, US",
+    "printed": "Washington, DC"
+  },
+  {
+    "input": "St. Louis, Missouri, U.S.",
+    "printed": "St. Louis, MO"
+  },
+  {
+    "input": "Coeur d’Alene, Idaho, U.S.A.",
+    "printed": "Coeur d’Alene, ID"
+  },
+  {
+    "input": "  Seattle , washington , united states of america  ",
+    "printed": "Seattle, WA"
+  },
+  {
+    "input": null,
+    "printed": null
+  },
+  {
+    "input": "",
+    "printed": ""
+  },
+  {
+    "input": " ",
+    "printed": " "
+  },
+  {
+    "input": "Seattle, WA",
+    "printed": "Seattle, WA"
+  },
+  {
+    "input": "Seattle, Washington",
+    "printed": "Seattle, Washington"
+  },
+  {
+    "input": "Seattle",
+    "printed": "Seattle"
+  },
+  {
+    "input": "Paris",
+    "printed": "Paris"
+  },
+  {
+    "input": "Paris, France",
+    "printed": "Paris, France"
+  },
+  {
+    "input": "London, England, United Kingdom",
+    "printed": "London, England, United Kingdom"
+  },
+  {
+    "input": "Vancouver, British Columbia, Canada",
+    "printed": "Vancouver, British Columbia, Canada"
+  },
+  {
+    "input": "Seattle, Unknown, United States",
+    "printed": "Seattle, Unknown, United States"
+  },
+  {
+    "input": "Seattle, WA, Canada",
+    "printed": "Seattle, WA, Canada"
+  },
+  {
+    "input": ", Washington, US",
+    "printed": ", Washington, US"
+  },
+  {
+    "input": "123, Washington, US",
+    "printed": "123, Washington, US"
+  },
+  {
+    "input": "Remote",
+    "printed": "Remote"
+  },
+  {
+    "input": "Remote (United States)",
+    "printed": "Remote (United States)"
+  },
+  {
+    "input": "Remote, Washington, United States",
+    "printed": "Remote, Washington, United States"
+  },
+  {
+    "input": "Seattle (Remote), Washington, United States",
+    "printed": "Seattle (Remote), Washington, United States"
+  },
+  {
+    "input": "Seattle / Hybrid, Washington, US",
+    "printed": "Seattle / Hybrid, Washington, US"
+  },
+  {
+    "input": "Seattle, Washington, United States (Remote)",
+    "printed": "Seattle, Washington, United States (Remote)"
+  },
+  {
+    "input": "Seattle, Washington, United States, Remote",
+    "printed": "Seattle, Washington, United States, Remote"
+  },
+  {
+    "input": "Greater Seattle Area, Washington, US",
+    "printed": "Greater Seattle Area, Washington, US"
+  },
+  {
+    "input": "Relocating to Seattle, Washington, US",
+    "printed": "Relocating to Seattle, Washington, US"
+  },
+  {
+    "input": "Seattle, WA (Hybrid), United States",
+    "printed": "Seattle, WA (Hybrid), United States"
+  },
+  {
+    "input": "Seattle, WA, U.S",
+    "printed": "Seattle, WA, U.S"
+  },
+  {
+    "input": "Seattle, WA, United States Virgin Islands",
+    "printed": "Seattle, WA, United States Virgin Islands"
+  },
+  {
+    "input": "Seattle, Washington, United  States",
+    "printed": "Seattle, WA"
+  },
+  {
+    "input": "Durham, North  Carolina, United States",
+    "printed": "Durham, NC"
+  },
+  {
+    "input": "Seattle (Remote), Washington, United  States",
+    "printed": "Seattle (Remote), Washington, United  States"
+  },
+  {
+    "input": "Seattle/Bellevue, Washington, US",
+    "printed": "Seattle/Bellevue, Washington, US"
+  },
+  {
+    "input": "Seattle (Office), Washington, US",
+    "printed": "Seattle (Office), Washington, US"
+  },
+  {
+    "input": "Seattle 123, Washington, US",
+    "printed": "Seattle 123, Washington, US"
+  },
+  {
+    "input": "Seattle: Bellevue, Washington, US",
+    "printed": "Seattle: Bellevue, Washington, US"
+  },
+  {
+    "input": "Seattle & Bellevue, Washington, US",
+    "printed": "Seattle & Bellevue, Washington, US"
+  },
+  {
+    "input": "Remoteé, Washington, US",
+    "printed": "Remoteé, WA"
+  },
+  {
+    "input": "Éremote, Washington, US",
+    "printed": "Éremote, WA"
+  },
+  {
+    "input": "Winston-Salem, North Carolina, US",
+    "printed": "Winston-Salem, NC"
+  },
+  {
+    "input": "﻿Seattle, Washington, United States",
+    "printed": "Seattle, WA"
+  },
+  {
+    "input": "Seattle,　Washington , United States ",
+    "printed": "Seattle, WA"
+  },
+  {
+    "input": "Seattle, Washington, United States\u001c",
+    "printed": "Seattle, Washington, United States\u001c"
+  },
+  {
+    "input": "Seattle\u001f, Washington, United States",
+    "printed": "Seattle\u001f, Washington, United States"
+  },
+  {
+    "input": "Seattle, North\u0085Carolina, United States",
+    "printed": "Seattle, North\u0085Carolina, United States"
+  },
+  {
+    "input": "Seattle, Washington,\u0085United States",
+    "printed": "Seattle, Washington,\u0085United States"
+  },
+  {
+    "input": "San Juan, Puerto Rico, United States",
+    "printed": "San Juan, Puerto Rico, United States"
+  },
+  {
+    "input": "Hag\u00e5t\u00f1a, GU, USA",
+    "printed": "Hag\u00e5t\u00f1a, GU, USA"
+  },
+  {
+    "input": "Charlotte Amalie, VI, US",
+    "printed": "Charlotte Amalie, VI, US"
+  },
+  {
+    "input": "Onsite Seattle, Washington, US",
+    "printed": "Onsite Seattle, Washington, US"
+  },
+  {
+    "input": "On-site Seattle, Washington, US",
+    "printed": "On-site Seattle, Washington, US"
+  },
+  {
+    "input": "Seattle Metropolitan, Washington, US",
+    "printed": "Seattle Metropolitan, Washington, US"
+  },
+  {
+    "input": "Relocation to Seattle, Washington, US",
+    "printed": "Relocation to Seattle, Washington, US"
+  },
+  {
+    "input": "Relocating Seattle, Washington, US",
+    "printed": "Relocating Seattle, Washington, US"
+  },
+  {
+    "input": "Espan\u0303ola, New Mexico, US",
+    "printed": "Espan\u0303ola, NM"
+  },
+  {
+    "input": "O'Fallon, Missouri, US",
+    "printed": "O'Fallon, MO"
+  }
+]

@@ -1,0 +1,3 @@
+#!/bin/sh
+# What CI runs for a change: every test, always. The whole suite takes seconds.
+echo '{"needed": ["server_whole"], "server_files": [], "server_total": 0}'

@@ -1,0 +1,43 @@
+{
+  "person": {
+    "name": "Lena Becker",
+    "email": "lena.becker@example.com",
+    "links": [],
+    "location": "Hamburg"
+  },
+  "summary": {
+    "text": "Pflegefachkraft",
+    "summary_description": "Pflegefachkraft mit acht Jahren Erfahrung in der Notaufnahme."
+  },
+  "technical_skills": {
+    "skills": [{ "title": "Pflege", "bullets": ["Triage", "Wundversorgung"] }]
+  },
+  "professional_experience": [
+    {
+      "work_title": "Pflegefachkraft",
+      "company_name": "Klinikum Nordhafen",
+      "location": "Hamburg",
+      "start_date": "2019-03",
+      "end_date": null,
+      "bullets": ["Betreuung von 30 Patienten pro Schicht auf der Nachtstation."]
+    },
+    {
+      "work_title": "Gesundheits- und Krankenpflegerin",
+      "company_name": "Stadtklinik Lübeck",
+      "start_date": "2016-10",
+      "end_date": "2019-02",
+      "bullets": ["Einarbeitung von 12 neuen Kolleginnen in die Ersteinschätzung."]
+    }
+  ],
+  "education": [
+    {
+      "school_name": "Fernhochschule Hamburg",
+      "degree": "Bachelor Pflegemanagement",
+      "start_date": "2022-10",
+      "end_date": null,
+      "bullets": []
+    }
+  ],
+  "certifications": { "certifications": ["Praxisanleitung, DBfK, 2023-03"] },
+  "language": "de"
+}

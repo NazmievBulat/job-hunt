@@ -1,0 +1,63 @@
+{
+  "person": {
+    "name": "Alex Example",
+    "location": "Seattle, Washington, United States",
+    "email": "alex@example.com",
+    "phone": null,
+    "links": []
+  },
+  "summary": {
+    "text": "AI Engineer",
+    "summary_description": "Builds reliable software and data platforms."
+  },
+  "technical_skills": {
+    "skills": []
+  },
+  "professional_experience": [
+    {
+      "company_name": "Example Systems Co",
+      "work_title": "Principal Software and Data Engineer I",
+      "location": "Seattle, Washington, United States",
+      "start_date": "2022-01",
+      "end_date": null,
+      "bullets": ["Built reliable services with clear interfaces and automated tests."]
+    },
+    {
+      "company_name": "AB",
+      "work_title": "Senior Software and Data Engineer I",
+      "location": "Durham, North Carolina, United States",
+      "start_date": "2020-01",
+      "end_date": "2021-12",
+      "bullets": ["Built reliable services with clear interfaces and automated tests."]
+    },
+    {
+      "company_name": "Sample",
+      "work_title": "Senior Software Engineer and Data Platform Specialist",
+      "location": "Loveland, Colorado, United States",
+      "start_date": "2018-01",
+      "end_date": "2019-12",
+      "bullets": ["Built reliable services with clear interfaces and automated tests."]
+    },
+    {
+      "company_name": "Example Engineering Servicess",
+      "work_title": "Senior Software Engineer and Data Platform Specialists",
+      "location": "Seattle, Washington, United States",
+      "start_date": "2016-01",
+      "end_date": "2017-12",
+      "bullets": ["Built reliable services with clear interfaces and automated tests."]
+    },
+    {
+      "company_name": "Example Labs",
+      "work_title": "Senior Software Engineer and Platform Developer",
+      "location": "Loveland, Colorado, United States",
+      "start_date": "2014-01",
+      "end_date": "2015-12",
+      "bullets": ["Built reliable services with clear interfaces and automated tests."]
+    }
+  ],
+  "education": [],
+  "certifications": {
+    "certifications": []
+  },
+  "language": "en"
+}

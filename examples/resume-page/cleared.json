@@ -1,0 +1,23 @@
+{
+  "person": {
+    "name": "Alex Morgan",
+    "email": "alex.morgan@example.com"
+  },
+  "summary": {},
+  "technical_skills": {
+    "skills": []
+  },
+  "professional_experience": [
+    {
+      "work_title": "Backend Engineer",
+      "company_name": "Acme Corp",
+      "start_date": "2021-03",
+      "end_date": null,
+      "bullets": ["Cut p99 latency by 40%", "Led the migration to PostgreSQL 16"]
+    }
+  ],
+  "education": [],
+  "certifications": {
+    "certifications": []
+  }
+}

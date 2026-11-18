@@ -1,0 +1,252 @@
+[
+  {
+    "case": "a site's address alone",
+    "address": "https://anapena.es/",
+    "printed": "anapena.es"
+  },
+  {
+    "case": "www. and a closing slash",
+    "address": "https://www.linkedin.com/in/ana-pena-rn/",
+    "printed": "linkedin.com/in/ana-pena-rn"
+  },
+  {
+    "case": "a path without a closing slash",
+    "address": "https://github.com/john-doe",
+    "printed": "github.com/john-doe"
+  },
+  {
+    "case": "http as well as https",
+    "address": "http://example.com/",
+    "printed": "example.com"
+  },
+  {
+    "case": "a scheme and www. in capitals",
+    "address": "HTTPS://WWW.Example.com/",
+    "printed": "Example.com"
+  },
+  {
+    "case": "the slash before a query stays",
+    "address": "https://example.com/?ref=cv",
+    "printed": "example.com/?ref=cv"
+  },
+  {
+    "case": "the slash before a fragment stays",
+    "address": "https://example.com/work/#top",
+    "printed": "example.com/work/#top"
+  },
+  {
+    "case": "a port stays",
+    "address": "https://example.com:8080/",
+    "printed": "example.com:8080"
+  },
+  {
+    "case": "only one closing slash goes",
+    "address": "https://example.com//",
+    "printed": "example.com/"
+  },
+  {
+    "case": "www without its dot stays",
+    "address": "https://wwwexample.com/",
+    "printed": "wwwexample.com"
+  },
+  {
+    "case": "www2. stays",
+    "address": "https://www2.example.com/",
+    "printed": "www2.example.com"
+  },
+  {
+    "case": "www. that is the whole name stays",
+    "address": "https://www.com/",
+    "printed": "www.com"
+  },
+  {
+    "case": "www. later in the address stays",
+    "address": "https://example.com/www.example/",
+    "printed": "example.com/www.example"
+  },
+  {
+    "case": "a host with a letter beyond ASCII is printed in that letter",
+    "address": "https://xn--mnchen-3ya.de/",
+    "printed": "münchen.de"
+  },
+  {
+    "case": "a letter beyond ASCII in the path is printed as that letter",
+    "address": "https://example.com/ana-pe%C3%B1a",
+    "printed": "example.com/ana-peña"
+  },
+  {
+    "case": "a slash that ends a query stays",
+    "address": "https://example.com/?token=abc/",
+    "printed": "example.com/?token=abc/"
+  },
+  {
+    "case": "a slash that ends a fragment stays",
+    "address": "https://example.com/#part/",
+    "printed": "example.com/#part/"
+  },
+  {
+    "case": "a query right after the host",
+    "address": "https://example.com?x=1",
+    "printed": "example.com?x=1"
+  },
+  {
+    "case": "www. before a port",
+    "address": "https://www.example.com:8080/",
+    "printed": "example.com:8080"
+  },
+  {
+    "case": "an ampersand in a query",
+    "address": "https://example.com/?a=1&b=2",
+    "printed": "example.com/?a=1&b=2"
+  },
+  {
+    "case": "an accented letter in the path",
+    "address": "https://www.linkedin.com/in/j%C3%B3zef-kowalski",
+    "printed": "linkedin.com/in/józef-kowalski"
+  },
+  {
+    "case": "a domain with an accented letter",
+    "address": "https://xn--mller-design-dlb.de/",
+    "printed": "müller-design.de"
+  },
+  {
+    "case": "www. before a domain with an accented letter",
+    "address": "https://www.xn--mller-design-dlb.de/",
+    "printed": "müller-design.de"
+  },
+  {
+    "case": "letters in the domain and the path, after a port",
+    "address": "https://xn--mller-design-dlb.de:8080/%C3%BCber",
+    "printed": "müller-design.de:8080/über"
+  },
+  {
+    "case": "letters in a query and a fragment",
+    "address": "https://example.com/?q=%C3%BC#%C3%A9",
+    "printed": "example.com/?q=ü#é"
+  },
+  {
+    "case": "small letters in an encoded letter",
+    "address": "https://example.com/j%c3%b3zef",
+    "printed": "example.com/józef"
+  },
+  {
+    "case": "a letter in a path segment named like a domain stays as it is",
+    "address": "https://example.com/xn--mller-design-dlb",
+    "printed": "example.com/xn--mller-design-dlb"
+  },
+  {
+    "case": "an encoded space stays encoded",
+    "address": "https://example.com/a%20b",
+    "printed": "example.com/a%20b"
+  },
+  {
+    "case": "an encoded no-break space stays encoded",
+    "address": "https://example.com/a%C2%A0b",
+    "printed": "example.com/a%C2%A0b"
+  },
+  {
+    "case": "an encoded new line stays encoded",
+    "address": "https://example.com/a%0Ab",
+    "printed": "example.com/a%0Ab"
+  },
+  {
+    "case": "an encoded zero-width space stays encoded",
+    "address": "https://example.com/a%E2%80%8Bb",
+    "printed": "example.com/a%E2%80%8Bb"
+  },
+  {
+    "case": "a letter the PDF cannot print stays encoded beside one it can",
+    "address": "https://example.com/%C3%A9%E4%B8%AD",
+    "printed": "example.com/é%E4%B8%AD"
+  },
+  {
+    "case": "an encoded slash, question mark and per cent stay encoded",
+    "address": "https://example.com/a%2Fb%3Fc%25d",
+    "printed": "example.com/a%2Fb%3Fc%25d"
+  },
+  {
+    "case": "an encoded tilde, as older tools write a home page, is printed as itself",
+    "address": "https://example.edu/%7Ejsmith/",
+    "printed": "example.edu/~jsmith"
+  },
+  {
+    "case": "a character that is no character, which a Word file cannot hold, stays encoded",
+    "address": "https://example.com/a%EF%BF%BF%EF%B7%90b",
+    "printed": "example.com/a%EF%BF%BF%EF%B7%90b"
+  },
+  {
+    "case": "an encoded letter, digit, dash, dot and underscore beside an accented letter are printed",
+    "address": "https://example.com/%4A%C3%B3zef%2D%31%2E%5Fk",
+    "printed": "example.com/Józef-1._k"
+  },
+  {
+    "case": "bytes that are not UTF-8 stay encoded",
+    "address": "https://example.com/%FF%C3%A9%C3",
+    "printed": "example.com/%FFé%C3"
+  },
+  {
+    "case": "a domain the PDF cannot print stays encoded",
+    "address": "https://xn--fiq228c.com/",
+    "printed": "xn--fiq228c.com"
+  },
+  {
+    "case": "a broken encoded domain stays as it is",
+    "address": "https://xn--zz.com/",
+    "printed": "xn--zz.com"
+  },
+  {
+    "case": "an encoded domain that gives a control character stays as it is",
+    "address": "https://xn--a.com/",
+    "printed": "xn--a.com"
+  },
+  {
+    "case": "a domain with several letters beyond ASCII",
+    "address": "https://xn--w-uga1v8h.pl/",
+    "printed": "żółw.pl"
+  },
+  {
+    "case": "two encoded labels in one domain",
+    "address": "https://xn--zrich-strae-46a18a.xn--mller-design-dlb.de/",
+    "printed": "zürich-straße.müller-design.de"
+  },
+  {
+    "case": "an encoded label in capitals",
+    "address": "https://XN--MLLER-DESIGN-DLB.de/",
+    "printed": "müller-design.de"
+  },
+  {
+    "case": "xn-- inside a label is not an encoded label",
+    "address": "https://foo_xn--mller-design-dlb.de/",
+    "printed": "foo_xn--mller-design-dlb.de"
+  },
+  {
+    "case": "xn-- in the user name before the host stays as it is",
+    "address": "https://xn--mller-design-dlb:secret@example.com/",
+    "printed": "xn--mller-design-dlb:secret@example.com"
+  },
+  {
+    "case": "an encoded label after a user name is decoded",
+    "address": "https://ana@xn--mller-design-dlb.de/",
+    "printed": "ana@müller-design.de"
+  },
+  {
+    "case": "an encoded domain of letters the PDF cannot print stays as it is",
+    "address": "https://xn--zzzzzzzzzzzzz.com/",
+    "printed": "xn--zzzzzzzzzzzzz.com"
+  },
+  {
+    "case": "an accent written as its own mark is printed with its letter",
+    "address": "https://example.com/e%CC%81",
+    "printed": "example.com/é"
+  },
+  {
+    "case": "an invisible joining mark stays encoded",
+    "address": "https://example.com/a%CD%8Fb",
+    "printed": "example.com/a%CD%8Fb"
+  },
+  {
+    "case": "an emoji the PDF cannot print stays encoded",
+    "address": "https://example.com/%F0%9F%98%80",
+    "printed": "example.com/%F0%9F%98%80"
+  }
+]

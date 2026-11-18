@@ -10,9 +10,9 @@ many minutes. Wait for it to finish, then run `uv run hunt status` and show what
 exactly as printed. When `hunt apply` refuses (another one is running), show its line.
 
 A paused job waits for the person. Its line says what it needs, in which Chrome tab, and the
-command to run after. Ask once for all of them: "Reply done for a CAPTCHA or sign-in you did,
-or give the answer to a question." When a job waits for a look in Chrome whether it was sent,
-add: "Reply sent if Chrome shows it was sent, or done to try it again."
+command to run after. Ask once for all of them: "Reply done for a CAPTCHA or sign-in you did, or
+once Chrome is open, or give the answer to a question." When a job waits for a look in Chrome
+whether it was sent, add: "Reply sent if Chrome shows it was sent, or done to try it again."
 
 When the person replies, turn it into the commands it means and run them, using the job
 numbers `hunt status` printed:

@@ -116,7 +116,7 @@ def test_a_resume_worker_reads_only_its_folder_and_the_career_and_runs_only_the_
     folder, career = project / "jobs" / "12", project / "data" / "career.json"
     assert command[command.index("--allowedTools") + 1].split(",") == [
         f"Read(/{folder}/**)", f"Read(/{career})",
-        f"Edit(/{folder}/resume-content.json)", "Bash(uv run hunt resume:*)",
+        f"Edit(/{folder}/resume-content.json)", "Bash(uv run hunt resume jobs/12)",
     ]
     assert "--chrome" not in command
 
@@ -775,3 +775,46 @@ def test_hunt_applied_takes_any_paused_job(hunt: JobsList, project: Path) -> Non
     job = _pause(project, hunt, {"result": "paused", "needs": "captcha", "tab": "Apply - Example Co 1"})
     assert cli.main(["applied", str(job)]) == 0
     assert hunt.get(job).state == "applied"
+
+
+def test_a_resume_worker_may_build_only_its_own_jobs_resume(project: Path) -> None:
+    tools = resume_command(1, project)[resume_command(1, project).index("--allowedTools") + 1].split(",")
+    # A rule ending in `:*` would let job 1's worker build, and overwrite, job 12's resume too.
+    assert [tool for tool in tools if tool.startswith("Bash(")] == ["Bash(uv run hunt resume jobs/1)"]
+
+
+SENT_CHECK = {"result": "paused", "needs": "check_sent", "tab": "Thank you - Example Co 1", "tab_id": 7}
+
+
+def test_a_worker_that_submitted_without_a_confirmation_pauses_for_a_look(
+    hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job = _picked(hunt, 1)
+    # Submit was clicked, then the page showed an error: it may have been sent.
+    _unsure_after_two_runs(project, hunt, job, Sites(project, {job: [SENT_CHECK]}))
+    assert hunt.get(job).state_reason == 'a look in Chrome whether it was sent, in the Chrome tab "Thank you - Example Co 1"'
+    capsys.readouterr()
+    cli.main(["status"])
+    assert capsys.readouterr().out.splitlines()[1].endswith(
+        f"(then: hunt applied {job} if it was sent, hunt resume-job {job} if not)")
+
+
+def test_chrome_out_of_reach_pauses_every_job_and_costs_none_a_try(
+    hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    picked = [_picked(hunt, n) for n in range(1, 4)]
+    closed = {job: [{"result": "paused", "needs": "chrome"}] for job in picked}
+    sites = Sites(project, closed)
+    apply(hunt, project, run_resume=Resumes(project), run_site=sites)
+    assert sorted(sites.ran) == picked
+    assert {(hunt.get(job).state, hunt.get(job).failures) for job in picked} == {("paused", 0)}
+    assert hunt.get(picked[0]).state_reason == "Chrome open, with the Claude extension connected"
+    capsys.readouterr()
+    cli.main(["status"])
+    assert capsys.readouterr().out.splitlines()[1] == (
+        f"  {picked[0]}. QA Engineer 1 at Example Co 1: needs Chrome open, with the Claude extension connected"
+        f" (then: hunt resume-job {picked[0]})")
+    # Once Chrome is back, each job goes on.
+    resume_job(hunt, picked[0])
+    apply(hunt, project, run_resume=Resumes(project), run_site=Sites(project))
+    assert hunt.get(picked[0]).state == "applied"

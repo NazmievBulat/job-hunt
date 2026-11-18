@@ -162,7 +162,8 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 - A worker that stops without saying what happened (a timeout, a crash, no report) may have
   sent the application. Its job is never tried again on its own: it pauses for the user to look
   in Chrome, and the user says it was sent or tries it again.
-- If Chrome is closed or the computer is asleep, applying waits and says so once.
+- If Chrome is closed or the computer is asleep, applying waits and says so once. (Built so
+  far: a worker that cannot reach Chrome pauses its job, which costs it no try.)
 - Everything is files on the computer. If a session or worker stops halfway, `hunt apply`
   picks up from each job's state.
 - The finder or the scoring failing is reported once, with the error.

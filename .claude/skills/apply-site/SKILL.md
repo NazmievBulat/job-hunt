@@ -54,6 +54,10 @@ Some things only the person can do. Leave the tab open exactly where it is and r
   password, never create an account, never pick one in a password prompt.
 - a required question has no answer in the career (`question`). Put the question in the
   form's own words. Never guess an answer to a required question.
+- you clicked Submit, but the site did not confirm it was sent: an error page, a page that
+  never loads, or nothing changed (`check_sent`). It may have been sent, so never submit again.
+- Chrome cannot be reached: it is closed or its Claude extension does not answer (`chrome`).
+  There is no tab to name.
 
 ## Report
 
@@ -65,12 +69,14 @@ Chrome's tools give the tab, a whole number. One of:
 {"result": "paused", "needs": "captcha", "tab": "<the tab's title>", "tab_id": <the tab's id>}
 {"result": "paused", "needs": "sign_in", "tab": "<the tab's title>", "tab_id": <the tab's id>}
 {"result": "paused", "needs": "question", "question": "<the form's question>", "tab": "<the tab's title>", "tab_id": <the tab's id>}
+{"result": "paused", "needs": "check_sent", "tab": "<the tab's title>", "tab_id": <the tab's id>}
+{"result": "paused", "needs": "chrome"}
 {"result": "failed", "reason": "<one line: what went wrong, for the person to apply by hand>"}
 ```
 
-Report `failed` when the job cannot be applied to here: the page is gone or says the job is
-closed, the site shows an error, the form will not submit, or Chrome cannot be reached. Report
-`applied` only after the site confirmed the application was sent.
+Report `failed` only when nothing was sent: the page is gone or says the job is closed, the
+site shows an error before you clicked Submit, or the form will not submit. Report `applied`
+only after the site confirmed the application was sent.
 
 Do nothing else: read only the career and the files of this job, write only `report`, and do
 not close the tab. Reply with one line: the result.

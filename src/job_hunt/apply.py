@@ -6,8 +6,9 @@ built. Then up to three company-site workers at once (`claude --chrome -p` with 
 skill) each apply to one job in a Chrome tab of their own and write `jobs/<id>/report.json`:
 
     {"result": "applied"}
-    {"result": "paused", "needs": "captcha" | "sign_in" | "question", "question": "...", "tab": "...",
-     "tab_id": 123}
+    {"result": "paused", "needs": "captcha" | "sign_in" | "question" | "check_sent", "question": "...",
+     "tab": "...", "tab_id": 123}
+    {"result": "paused", "needs": "chrome"}
     {"result": "failed", "reason": "..."}
 
 The coordinator saves each report as the job's state. A `failed` report counts against its job
@@ -43,9 +44,13 @@ CHROME_TOOLS = tuple(f"mcp__claude-in-chrome__{name}" for name in (
     "tabs_context_mcp", "tabs_create_mcp", "navigate", "read_page", "get_page_text", "find", "form_input",
     "computer", "file_upload",
 ))
-NEEDS = {"captcha": "a CAPTCHA solved", "sign_in": "a sign-in or a new account", "question": "an answer"}
 # What a job paused with no report it can be read by needs: the application may have been sent.
 UNSURE = "a look in Chrome whether it was sent"
+NEEDS = {"captcha": "a CAPTCHA solved", "sign_in": "a sign-in or a new account", "question": "an answer",
+         # Submitted, but the site did not confirm it.
+         "check_sent": UNSURE,
+         # Chrome closed or its extension not connected: no tab, and no try of the job spent.
+         "chrome": "Chrome open, with the Claude extension connected"}
 
 Run = Callable[[list[str]], None]
 
@@ -71,6 +76,8 @@ class Report:
     def pause_reason(self) -> str:
         if self.needs is None:
             return f"{UNSURE}: {self.reason}"
+        if self.needs == "chrome":
+            return NEEDS["chrome"]
         what = f'an answer to "{self.question}"' if self.needs == "question" else NEEDS[self.needs or ""]
         return f'{what}, in the Chrome tab "{self.tab}"'
 
@@ -103,7 +110,8 @@ def resume_command(job: int, root: Path) -> list[str]:
         "--model", MODEL,
         "--allowedTools", ",".join([
             f"Read(/{folder}/**)", f"Read(/{_career(root)})", f"Edit(/{folder}/resume-content.json)",
-            "Bash(uv run hunt resume:*)",
+            # This job's build only: another folder's would let it overwrite that job's resume.
+            f"Bash(uv run hunt resume jobs/{job})",
         ]),
     ]
 
@@ -150,6 +158,8 @@ def read_report(path: Path) -> Report:
     needs = data.get("needs")
     if not isinstance(needs, str) or needs not in NEEDS:
         raise ApplyError(f'the {SITE_SKILL} run paused, but "needs" is not one of {", ".join(NEEDS)}')
+    if needs == "chrome":
+        return Report("paused", needs=needs)
     if not (tab := _text(data, "tab")):
         raise ApplyError(f"the {SITE_SKILL} run paused without naming the tab")
     tab_id = data.get("tab_id")

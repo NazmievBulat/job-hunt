@@ -85,3 +85,28 @@ def test_a_job_left_without_bullets_is_refused() -> None:
 def test_a_contract_problem_is_named_so_the_worker_can_fix_it() -> None:
     with pytest.raises(ContentError, match="summary"):
         build_resume(career_from_export(EXPORT), {**CONTENT, "headline": ""})
+
+
+def test_a_resume_pdf_is_replaced_whole_or_not_at_all(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    from job_hunt import resume
+
+    monkeypatch.setattr(resume, "build_resume", lambda career, content: None)
+    monkeypatch.setattr(resume, "render_pdf", lambda built: b"%PDF new")
+    (tmp_path / "resume-content.json").write_text("{}")
+    pdf = tmp_path / "resume.pdf"
+    pdf.write_bytes(b"%PDF old")
+
+    def stopped(source: str, target: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    # A build that stops never leaves a cut-off resume.pdf that a later run would take as built.
+    with monkeypatch.context() as broken:
+        broken.setattr(os, "replace", stopped)
+        with pytest.raises(OSError):
+            resume.write_pdf(None, tmp_path / "resume-content.json", pdf)
+    assert pdf.read_bytes() == b"%PDF old"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["resume-content.json", "resume.pdf"]
+    resume.write_pdf(None, tmp_path / "resume-content.json", pdf)
+    assert pdf.read_bytes() == b"%PDF new"

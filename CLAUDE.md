@@ -29,11 +29,22 @@ each part as a message of its own, one at a time, and wait for the reply before 
    takes: "done 12" for `hunt resume-job 12` (a CAPTCHA, a sign-in, Chrome to open), "12: and
    the answer" for `hunt answer 12`, and "sent 12" or "done 12" for a job whose command is
    `hunt applied 12`. Run the commands `/apply` names.
+5. **Recruiter messages.** One message each: who wrote and about which job, the message, the
+   job description when there is one, then the drafted reply exactly as printed, and "Send?".
+   "yes" runs `uv run hunt send-reply <n>`; a change runs `uv run hunt edit-reply <n> "<the
+   whole new reply>"`, shows the new reply and asks "Send?" again; "skip" runs
+   `uv run hunt skip-reply <n>`. A message that asks to talk says so; offering times is not
+   built yet, so the reply only says times will follow. A reply that "needs a look whether it
+   was sent" asks the person to look in Gmail or LinkedIn: "it went" runs `hunt skip-reply`,
+   "send it" runs `hunt send-reply`.
 
 With each question, run `uv run hunt notify "<the question in one line>"` once, before you ask
 it. When it prints that it has no keys, go on without it.
 
 When `hunt questions` prints "Nothing waits for you.", say so in one line and stop.
+
+When a message says a recruiter's message waits (`hunt watch` types it in during the day), run
+`uv run hunt questions` and ask only what is new.
 
 ## Work in the background
 
@@ -47,8 +58,9 @@ waiting for the user, failed and why, as `uv run hunt status` prints it.
 
 ## Rules
 
-- Nothing is sent in the user's name, an application or an email, without their word in this
-  conversation. Picking a job is that word for its application.
+- Nothing is sent in the user's name, an application, an email or a LinkedIn message, without
+  their word in this conversation. Picking a job is that word for its application; "yes" to a
+  reply, as last shown, is that word for that reply alone.
 - Never type a password and never solve a CAPTCHA. Say what is needed and in which Chrome tab,
   and wait for the user.
 - Fewer messages are better: one question per decision, nothing about progress unless asked.

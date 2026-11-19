@@ -5,11 +5,13 @@
      "remote": "include",
      "lowest_salary": 120000,
      "morning_hour": 7,
+     "summary_hour": 18,
      "pushover": {"token": "...", "user": "..."}}
 
 Areas are names as a person says them, never distances; the finder's skill says which of them
 a job is in. `remote` is `include` (remote jobs too), `exclude` (no remote jobs) or `only`.
-`lowest_salary` may be null. `pushover`, the keys `hunt notify` pushes the chat's questions
+`lowest_salary` may be null. `summary_hour`, the end of the day for `hunt watch`, may be left
+out (18). `pushover`, the keys `hunt notify` pushes the chat's questions
 with, may be left out; they are never printed.
 """
 
@@ -23,7 +25,8 @@ from typing import Any, Literal
 Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
-OPTIONAL = ("pushover",)
+OPTIONAL = ("summary_hour", "pushover")
+SUMMARY_HOUR = 18
 
 
 class SettingsError(ValueError):
@@ -43,6 +46,7 @@ class Settings:
     remote: Remote
     lowest_salary: int | None
     morning_hour: int
+    summary_hour: int = SUMMARY_HOUR
     pushover: Pushover | None = None
 
 
@@ -98,11 +102,16 @@ def read_settings(path: Path) -> Settings:
     if not areas and remote == "exclude":
         raise SettingsError("areas is empty and remote is exclude, so no job could be kept")
     lowest_salary = None if data["lowest_salary"] is None else _whole_number(data, "lowest_salary", 0)
+    morning_hour = _whole_number(data, "morning_hour", 0, 23)
+    summary_hour = _whole_number(data, "summary_hour", 1, 23) if "summary_hour" in data else SUMMARY_HOUR
+    if summary_hour <= morning_hour:
+        raise SettingsError(f"summary_hour ({summary_hour}) must be later than morning_hour ({morning_hour})")
     return Settings(
         titles=titles,
         areas=areas,
         remote=remote,
         lowest_salary=lowest_salary,
-        morning_hour=_whole_number(data, "morning_hour", 0, 23),
+        morning_hour=morning_hour,
+        summary_hour=summary_hour,
         pushover=_pushover(data),
     )

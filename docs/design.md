@@ -240,7 +240,7 @@ Each piece has one job and talks to the others only through the jobs list and fi
 | Scheduler | `claude -p` with the `offer-times` skill | Reads free times from Google Calendar, drafts the reply offering them, adds the held event on yes and moves it to the time the recruiter picks. |
 | Note drafter | `claude -p` with the `draft-note` skill | Drafts a note of at most 300 characters to the poster of a job applied to on LinkedIn. |
 | Note sender | `claude -p --chrome` with the `send-note` skill | Sends one approved note by the poster's free `Message` button, under the LinkedIn lock; never InMail, never Connect. |
-| LinkedIn inbox | `claude -p --chrome` with the `read-linkedin-messages` skill | Reads new recruiter messages on LinkedIn, one worker at a time under the LinkedIn lock. |
+| LinkedIn inbox | `claude -p --chrome` with the `read-linkedin-messages` skill | Reads new recruiter messages on LinkedIn, one worker at a time under the LinkedIn lock. The list of conversations has no links, so it opens each by a click; the run's hook (`job_hunt.click_guard`) lets its computer tool only click, scroll and look, never type or press a key. It reads each conversation down to its last message. |
 
 The coordinator is a script, not a Claude session. It reads the list, starts the workers,
 collects their reports and writes states. Claude is used only for judgment: reading emails,

@@ -46,7 +46,9 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import shlex
 import sqlite3
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
@@ -56,6 +58,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from job_hunt.apply import CHROME_TOOLS, browser_argument, browser_now
+from job_hunt.click_guard import COMPUTER
 from job_hunt.finder import ONLY_NAMED_TOOLS, PageError, page_text_and_kind
 from job_hunt.jobs import JobsList
 from job_hunt.linkedin_lock import LinkedInLock
@@ -79,9 +82,14 @@ DRAFT_GMAIL_TOOLS = (GMAIL_THREAD, "mcp__claude_ai_Gmail__create_draft")
 # An offer made again replaces its earlier Gmail draft.
 OFFER_GMAIL_TOOLS = (*DRAFT_GMAIL_TOOLS, "mcp__claude_ai_Gmail__delete_draft")
 SEND_GMAIL_TOOLS = (GMAIL_THREAD, "mcp__claude_ai_Gmail__reply", "mcp__claude_ai_Gmail__delete_draft")
-# Reading LinkedIn types and clicks nothing: no computer (it types and clicks too), no form_input, no
-# file_upload. A stranger's message, read with nobody watching, cannot make it send.
-READ_CHROME_TOOLS = tuple(tool for tool in CHROME_TOOLS if not tool.endswith(("computer", "form_input", "file_upload")))
+# Reading LinkedIn types nothing: no form_input, no file_upload. It clicks, as LinkedIn's list of
+# conversations has no links: a conversation opens only by a click on it. The computer tool that
+# clicks also types, so the run's hook (`READ_GUARD`, `job_hunt.click_guard`) lets through only
+# its plain clicks, scrolling and looking. A stranger's message, read with nobody watching,
+# cannot make it type or send.
+READ_CHROME_TOOLS = tuple(tool for tool in CHROME_TOOLS if not tool.endswith(("form_input", "file_upload")))
+READ_GUARD = {"hooks": {"PreToolUse": [{"matcher": COMPUTER, "hooks": [
+    {"type": "command", "command": f"{shlex.quote(sys.executable)} -I -m job_hunt.click_guard"}]}]}}
 # Sending types and clicks; it uploads only the resume a reply offering times goes out with.
 SEND_CHROME_TOOLS = tuple(tool for tool in CHROME_TOOLS if not tool.endswith("file_upload"))
 UPLOAD_TOOL = "mcp__claude-in-chrome__file_upload"
@@ -878,10 +886,12 @@ def _send_reply(threads: Threads, root: Path, thread: int, run: Run, lock: Linke
 
 
 def read_command(after: datetime, out: Path, *, browser: str | None = None) -> list[str]:
-    """With `browser`, the settings' chrome_browser, LinkedIn is read only in that browser."""
+    """With `browser`, the settings' chrome_browser, LinkedIn is read only in that browser. Each
+    call of the computer tool goes through `READ_GUARD`'s hook first."""
     arguments = {"after": after.isoformat(), "out": str(out), **browser_argument(browser)}
     return ["claude", "--chrome", "-p", f"/{READ_SKILL} {json.dumps(arguments)}", "--model", MODEL, *ONLY_NAMED_TOOLS,
-            "--allowedTools", ",".join([*READ_CHROME_TOOLS, f"Edit({_rule(out)})"])]
+            "--allowedTools", ",".join([*READ_CHROME_TOOLS, f"Edit({_rule(out)})"]),
+            "--settings", json.dumps(READ_GUARD)]
 
 
 def read_linkedin(threads: Threads, jobs: JobsList, root: Path, *, run: Run, lock: LinkedInLock,

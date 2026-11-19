@@ -7,7 +7,6 @@ No model, no calendar and no Gmail: the skill runs are stand-ins that write the 
 
 from __future__ import annotations
 
-import base64
 import json
 from datetime import datetime
 from pathlib import Path
@@ -95,6 +94,7 @@ class Calendar:
         self.offer = offer
         self.chosen = chosen
         self.hold = hold
+        self.reply = "Glad to talk. Thursday 10:00 or Monday 14:30? Ada"
         self.events: dict[str, dict] = {}
         self.ran: list[tuple[str, dict]] = []
         self.sent: list[dict] = []
@@ -104,8 +104,7 @@ class Calendar:
         self.ran.append((skill, arguments))
         out = Path(arguments.get("out") or arguments.get("report"))
         if skill == SKILL and arguments["task"] == "offer":
-            out.write_text(json.dumps({"busy": self.busy, "times": self.offer, "draft_id": "d2",
-                                       "reply": "Glad to talk. Thursday 10:00 or Monday 14:30? Ada"}))
+            out.write_text(json.dumps({"busy": self.busy, "times": self.offer, "draft_id": "d2", "reply": self.reply}))
         elif skill == SKILL and arguments["task"] == "hold":
             if self.hold is not None:
                 out.write_text(json.dumps(self.hold))
@@ -247,7 +246,7 @@ def test_a_full_calendar_offers_no_time_and_holds_nothing(
     assert calendar.tasks() == [SEND_SKILL] and calendar.events == {}
 
 
-def test_the_question_shows_the_times_the_resume_and_what_yes_holds(
+def test_the_question_shows_the_times_and_what_yes_holds(
     project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
 ) -> None:
     (project / "jobs" / "1" / "resume.pdf").write_bytes(b"%PDF-1.4 Ada Example")
@@ -259,7 +258,8 @@ def test_the_question_shows_the_times_the_resume_and_what_yes_holds(
 
     assert "asks to talk" in asked
     assert "Times offered: Thu 19 Nov 10:00, Mon 23 Nov 14:30 (EST)" in asked
-    assert f"Resume attached: {project / 'jobs' / '1' / 'resume.pdf'}" in asked
+    # An email goes without the resume: the Gmail connector takes its bytes only as typed text.
+    assert "Resume attached" not in asked
     assert '"Held: Call with Example Labs about QA Engineer" is added to Google Calendar at Thu 19 Nov 10:00' in asked
     assert f"hunt offer-times {thread}" in asked
 
@@ -314,7 +314,7 @@ def test_the_held_event_is_created_only_after_send_reply(
     assert calendar.tasks().count("hold") == 1
 
 
-def test_hunt_send_reply_sends_with_the_resume_and_holds_the_time(
+def test_hunt_send_reply_sends_an_email_offer_without_the_resume_and_holds_the_time(
     project: Path, threads: Threads, jobs: JobsList, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -333,8 +333,8 @@ def test_hunt_send_reply_sends_with_the_resume_and_holds_the_time(
     said = capsys.readouterr().out
     assert "held in Google Calendar: Call with Example Labs about QA Engineer" in said
     sent, = calendar.sent
-    assert sent["resume"] == str(project / "jobs" / "1" / "resume.pdf")
-    assert base64.b64decode(Path(sent["resume_base64"]).read_text()) == b"%PDF-1.4 Ada Example"
+    assert "resume" not in sent and "resume_base64" not in sent
+    assert not (project / "jobs" / "replies" / str(thread) / "resume.pdf.base64").exists()
     assert list(calendar.events) == ["e1"]
 
 
@@ -625,11 +625,44 @@ def test_an_offer_on_linkedin_goes_out_with_the_resume_to_upload(
     draft_replies(threads, project, run=Calendar(offer=["2026-11-19T10:00:00-05:00", "2026-11-23T14:30:00-05:00"]),
                   fetch=no_fetch, clock=clock)
 
+    assert f"Resume attached: {project / 'jobs' / '1' / 'resume.pdf'}" in questions(jobs, project / "data", threads)
     command = send_command(threads.get(thread), "Glad to talk", project)
 
     skill, arguments = _arguments(command)
     assert arguments["resume"] == str(project / "jobs" / "1" / "resume.pdf") and "resume_base64" not in arguments
     assert "mcp__claude-in-chrome__file_upload" in command[command.index("--allowedTools") + 1]
+
+
+def test_a_reply_saved_without_its_times_holds_nothing_and_goes_without_the_resume(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (project / "jobs" / "1" / "resume.pdf").write_bytes(b"%PDF-1.4 Ada Example")
+    found, _ = read_messages({"linkedin_messages": [{
+        "conversation": "https://www.linkedin.com/messaging/thread/9/", "from": "Sam Recruiter",
+        "text": "Can we talk?", "date": "2026-11-18T06:40:00-05:00", "job_link": "https://jobs.example.com/1",
+        "company": "Example Labs", "asks_to_talk": True}]})
+    thread = threads.save(found[0], jobs)
+    draft_replies(threads, project, run=Calendar(offer=["2026-11-19T10:00:00-05:00", "2026-11-23T14:30:00-05:00"]),
+                  fetch=no_fetch, clock=clock)
+
+    def stopped(*_: object) -> None:
+        raise KeyboardInterrupt
+
+    # Offered again, the run stops once the new reply is saved and before its times are.
+    monkeypatch.setattr(Talks, "offered", stopped)
+    calendar = Calendar(offer=["2026-11-24T11:00:00-05:00", "2026-11-25T15:00:00-05:00"])
+    calendar.reply = "Glad to talk. Tuesday 11:00 or Wednesday 15:00? Ada"
+    with pytest.raises(KeyboardInterrupt):
+        offer_times(threads, project, thread, run=calendar, clock=clock)
+    monkeypatch.undo()
+    assert threads.get(thread).reply == calendar.reply
+
+    assert "Times offered" not in questions(jobs, project / "data", threads)
+    _send(threads, project, thread, calendar)
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+
+    assert calendar.events == {} and "resume" not in calendar.sent[-1]
+    assert "was not held" in (project / "data" / "morning.log").read_text()
 
 
 def test_a_second_offer_in_a_conversation_moves_its_held_event(

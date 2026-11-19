@@ -108,8 +108,9 @@ without them.
    A message that asks to talk is drafted by `offer-times` instead: it reads the user's
    Google Calendar for the next five working days, inside the working hours of the settings
    (9 to 17 in the user's time zone when left out), and offers two or three free half hours;
-   `hunt` checks each against the calendar it read. The reply goes out with the job's resume
-   attached, and on that yes the first time is added to the calendar as "Held: Call with
+   `hunt` checks each against the calendar it read. On LinkedIn the reply goes out with the
+   job's resume attached (an email goes without: the Gmail connector takes an attachment only
+   as bytes the model would copy, and a resume is too long to copy exactly), and on that yes the first time is added to the calendar as "Held: Call with
    <company> about <role>". When the recruiter's answer picks one of the times offered, the
    next `hunt draft-replies` moves the event there and drops "Held". A time not offered moves
    nothing; `hunt offer-times` drafts the offer again with fresh times.

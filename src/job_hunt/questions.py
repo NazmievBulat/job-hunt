@@ -10,7 +10,7 @@ The state is all in `data/`, so a fresh session knows everything by running it:
 3. paused applications, each with what it needs and the command after it;
 4. recruiter messages, each with its drafted reply (`replies`), for `hunt send-reply`,
    `hunt edit-reply` and `hunt skip-reply`; one that asks to talk shows the times its reply
-   offers, the resume it goes out with, and the time held in the calendar on yes.
+   offers, the resume it goes out with on LinkedIn, and the time held in the calendar on yes.
 
 Before them comes work the person already approved and that stopped before its end (a picked
 job, one whose resume is ready, one left `applying`): it asks nothing, the chat runs
@@ -146,7 +146,7 @@ def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
             cut = text if len(text) <= DESCRIPTION_CHARACTERS else text[:DESCRIPTION_CHARACTERS].rstrip() + " …"
             lines += _indented(cut, f"Job description ({posting}): ")
         lines += _indented(thread.reply or "", "Reply: ")
-        if (talk := Talks(data / "jobs.db").get(thread.id)) is not None and talk.state == "offered":
+        if (talk := Talks(data / "jobs.db").of_reply(thread.id, thread.reply)) is not None and talk.state == "offered":
             try:
                 where = zone(read_settings(data / "settings.json"))
             except SettingsError:

@@ -12,6 +12,8 @@ The free times are worked out here again from `busy`, inside the working hours o
 the half hour; a run that offers a time that is not free is a failed draft.
 
 Each offer is a talk, kept in `data/jobs.db` beside the threads and written only by this module.
+A talk keeps the reply it was made for: the thread's reply is saved apart, and a talk whose reply
+is not the thread's (a run stopped between the two) is not that reply's, so nothing is held for it.
 On the person's yes to the reply, the first time offered is added to the calendar as held (one
 `claude -p` with the connector's create tool); when the recruiter's answer names one of the times
 offered, the held event is moved to it and marked confirmed (its update tool). No event is
@@ -56,6 +58,7 @@ CREATE TABLE IF NOT EXISTS talks (
     conversation TEXT NOT NULL,
     title TEXT NOT NULL,
     offered TEXT NOT NULL,
+    reply TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('offered', 'holding', 'held', 'confirmed', 'failed', 'unsure',
         'replaced')),
     state_reason TEXT,
@@ -256,6 +259,7 @@ class Talk:
     conversation: str
     title: str
     offered: str
+    reply: str
     state: State
     state_reason: str | None
     event_id: str | None
@@ -282,7 +286,8 @@ class Talks:
             path.chmod(0o600)
         self._db.executescript(SCHEMA)
 
-    def offered(self, thread: int, source: str, conversation: str, title: str, times: list[datetime]) -> None:
+    def offered(self, thread: int, source: str, conversation: str, title: str, times: list[datetime],
+                reply: str) -> None:
         """Keep the times a reply offers; an offer made again before the yes replaces them, and an
         offer of no time (the calendar was full) forgets them."""
         if not times:
@@ -290,11 +295,11 @@ class Talks:
             return
         with self._db:
             self._db.execute(
-                "INSERT INTO talks (thread, source, conversation, title, offered, state, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, 'offered', ?) ON CONFLICT (thread) DO UPDATE SET"
-                " title = excluded.title, offered = excluded.offered, updated_at = excluded.updated_at"
-                " WHERE state = 'offered'",
-                (thread, source, conversation, title, json.dumps([when.isoformat() for when in times]),
+                "INSERT INTO talks (thread, source, conversation, title, offered, reply, state, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, 'offered', ?) ON CONFLICT (thread) DO UPDATE SET"
+                " title = excluded.title, offered = excluded.offered, reply = excluded.reply,"
+                " updated_at = excluded.updated_at WHERE state = 'offered'",
+                (thread, source, conversation, title, json.dumps([when.isoformat() for when in times]), reply,
                  self._clock().isoformat()))
 
     def forget(self, thread: int) -> None:
@@ -311,6 +316,11 @@ class Talks:
     def get(self, thread: int) -> Talk | None:
         row = self._db.execute("SELECT * FROM talks WHERE thread = ?", (thread,)).fetchone()
         return None if row is None else Talk(**{field.name: row[field.name] for field in fields(Talk)})
+
+    def of_reply(self, thread: int, reply: str | None) -> Talk | None:
+        """The offer this reply makes: none when the talk was made for another reply."""
+        talk = self.get(thread)
+        return talk if talk is not None and talk.reply == reply else None
 
     def in_states(self, *states: State) -> list[Talk]:
         marks = ", ".join("?" * len(states))

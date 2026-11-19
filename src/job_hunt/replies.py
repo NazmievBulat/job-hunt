@@ -31,15 +31,15 @@ the lock) and reports. A send with no report may have gone out: the thread is `u
 never sent again on its own.
 
 A thread that asks to talk is drafted by `offer-times` instead, offering free times from the
-person's Google Calendar (see `times`); `hunt offer-times <id>` drafts it so again. Its reply goes
-out with the job's resume attached, and once it went, the first time offered is held in the
-calendar. The next message of that conversation is drafted with the times offered: when it names
+person's Google Calendar (see `times`); `hunt offer-times <id>` drafts it so again. On LinkedIn its
+reply goes out with the job's resume attached (an email goes without: the Gmail connector takes an
+attachment only as bytes the run would have to copy), and once it went, the first time offered is
+held in the calendar. The next message of that conversation is drafted with the times offered: when it names
 one of them, the held event is moved to it and confirmed.
 """
 
 from __future__ import annotations
 
-import base64
 import fcntl
 import hashlib
 import json
@@ -610,7 +610,7 @@ def _offer(threads: Threads, talks: Talks, root: Path, thread: Thread, run: Run,
     if not threads.redrafted(thread.id, offer.reply, offer.draft_id):
         return 0
     talks.offered(thread.id, thread.source, thread.conversation,
-                  talk_title(thread, JobsList(root / "data" / "jobs.db")), offer.times)
+                  talk_title(thread, JobsList(root / "data" / "jobs.db")), offer.times, offer.reply)
     _write(here / "reply.md", offer.reply + "\n")
     return 1
 
@@ -656,7 +656,14 @@ def _hold_times(threads: Threads, root: Path, run: Run, clock: Callable[[], date
         log_failure(root / "data", "hunt send-reply", f"{talk.title} needs {TIMES_UNSURE}", clock)
     held: list[str] = []
     for talk in talks.in_states("offered"):
-        if threads.get(talk.thread).state != "sent":
+        thread = threads.get(talk.thread)
+        if thread.state != "sent":
+            continue
+        if talks.of_reply(thread.id, thread.reply) is None:
+            # The reply that went is not the one these times were offered with: what it offered is not known.
+            talks.forget(thread.id)
+            log_failure(root / "data", "hunt send-reply",
+                        f"{talk.title} was not held: the times of the reply that went were not saved", clock)
             continue
         try:
             where = zone(read_settings(root / "data" / "settings.json"))
@@ -715,8 +722,11 @@ def skip_reply(threads: Threads, thread: int) -> Thread:
 
 
 def resume_of(thread: Thread, root: Path) -> Path | None:
-    """The resume a reply offering times goes out with: the one of its job, when it has one."""
-    if thread.job is None or Talks(root / "data" / "jobs.db").get(thread.id) is None:
+    """The resume a LinkedIn reply offering times goes out with: the one of its job, when it has one.
+    An email goes without: the Gmail connector takes an attachment's bytes only as text the run
+    types, and a run does not copy a resume's forty thousand characters of base64 exactly."""
+    if (thread.source != "linkedin" or thread.job is None
+            or Talks(root / "data" / "jobs.db").of_reply(thread.id, thread.reply) is None):
         return None
     resume = root / "jobs" / str(thread.job) / "resume.pdf"
     return resume if resume.exists() else None
@@ -730,12 +740,6 @@ def send_command(thread: Thread, reply: str, root: Path) -> list[str]:
     tools = [f"Edit({_rule(here)}/sent.json)"]
     if (resume := resume_of(thread, root)) is not None:
         arguments["resume"] = str(resume)
-        if thread.source == "email":
-            # Gmail takes an attachment's bytes as base64; the run copies them from this file.
-            encoded = here / "resume.pdf.base64"
-            _write(encoded, base64.b64encode(resume.read_bytes()).decode())
-            arguments["resume_base64"] = str(encoded)
-            tools.append(f"Read({_rule(encoded)})")
     prompt = f"/{SEND_SKILL} {json.dumps(arguments, ensure_ascii=False)}"
     if thread.source == "email":
         return ["claude", "-p", prompt, "--model", MODEL, "--allowedTools", ",".join([*SEND_GMAIL_TOOLS, *tools])]

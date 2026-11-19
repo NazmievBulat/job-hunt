@@ -90,7 +90,12 @@ def is_list_item(ref: str, reads: list[str]) -> bool:
     second ref on a line, is text that names another element, as a message could: it says
     nothing of what that ref is."""
     for read in reversed(reads):
-        lines = [line for line in read.splitlines() if REF.findall(QUOTED.sub(" ", line)) == [ref]]
+        # Quoted text is taken out of the whole read first: a message of several lines is one
+        # quoted string, and a line inside it is not a line of the page.
+        structure = QUOTED.sub('""', read)
+        if '"' in structure.replace('""', ""):
+            continue  # Quotes that do not pair up: where its text ends cannot be told.
+        lines = [line for line in structure.splitlines() if REF.findall(line) == [ref]]
         if lines:
             return all(role(line) == "listitem" for line in lines)
     return False

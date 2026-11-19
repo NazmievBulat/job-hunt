@@ -755,6 +755,46 @@ def test_a_batch_that_read_fewer_emails_than_it_was_named_keeps_its_jobs_and_the
     assert jobs.last_run() == tenth - timedelta(seconds=1)
 
 
+def test_a_short_batch_holding_an_email_without_a_date_leaves_the_last_run_where_it_was(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    skill = AlertSkill(_alerts(12))
+
+    def run(command: list[str]) -> None:
+        skill(command)
+        args = arguments(command)
+        out = Path(args["out"])
+        written = json.loads(out.read_text())
+        if "email_ids" not in args:
+            # The search lists the third email without a date, so it is read in the last batch.
+            for entry in written["alerts"]:
+                if entry["email_id"] == "18c0ffee00000003":
+                    entry["email_date"] = None
+        elif "18c0ffee00000003" in args["email_ids"]:
+            written["emails"] -= 1
+        out.write_text(json.dumps(written))
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=run, fetch=_any_page,
+                   clock=clock)
+    assert summary.failed == ["alert: batch 2 of 2 read 1 of 2 emails"]
+    assert jobs.last_run() is None
+
+
+@pytest.mark.parametrize(("link", "cleaned"), [
+    ("https://www.linkedin.com/comm/jobs/view/123?trackingId=x&refId=y", True),
+    ("https://WWW.LinkedIn.com/jobs/view/123?trk=a", True),
+    ("https://uk.indeed.com/rc/clk?jk=abc&from=email", True),
+    ("https://indeed.com/viewjob?jk=abc&utm_source=x", True),
+    ("https://notlinkedin.com/r?trk=a", False),
+    ("https://linkedin.com.example.com/r?utm_source=x", False),
+    ("https://myindeed.co/r?ref=1", False),
+    ("  https://click.example.com/redirect?ref=job123  ", False),
+])
+def test_only_a_linkedin_or_indeed_link_is_cleaned_before_it_is_followed(link: str, cleaned: bool) -> None:
+    assert finder.followed_link(link) == (clean_link(link) if cleaned else link.strip())
+
+
 def test_a_failed_first_batch_leaves_the_last_run_where_it_was(
     tmp_path: Path, settings: Settings, clock: MovableClock
 ) -> None:

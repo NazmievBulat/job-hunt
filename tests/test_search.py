@@ -188,6 +188,14 @@ def test_a_linkedin_search_page_is_counted_before_its_turn_is_given_up(
     assert pace.counted == [1, 2]
 
 
+def test_a_linkedin_search_page_that_did_not_answer_200_is_not_counted(settings: Settings, clock: MovableClock) -> None:
+    sites = Sites({LINKEDIN: [Answer(500, ""), Answer(429, "")]})
+    pace = _no_pause()
+    result = linkedin_search(settings, clock.now - timedelta(days=1), clock.now, sites, pace)
+    assert pace.pages == 0
+    assert result.stopped == "LinkedIn answered 429 after 0 search pages, so it is not searched again this run"
+
+
 def test_linkedin_pauses_two_to_five_seconds_between_requests(settings: Settings, clock: MovableClock) -> None:
     slept: list[float] = []
     pace = Pace(sleep=slept.append, between=lambda: 4.0)

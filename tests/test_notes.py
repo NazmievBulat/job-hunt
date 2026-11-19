@@ -426,6 +426,8 @@ def test_the_sender_may_only_use_chrome_and_write_its_report(notes: Notes, jobs:
     assert arguments["text"] == notes.get(note).note
     tools = command[command.index("--allowedTools") + 1].split(",")
     assert all(tool.startswith("mcp__claude-in-chrome__") for tool in tools[:-1])
+    # A note is text: a page read on LinkedIn cannot make the sender upload a file.
+    assert "mcp__claude-in-chrome__file_upload" not in tools
     assert tools[-1] == f"Edit(/{project}/jobs/{notes.get(note).job}/note-sent.json)"
 
 

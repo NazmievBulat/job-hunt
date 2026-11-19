@@ -52,6 +52,8 @@ LIMIT = 300
 DAILY = 15
 TRIES = 2
 PAUSE = (timedelta(minutes=1), timedelta(minutes=3))
+# A note is text: the sender, reading LinkedIn's pages with nobody watching, uploads no file.
+SEND_TOOLS = tuple(tool for tool in CHROME_TOOLS if not tool.endswith("file_upload"))
 STOPPED = "notes.stopped"
 UNSURE = "a look on LinkedIn whether it was sent"
 
@@ -431,7 +433,7 @@ def send_command(note: Note, root: Path) -> list[str]:
     arguments = {"id": note.id, "name": note.name, "title": note.title, "profile": note.profile,
                  "text": note.note, "report": str(report)}
     return ["claude", "--chrome", "-p", f"/{SEND_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
-            "--model", MODEL, "--allowedTools", ",".join([*CHROME_TOOLS, f"Edit({_rule(report)})"])]
+            "--model", MODEL, "--allowedTools", ",".join([*SEND_TOOLS, f"Edit({_rule(report)})"])]
 
 
 @dataclass

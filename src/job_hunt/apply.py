@@ -90,6 +90,8 @@ HOST_DAILY = 6
 # The longest the run waits without looking for jobs put back meanwhile: an answered job or a
 # solved CAPTCHA goes on in its tab within it, not after the spread's 15 minutes.
 NAP = 60.0
+# Half a second of tries at the run's lock.
+LOCK_TRIES = 10
 
 Run = Callable[[list[str]], None]
 
@@ -286,10 +288,15 @@ def apply(
     (root / "jobs").mkdir(exist_ok=True)
     # One run at a time: two would start two workers on one job.
     with (root / "jobs" / "apply.lock").open("w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise ApplyError("another hunt apply is already running") from error
+        # A few tries: `hunt questions` holds it for a moment to see whether a run holds it.
+        for tries in range(LOCK_TRIES, 0, -1):
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                if tries == 1:
+                    raise ApplyError("another hunt apply is already running") from error
+                time.sleep(0.05)
         summary = Summary()
         this = _Run(jobs, root, summary, captcha, jobs.now, plan)
         _left_applying(this)
@@ -346,6 +353,25 @@ def _write_resume(job: int, root: Path, run: Run) -> str | None:
     return None if (_folder(root, job) / "resume.pdf").exists() else f"the {RESUME_SKILL} run built no resume.pdf"
 
 
+def _moved(jobs: JobsList, job: int, state: State) -> bool:
+    """Move the job, or leave it as another command moved it meanwhile (`hunt skip` from the
+    chat): the run goes on with the others."""
+    try:
+        jobs.move(job, state)
+    except MoveError:
+        return False
+    return True
+
+
+def _later(jobs: JobsList, job: int, not_before: datetime) -> bool:
+    """Leave the job for `not_before`, unless another command moved it meanwhile."""
+    try:
+        jobs.later(job, not_before)
+    except MoveError:
+        return False
+    return True
+
+
 def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
     # A job failed once is written again at once; each pass has fewer, as failures count.
     while picked := jobs.in_states("picked"):
@@ -353,7 +379,7 @@ def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
         for job in picked:
             _folder(root, job.id).mkdir(parents=True, exist_ok=True)
             if (_folder(root, job.id) / "resume.pdf").exists():
-                jobs.move(job.id, "resume_ready")
+                _moved(jobs, job.id, "resume_ready")
             else:
                 todo.append(job.id)
         if not todo:
@@ -365,8 +391,7 @@ def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
             if jobs.get(job).state != "picked":
                 continue
             if failure is None:
-                jobs.move(job, "resume_ready")
-                summary.resumes += 1
+                summary.resumes += _moved(jobs, job, "resume_ready")
             elif jobs.fail(job, failure) == "failed":
                 summary.failed += 1
 
@@ -431,16 +456,14 @@ def _held(this: _Run, job: int, skill: str) -> bool:
     if _continues(this, job):
         return False
     if applied_lately(jobs, found, now) is not None:
-        jobs.move(job, "skipped")
-        this.summary.left_out += 1
+        this.summary.left_out += _moved(jobs, job, "skipped")
         return True
     if plan is None:
         return False
     linkedin = jobs.starts_on(LINKEDIN_HOST, midnight(now), but=job)
     if (not plan.day_start(now) <= now < plan.day_end(now) or len(started_today(jobs, now) - {job}) >= plan.daily
             or (skill == LINKEDIN_SKILL and len(linkedin) >= plan.linkedin_daily)):
-        jobs.later(job, plan.next_morning(now))
-        this.summary.later += 1
+        this.summary.later += _later(jobs, job, plan.next_morning(now))
         return True
     return False
 
@@ -477,9 +500,8 @@ def _next_site(this: _Run, waiting: list[int], spread: float | None = None) -> t
             continue
         on = host(this.jobs.get(job))
         if len(this.jobs.starts_on(on, day, but=job)) >= HOST_DAILY:
-            this.jobs.later(job, _midnight(now, days=1))
+            this.summary.later += _later(this.jobs, job, _midnight(now, days=1))
             waiting.remove(job)
-            this.summary.later += 1
             continue
         # Also across midnight: the last start of yesterday counts.
         recent = this.jobs.starts_on(on, now - HOST_SPACING, but=job)
@@ -551,6 +573,10 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
                 the lock or the spread. The lock alone keeps it to one; while this run's own
                 applies, it is not asked."""
                 in_line = waiting[LINKEDIN_SKILL]
+                # A job going on in its tab goes first: it waits for no spread, and a solved
+                # CAPTCHA does not last one.
+                going_on = [job for job in in_line if _continues(this, job)]
+                in_line[:] = going_on + [job for job in in_line if job not in going_on]
                 while in_line and all(skill != LINKEDIN_SKILL for _, skill in running.values()):
                     if _held(this, in_line[0], LINKEDIN_SKILL):
                         in_line.pop(0)

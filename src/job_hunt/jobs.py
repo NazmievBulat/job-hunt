@@ -372,9 +372,11 @@ class JobsList:
     def later(self, job: int, not_before: datetime) -> None:
         """Leave a job ready to apply to for a `hunt apply` from `not_before` on."""
         with self._db:
-            if self.get(job).state != "resume_ready":
+            # Only while ready: a skip from the chat may land between a read and this write.
+            if self.get(job).state != "resume_ready" or self._db.execute(
+                    "UPDATE jobs SET not_before = ? WHERE id = ? AND state = 'resume_ready'",
+                    (not_before.isoformat(), job)).rowcount != 1:
                 raise MoveError(f"job {job} is not ready to apply to")
-            self._db.execute("UPDATE jobs SET not_before = ? WHERE id = ?", (not_before.isoformat(), job))
 
     def due(self, job: Job) -> bool:
         """Whether a `hunt apply` may take the job now: its `not_before`, if any, has come."""

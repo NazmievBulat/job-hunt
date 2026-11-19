@@ -10,11 +10,15 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sqlite3
 import threading
 import time
+from collections.abc import Callable
+from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -24,7 +28,7 @@ from job_hunt.companies import (
     CRAWL_TRIES, Board, Companies, board_of, crawl_index, wanted_boards,
 )
 from job_hunt.finder import find
-from job_hunt.jobs import JobsList
+from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.search import (
     BUSY_PAUSES, LINKEDIN_OVERLAP, LINKEDIN_PAGES, Answer, Gone, Pace, Search, SearchError, area_of, by_host, linkedin_cards,
     linkedin_search, read_board,
@@ -548,6 +552,8 @@ def test_find_saves_the_jobs_of_every_source_and_says_how_many_each_found(
         "workday: 0 found, 0 new (0 boards)",
         "smartrecruiters: 0 found, 0 new (0 boards)",
         "workable: 0 found, 0 new (0 boards)",
+        "same job from two sources: 0",
+        "took: alert 0s, linkedin_search 0s, boards 0s",
     ]
     # One board that did not answer is counted; a source none of whose boards answered fails.
     assert summary.failed == ["ashby: no board answered (initech: HTTP 500)"]
@@ -585,8 +591,10 @@ def test_a_job_from_an_alert_and_from_a_search_is_saved_once(
     sites = _board_sites()
     sites.answers = {**sites.answers, f"{LINKEDIN}?keywords=QA+Automation+Engineer&location=Raleigh": Answer(200, card)}
     summary, jobs, _ = _run(tmp_path, settings, clock, sites)
-    assert [job.source for job in jobs.all() if job.link.endswith("4012345678")] == ["alert"]
-    assert "linkedin_search: 3 found, 2 new" in str(summary).splitlines()
+    # The sources run at once: whichever saved it first has it.
+    assert len([job for job in jobs.all() if job.link.endswith("4012345678")]) == 1
+    new = {line.split(":")[0]: int(line.split(", ")[-1].split()[0]) for line in str(summary).splitlines()[:2]}
+    assert new["alert"] + new["linkedin_search"] == 4 + 2
 
 
 def test_a_failing_source_is_named_and_the_others_are_saved(
@@ -771,7 +779,12 @@ def test_a_search_that_breaks_is_named_and_the_alerts_still_get_their_postings(
         raise RuntimeError("a bug in a reader")
 
     summary, jobs, _ = _run(tmp_path, settings, clock, broken)  # type: ignore[arg-type]
-    assert summary.failed == ["search: RuntimeError: a bug in a reader"]
+    # Each source broke on its own; the others went on.
+    assert summary.failed == [
+        "linkedin_search: RuntimeError: a bug in a reader",
+        "greenhouse: no board answered (examplelabs: a bug in a reader)",
+        "lever: no board answered (globex: a bug in a reader)",
+        "ashby: no board answered (initech: a bug in a reader)"]
     alerts = [job for job in jobs.all() if job.source == "alert"]
     assert len(alerts) == 4 and all((tmp_path / "jobs" / str(job.id) / "posting.md").exists() for job in alerts)
 
@@ -800,7 +813,7 @@ def test_hunt_find_with_a_failing_source_says_it_and_exits_1_and_the_morning_log
     monkeypatch.setattr(cli, "site_search", search)
     assert cli.main(["find"]) == 1
     printed = capsys.readouterr()
-    assert printed.out.splitlines()[0] == "alert: 4 emails, 8 jobs, 4 new" and len(printed.out.splitlines()) == 8
+    assert printed.out.splitlines()[0] == "alert: 4 emails, 8 jobs, 4 new" and len(printed.out.splitlines()) == 10
     assert printed.err == "hunt find: ashby: no board answered (initech: HTTP 500)\n"
 
     monkeypatch.setattr(cli, "score_step", lambda: None)
@@ -857,24 +870,37 @@ def test_a_linkedin_page_that_answers_429_ends_the_reading_of_linkedin_pages(
     # The page is fetched by the real fetch_page, so its own words for the status are the ones read.
     monkeypatch.setattr(finder, "urlopen", answer)
 
+    # Every LinkedIn request in the order made, the searches' and the pages' alike.
+    linkedin: list[str] = []
+
     def fetch(link: str) -> tuple[str, str]:
         read.append(link)
+        if "linkedin.com" in link:
+            linkedin.append(link)
         return finder.fetch_page(link) if "linkedin.com" in link else _fetch(link)
 
     sites = Sites({f"{LINKEDIN}?keywords=QA+Automation+Engineer&location=Raleigh": _ok("linkedin-short-page.html"),
                    LINKEDIN: Answer(200, "")})
+
+    def get(url: str, body: object = None) -> Answer:
+        if "linkedin.com" in url:
+            linkedin.append(url)
+        return sites(url, body)
     jobs = JobsList(tmp_path / "jobs.db", clock=clock)
     companies = _companies(tmp_path, clock)
     companies.indexed()
     found = tmp_path / "found-jobs.json"
-    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    search = Search(get=get, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
     summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock, search=search)
-    assert f"linkedin_search: LinkedIn answered {status}, so it is not searched again this run" in summary.failed
+    assert summary.failed.count(f"linkedin_search: LinkedIn answered {status}, so it is not searched again this run") == 1
     # LinkedIn is searched from the same time next run.
     assert jobs.last_run("linkedin_search") is None
-    # The alerts' first LinkedIn page answered 429: no other LinkedIn page or search is asked for.
-    assert len([link for link in read if "linkedin.com" in link]) == 1 and sites.urls(LINKEDIN) == []
-    assert len([job for job in jobs.all() if "linkedin.com" in job.link]) == 2
+    # The first LinkedIn page answered 429: no other LinkedIn page or search is asked for after it.
+    pages = [link for link in read if "linkedin.com" in link]
+    assert len(pages) == 1 and linkedin[-1] == pages[0]
+    # The alerts' two LinkedIn jobs are saved all the same.
+    assert {"https://www.linkedin.com/jobs/view/4012345678", "https://www.linkedin.com/jobs/view/4012345690"} <= {
+        job.link for job in jobs.all()}
 
 
 def test_with_remote_excluded_the_area_searches_ask_for_on_site_and_hybrid_jobs(
@@ -997,3 +1023,314 @@ def test_a_linkedin_searched_jobs_apply_link_adds_its_board_that_same_run(
     assert Board("lever", "hooli-example") in companies.to_sweep(full=True)
     # Added before the sweep, so this run's sweep already read it.
     assert sites.urls("https://api.lever.co/v0/postings/hooli-example")
+
+
+# The sources at once
+
+
+def _wait_for(seen: Callable[[], bool]) -> bool:
+    give_up = time.monotonic() + 5
+    while time.monotonic() < give_up:
+        if seen():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _in_list(db: Path, link: str) -> Callable[[], bool]:
+    def seen() -> bool:
+        with closing(sqlite3.connect(db)) as reading:
+            return reading.execute("SELECT 1 FROM jobs WHERE link = ?", (link,)).fetchone() is not None
+    return seen
+
+
+def test_the_sources_run_at_once(tmp_path: Path, settings: Settings, clock: MovableClock) -> None:
+    # The alerts' run ends only once a board's job is saved: one after the other, it never would be.
+    found = tmp_path / "found-jobs.json"
+    greenhouse = _in_list(tmp_path / "jobs.db", "https://boards.greenhouse.io/examplelabs/jobs/7001")
+
+    def alerts(command: list[str]) -> None:
+        if _wait_for(greenhouse):
+            shutil.copy(FINDER / "found-jobs.json", found)
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    companies.add([Board("greenhouse", "examplelabs")])
+    search = Search(get=_board_sites(), pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=alerts, fetch=_fetch, clock=clock, search=search)
+    assert summary.failed == [] and "alert: 4 emails, 8 jobs, 4 new" in str(summary).splitlines()
+
+
+def test_a_source_that_breaks_or_is_told_to_stop_leaves_the_others_to_finish(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    class Broken:
+        def run(self, *args: object) -> tuple[list[str], list[str]]:
+            raise RuntimeError("the feeds broke")
+
+    sites = _board_sites()
+    sites.answers = {start: answer for start, answer in sites.answers.items() if "linkedin" not in start}
+    sites.answers[LINKEDIN] = Answer(429, "")
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    companies.add([Board("greenhouse", "examplelabs")])
+    found = tmp_path / "found-jobs.json"
+    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=_fetch, clock=clock,
+                   search=search, feeds=Broken())  # type: ignore[arg-type]
+    assert summary.failed == ["linkedin_search: LinkedIn answered 429, so it is not searched again this run",
+                              "feeds: RuntimeError: the feeds broke"]
+    lines = str(summary).splitlines()
+    assert "alert: 4 emails, 8 jobs, 4 new" in lines and "greenhouse: 3 found, 2 new (1 board)" in lines
+    assert {job.source for job in jobs.all()} == {"alert", "greenhouse"}
+
+
+def test_the_same_job_saved_by_two_sources_at_the_same_moment_is_listed_once(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    # The alert's Morrisville job, and a feed's under another link, reach the list at one moment.
+    together = threading.Barrier(2, timeout=5)
+    indeed = "https://www.indeed.com/viewjob?jk=1a2b3c4d5e6f7a8b"
+    feed_job = FoundJob(link="https://remotive.com/remote-jobs/qa/umbrella-1", title="QA Automation Engineer",
+                        company="Umbrella Example, Inc.", place="Morrisville, NC", remote="on_site", board="remotive",
+                        email_id=None, email_date=None, area="Raleigh-Durham-Chapel Hill", source="remotive")
+
+    class Slow(JobsList):
+        def same_job(self, found: FoundJob) -> int | None:
+            # Long enough between the check and the insert for the other source to check too.
+            first = super().same_job(found)
+            time.sleep(0.05)
+            return first
+
+    class Feed:
+        def run(self, settings: Settings, jobs: JobsList, started: datetime, save: Callable[..., bool]
+                ) -> tuple[list[str], list[str]]:
+            together.wait()
+            return [f"remotive: 1 found, {int(save(feed_job, 'Test the clinic software.'))} new"], []
+
+    def fetch(link: str) -> tuple[str, str]:
+        if link == indeed:
+            together.wait()
+        return _fetch(link)
+
+    jobs = Slow(tmp_path / "jobs.db", clock=clock)
+    found = tmp_path / "found-jobs.json"
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock,
+                   feeds=Feed())  # type: ignore[arg-type]
+    assert len([job for job in jobs.all() if job.company.startswith("Umbrella Example")]) == 1
+    assert "same job from two sources: 1" in str(summary).splitlines()
+    assert jobs.has(indeed) and jobs.has(feed_job.link)
+
+
+def test_linkedins_pause_is_kept_between_the_requests_of_two_threads() -> None:
+    # A made-up clock: a pause moves it on, and so does each request, which takes a second.
+    now = [0.0]
+    requests: list[tuple[float, float]] = []
+    pace = Pace(sleep=lambda seconds: now.__setitem__(0, now[0] + seconds), between=lambda: 3.0)
+
+    def search() -> None:
+        for _ in range(3):
+            with pace.turn():
+                began = now[0]
+                # Really waits, so the other thread asks for its turn meanwhile.
+                time.sleep(0.01)
+                now[0] += 1.0
+                requests.append((began, now[0]))
+
+    threads = [threading.Thread(target=search) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    requests.sort()
+    assert len(requests) == 6
+    # One request at a time, and a whole pause after each one ended before the next began.
+    assert [later[0] - earlier[1] for earlier, later in zip(requests, requests[1:])] == [3.0] * 5
+
+
+def test_a_board_an_alerts_link_leads_to_is_swept_in_the_same_run(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    def to_board(link: str) -> tuple[str, str]:
+        ended = "https://jobs.lever.co/hooli-example/1111" if "1234" in link else link
+        return ended, (FINDER / "pages" / "company.html").read_text()
+
+    sites = _board_sites()
+    sites.answers["https://api.lever.co/v0/postings/hooli-example?mode=json"] = _ok("lever.json")
+    found = tmp_path / "found-jobs.json"
+
+    def alerts(command: list[str]) -> None:
+        # The sweep has its boards by the time the alerts' links are read, as on a slow morning.
+        if _wait_for(lambda: bool(sites.urls("https://boards-api.greenhouse.io/"))):
+            shutil.copy(FINDER / "found-jobs.json", found)
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    companies.add([Board("greenhouse", "examplelabs")])
+    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=alerts, fetch=to_board, clock=clock, search=search)
+    assert sites.urls("https://api.lever.co/v0/postings/hooli-example")
+    assert len(sites.urls("https://boards-api.greenhouse.io/")) == 1
+    assert "lever: 1 found, 1 new (1 board)" in str(summary).splitlines()
+    assert any(job.source == "lever" and job.company == "Hooli Example" for job in jobs.all())
+
+
+def test_an_alerts_run_that_breaks_unexpectedly_is_named_and_the_others_finish(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    def alerts(command: list[str]) -> None:
+        raise PermissionError("claude: Permission denied")
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    companies.add([Board("greenhouse", "examplelabs")])
+    search = Search(get=_board_sites(), pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=alerts, fetch=_fetch,
+                   clock=clock, search=search)
+    assert summary.failed == ["alert: PermissionError: claude: Permission denied"]
+    assert "greenhouse: 3 found, 2 new (1 board)" in str(summary).splitlines()
+    new = [job for job in jobs.all() if job.state == "new"]
+    assert new and all((tmp_path / "jobs" / str(job.id) / "posting.md").exists() for job in new)
+
+
+def test_a_board_met_through_the_same_job_under_another_link_is_swept_in_the_same_run(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    # LinkedIn listed the job yesterday; today an alert brings it again, on the company's Lever board.
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    jobs.add(FoundJob(link="https://www.linkedin.com/jobs/view/4199999999", title="QA Automation Engineer",
+                      company="Hooli Example", place="Durham, NC", remote="on_site", board="linkedin", email_id=None,
+                      email_date=None, area="Raleigh-Durham-Chapel Hill", source="linkedin_search"),
+             description="Test the clinic software.", kind="company_site")
+    found = tmp_path / "found-jobs.json"
+
+    def alerts(command: list[str]) -> None:
+        found.write_text(json.dumps({"emails": 1, "jobs": [{
+            "link": "https://jobs.lever.co/hooli-example/2222", "title": "QA Automation Engineer",
+            "company": "Hooli Example, Inc.", "place": "Durham, NC", "remote": "on_site", "board": "lever",
+            "email_id": "18c0ffee00000009", "email_date": "2026-11-18T06:00:00+00:00",
+            "area": "Raleigh-Durham-Chapel Hill"}]}))
+
+    sites = _board_sites()
+    sites.answers["https://api.lever.co/v0/postings/hooli-example?mode=json"] = _ok("lever.json")
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=alerts, fetch=_fetch, clock=clock, search=search)
+    assert "same job from two sources: 1" in str(summary).splitlines()
+    assert sites.urls("https://api.lever.co/v0/postings/hooli-example")
+
+
+def test_a_page_an_alert_leads_to_shares_its_hosts_limit_with_the_boards(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    lock = threading.Lock()
+    running = [0]
+    most = [0]
+
+    def on_workable(ask: Callable[[], Any]) -> Any:
+        with lock:
+            running[0] += 1
+            most[0] = max(most[0], running[0])
+        try:
+            time.sleep(0.2)
+            return ask()
+        finally:
+            with lock:
+                running[0] -= 1
+
+    sites = _board_sites()
+
+    def get(url: str, body: object = None) -> Answer:
+        if url.startswith("https://apply.workable.com/"):
+            return on_workable(lambda: Answer(200, '{"jobs": []}'))
+        return sites(url, body)
+
+    found = tmp_path / "found-jobs.json"
+
+    def alerts(command: list[str]) -> None:
+        # The alert's page is read while the boards hold the host's four requests.
+        _wait_for(lambda: running[0] == 4)
+        found.write_text(json.dumps({"emails": 1, "jobs": [{
+            "link": "https://apply.workable.com/hooli/j/AB12CD34EF/", "title": "QA Automation Engineer",
+            "company": "Hooli Example", "place": "Durham, NC", "remote": "on_site", "board": "workable",
+            "email_id": "18c0ffee00000009", "email_date": "2026-11-18T06:00:00+00:00",
+            "area": "Raleigh-Durham-Chapel Hill"}]}))
+
+    def fetch(link: str) -> tuple[str, str]:
+        if urlsplit(link).hostname == "apply.workable.com":
+            return on_workable(lambda: _fetch(link))
+        return _fetch(link)
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    companies.add([Board("workable", f"example-{number}") for number in range(8)])
+    search = Search(get=get, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    find(settings, jobs, tmp_path / "jobs", found, run=alerts, fetch=fetch, clock=clock, search=search)
+    assert jobs.has("https://apply.workable.com/hooli/j/AB12CD34EF/")
+    assert most[0] == 4
+
+
+def test_hunt_find_help_says_the_sources_run_at_once_and_a_job_from_two_is_listed_once(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COLUMNS", "300")
+    with pytest.raises(SystemExit):
+        cli.main(["find", "--help"])
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "The sources run at once" in help_text
+    assert "A job is listed once" in help_text and "found in the last 30 days" in help_text
+    design = " ".join((Path(__file__).parents[1] / "docs" / "design.md").read_text().split())
+    assert "The sources run at once" in design and "same job from two sources: N" in design
+
+
+@pytest.mark.parametrize("breaks", ["sweep", "sweep_met"])
+def test_a_sweep_that_breaks_is_named_and_the_other_sources_still_save_and_say_how_long(
+    tmp_path: Path, settings: Settings, clock: MovableClock, breaks: str
+) -> None:
+    class Broken(Search):
+        def sweep(self, *args: Any, **kwargs: Any) -> Any:
+            if breaks == "sweep":
+                raise RuntimeError("a bug in the sweep")
+            return super().sweep(*args, **kwargs)
+
+        def sweep_met(self, *args: Any, **kwargs: Any) -> Any:
+            # The second pass takes a minute of the made-up clock, then breaks.
+            clock.advance(seconds=60)
+            raise RuntimeError("a bug in the second pass")
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    found = tmp_path / "found-jobs.json"
+    search = Broken(get=_board_sites(), pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=_fetch, clock=clock, search=search)
+    said = "a bug in the sweep" if breaks == "sweep" else "a bug in the second pass"
+    assert summary.failed == [f"boards: RuntimeError: {said}"]
+    lines = str(summary).splitlines()
+    assert lines[0] == "alert: 4 emails, 8 jobs, 4 new" and lines[1].startswith("linkedin_search: ")
+    assert lines[-1] == f"took: alert 0s, linkedin_search 0s, boards {'0s' if breaks == 'sweep' else '1m 0s'}"
+    alerts = [job for job in jobs.all() if job.source == "alert"]
+    assert len(alerts) == 4 and all((tmp_path / "jobs" / str(job.id) / "posting.md").exists() for job in alerts)
+
+
+def test_a_linkedin_search_that_gets_no_answer_is_named_and_the_others_go_on(
+    settings: Settings, clock: MovableClock
+) -> None:
+    sites = Sites({LINKEDIN: _ok("linkedin-short-page.html")})
+
+    def get(url: str, body: object = None) -> Answer:
+        if "keywords=SDET" in url:
+            raise SearchError("no answer in 30 seconds")
+        return sites(url, body)
+
+    result = linkedin_search(settings, clock.now - timedelta(days=1), clock.now, get, _no_pause())
+    assert result.problems == ["LinkedIn search for SDET in Raleigh-Durham-Chapel Hill: no answer in 30 seconds",
+                               "LinkedIn search for SDET in San Francisco Bay Area: no answer in 30 seconds",
+                               "LinkedIn search for SDET, remote: no answer in 30 seconds"]
+    assert len(result.jobs) == 3 and result.stopped is None

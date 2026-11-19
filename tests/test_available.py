@@ -416,3 +416,14 @@ def test_a_session_the_watch_starts_opens_with_what_it_was_told(tmp_path: Path) 
     assert started == [(tmp_path, "The day ends")]
     assert session_command(tmp_path, message="The day ends")[-1] == "The day ends"
     assert session_command(tmp_path)[-1] == FIRST_MESSAGE
+
+
+def test_the_last_watch_tells_no_summary_when_the_person_is_free_for_the_captcha(
+        tmp_path: Path, jobs: JobsList, clock: MovableClock) -> None:
+    _job(jobs, 1)
+    tell = Tell()
+    clock.now = datetime(2026, 11, 18, 17, 40, tzinfo=UTC)
+    said = watch_jobs(jobs, tmp_path, verdict=lambda: Verdict(True, "you are at the computer"), tell=tell,
+                      ends=day_ends(clock.now, SETTINGS))
+    assert tell.texts == [TELL_JOBS]
+    assert said == "told the chat: 1 CAPTCHA waits and you are at the computer"

@@ -289,11 +289,11 @@ class JobsList:
         return self.get(job).state
 
     def to_company_site(self, job: int, link: str) -> None:
-        """An Easy Apply job whose LinkedIn page sends to the company's site: from now on a
-        company-site job applied to at `link`, back to `resume_ready` with no try spent."""
+        """A job whose LinkedIn page sends to the company's site: from now on a company-site job
+        applied to at `link`, back to `resume_ready` with no try spent."""
         with self._db:
-            if (kind := self.get(job).kind) != "easy_apply":
-                raise MoveError(f"job {job} is not an Easy Apply job, it is {kind}")
+            if (earlier := self.get(job).apply_link) is not None:
+                raise MoveError(f"job {job} already applies on the company's site, at {earlier}")
             self._move(job, "resume_ready", None)
             self._db.execute("UPDATE jobs SET kind = 'company_site', apply_link = ? WHERE id = ?", (link, job))
 

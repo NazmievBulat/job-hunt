@@ -28,6 +28,14 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _aware(text: str) -> datetime:
+    """A time this module wrote; one without its time zone was not, and is a ValueError."""
+    when = datetime.fromisoformat(text)
+    if when.tzinfo is None:
+        raise ValueError(f"no time zone in {text!r}")
+    return when
+
+
 def random_pause() -> timedelta:
     low, high = PAUSE
     return timedelta(seconds=random.uniform(low.total_seconds(), high.total_seconds()))
@@ -58,22 +66,28 @@ class LinkedInLock:
             fcntl.flock(guard, fcntl.LOCK_EX)
             yield
 
-    def _taken_at(self) -> datetime | None:
+    def _taken_at(self, now: datetime) -> datetime | None:
         try:
             text = self.path.read_text()
         except FileNotFoundError:
             return None
         try:
-            return datetime.fromisoformat(json.loads(text)["taken_at"])
-        # Cut off while written: as old as the file.
+            taken_at = _aware(json.loads(text)["taken_at"])
+        # Cut off while written, or not written here: as old as the file.
         except (ValueError, KeyError, TypeError):
-            return datetime.fromtimestamp(self.path.stat().st_mtime, UTC)
+            taken_at = None
+        # Later than now, taken while the clock was ahead: as old as the file too.
+        if taken_at is None or taken_at > now:
+            taken_at = min(datetime.fromtimestamp(self.path.stat().st_mtime, UTC), now)
+        return taken_at
 
-    def _not_before(self) -> datetime | None:
+    def _not_before(self, now: datetime) -> datetime | None:
         try:
-            return datetime.fromisoformat(self._next.read_text().strip())
+            not_before = _aware(self._next.read_text().strip())
         except (FileNotFoundError, ValueError):
             return None
+        # Never longer than the longest pause from now, whatever the clock said when written.
+        return min(not_before, now + PAUSE[1])
 
     def take(self, job: int) -> float | None:
         """Hold the lock for this job's application and return None, or return how many
@@ -81,10 +95,10 @@ class LinkedInLock:
         application is not over."""
         with self._guarded():
             now = self._clock()
-            taken_at = self._taken_at()
+            taken_at = self._taken_at(now)
             if taken_at is not None and now - taken_at < STALE:
                 return min(self._poll, (taken_at + STALE - now).total_seconds())
-            not_before = self._not_before()
+            not_before = self._not_before(now)
             if not_before is not None and now < not_before:
                 return (not_before - now).total_seconds()
             held = json.dumps({"job": job, "taken_at": now.isoformat()})

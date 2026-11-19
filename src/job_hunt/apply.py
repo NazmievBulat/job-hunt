@@ -14,8 +14,11 @@ applies to one job in a Chrome tab of its own and writes `jobs/<id>/report.json`
     {"result": "failed", "reason": "..."}
     {"result": "company_site", "link": "..."}    (the LinkedIn worker only)
 
-The last is an Easy Apply job whose LinkedIn page sends to the company's site: it becomes a
-company-site job applied to at that link, in the same run, with no try spent. The coordinator saves each report as the job's state. A `failed` report counts against its job
+The LinkedIn worker takes every job applied to on LinkedIn: the Easy Apply jobs, and the
+company-site jobs whose link is still their LinkedIn page, which only LinkedIn can lead to the
+company's site. Its last report is for those, and for an Easy Apply job whose page sends to
+the company's site: the job becomes a company-site job applied to at that link, in the same
+run, with no try spent. The coordinator saves each report as the job's state. A `failed` report counts against its job
 (`JobsList.fail`): tried once more, then `failed`. A worker that stops or ends with no report it
 can be read by may have sent the application, so its job is paused for the user to look in
 Chrome (`UNSURE`) and never tried again on its own. Run again, it picks up from each job's state
@@ -158,13 +161,17 @@ def _text(data: dict, name: str) -> str | None:
     return (" ".join(value.split()) or None) if isinstance(value, str) else None
 
 
-def _skill(job: Job) -> str:
-    return LINKEDIN_SKILL if job.kind == "easy_apply" else SITE_SKILL
-
-
 def _on_linkedin(link: str) -> bool:
     host = (urlsplit(link).hostname or "").lower()
     return host == "linkedin.com" or host.endswith(".linkedin.com")
+
+
+def _skill(job: Job) -> str:
+    """Which worker applies to the job: a company-site worker never uses LinkedIn, as it would
+    apply beside the LinkedIn worker."""
+    if job.kind == "easy_apply" or (job.kind == "company_site" and _on_linkedin(job.apply_link or job.link)):
+        return LINKEDIN_SKILL
+    return SITE_SKILL
 
 
 def read_report(path: Path, skill: str = SITE_SKILL) -> Report:
@@ -183,9 +190,14 @@ def read_report(path: Path, skill: str = SITE_SKILL) -> Report:
         return Report("applied")
     if data["result"] == "company_site":
         link = data.get("link")
-        if not isinstance(link, str) or urlsplit(link := link.strip()).scheme not in ("http", "https"):
+        try:
+            parts = urlsplit(link := link.strip()) if isinstance(link, str) else None
+            address = parts is not None and parts.scheme in ("http", "https") and bool(parts.hostname)
+        # A broken address, such as "https://[broken".
+        except ValueError:
+            address = False
+        if not address:
             raise ApplyError(f"the {skill} run sent the job to the company's site without its web address")
-        # A company-site worker never uses LinkedIn: it would apply beside the LinkedIn worker.
         if _on_linkedin(link):
             raise ApplyError(f"the {skill} run sent the job to the company's site with a LinkedIn address")
         return Report("company_site", link=link)
@@ -318,8 +330,10 @@ def _apply_one(job: Job, root: Path, run: Run, paused: Report | None) -> Report:
 def _applications(jobs: JobsList, root: Path, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock,
                   summary: Summary) -> None:
     ready = jobs.in_states("resume_ready")
-    waiting = {SITE_SKILL: [job.id for job in ready if job.kind == "company_site"],
-               LINKEDIN_SKILL: [job.id for job in ready if job.kind == "easy_apply"]}
+    waiting: dict[str, list[int]] = {SITE_SKILL: [], LINKEDIN_SKILL: []}
+    for job in ready:
+        if job.kind in ("easy_apply", "company_site"):
+            waiting[_skill(job)].append(job.id)
     running: dict[Future[Report], tuple[int, str]] = {}
 
     def start(job: int, run: Run) -> None:

@@ -15,12 +15,13 @@ from pathlib import Path
 
 import pytest
 
+from job_hunt import cli
 from job_hunt.apply import LINKEDIN_SKILL, SITE_SKILL, ApplyError, apply, linkedin_command, read_report, site_command
 from job_hunt.jobs import JobsList, MoveError
 from job_hunt.linkedin_lock import PAUSE, STALE, LinkedInLock, random_pause
 from movable_clock import MovableClock
 # The fixtures `project` and `jobs` too: a made-up person's project folder and its jobs list.
-from test_apply import Resumes, Sites, _found, _job_of, _picked, jobs, no_linkedin, project  # noqa: F401
+from test_apply import Resumes, Sites, _found, _job_of, _picked, hunt, jobs, no_linkedin, project  # noqa: F401
 
 START = datetime(2026, 11, 18, 7, 0, tzinfo=UTC)
 
@@ -214,6 +215,8 @@ def test_a_job_whose_easy_apply_sends_to_the_company_site_becomes_a_company_site
 @pytest.mark.parametrize(("link", "error"), [
     (None, "without its web address"),
     ("careers.example.com/apply", "without its web address"),
+    ("https://[broken", "without its web address"),
+    ("https:///apply", "without its web address"),
     ("https://www.linkedin.com/jobs/view/123", "with a LinkedIn address"),
 ])
 def test_a_company_site_report_needs_the_sites_own_address(tmp_path: Path, link: str | None, error: str) -> None:
@@ -230,12 +233,119 @@ def test_only_the_linkedin_worker_sends_a_job_to_the_company_site(tmp_path: Path
         read_report(report, SITE_SKILL)
 
 
-def test_only_an_easy_apply_job_moves_to_the_company_site(jobs: JobsList) -> None:
-    job = _picked(jobs, 1)
+def test_a_job_moves_to_the_company_site_once(jobs: JobsList) -> None:
+    job = _picked(jobs, 1, kind="easy_apply")
     jobs.move(job, "resume_ready")
     jobs.move(job, "applying")
-    with pytest.raises(MoveError, match="not an Easy Apply job"):
-        jobs.to_company_site(job, "https://careers.example.com/1")
+    jobs.to_company_site(job, "https://careers.example.com/1")
+    jobs.move(job, "applying")
+    with pytest.raises(MoveError, match="already applies on the company's site"):
+        jobs.to_company_site(job, "https://careers.example.com/2")
+    assert jobs.get(job).apply_link == "https://careers.example.com/1"
+
+
+def test_a_company_site_job_still_at_its_linkedin_page_goes_through_the_linkedin_worker(
+    project: Path, jobs: JobsList
+) -> None:
+    # LinkedIn's own "Apply" button leads to the company's site: only LinkedIn knows where.
+    job = jobs.add(_found(1, link="https://www.linkedin.com/jobs/view/4000000001"), kind="company_site")
+    assert job is not None
+    jobs.score(job, 8, "Good match.")
+    jobs.move(job, "picked")
+    linkedin = LinkedIn(project, {job: {"result": "company_site", "link": "https://careers.example.com/apply/1"}})
+    sites = Sites(project)
+    apply(jobs, project, run_resume=Resumes(project), run_site=sites, run_linkedin=linkedin, linkedin=_lock(project))
+    assert [ran for ran, _, _ in linkedin.ran] == [job]
+    assert sites.ran == [job]
+    assert (jobs.get(job).apply_link, jobs.get(job).state) == ("https://careers.example.com/apply/1", "applied")
+
+
+def test_the_linkedin_pause_does_not_hold_up_the_site_workers(project: Path, jobs: JobsList) -> None:
+    easy = [_picked(jobs, n, kind="easy_apply") for n in (1, 2)]
+    sites = [_picked(jobs, n) for n in range(3, 9)]
+    finished: dict[int, float] = {}
+    site = Sites(project, seconds=0.05)
+
+    def run_site(command: list[str]) -> None:
+        site(command)
+        finished[_job_of(command, SITE_SKILL)] = time.monotonic()
+
+    linkedin = LinkedIn(project)
+    apply(jobs, project, run_resume=Resumes(project), run_site=run_site, run_linkedin=linkedin,
+          linkedin=_lock(project, pause=0.5))
+    # Six site jobs, three at a time, all done while the LinkedIn worker waited out its pause.
+    second_began = linkedin.ran[1][1]
+    assert sorted(finished) == sites
+    assert all(done < second_began for done in finished.values())
+    assert {jobs.get(job).state for job in easy + sites} == {"applied"}
+
+
+def test_a_linkedin_failure_is_tried_once_more_by_the_linkedin_worker_after_the_pause(
+    project: Path, jobs: JobsList
+) -> None:
+    job = _picked(jobs, 1, kind="easy_apply")
+    reports = iter([{"result": "failed", "reason": "LinkedIn showed an error."}, {"result": "applied"}])
+    linkedin = LinkedIn(project)
+
+    def run(command: list[str]) -> None:
+        linkedin.reports[job] = next(reports)
+        linkedin(command)
+
+    apply(jobs, project, run_resume=Resumes(project), run_site=no_linkedin, run_linkedin=run,
+          linkedin=_lock(project, pause=0.2))
+    assert [ran for ran, _, _ in linkedin.ran] == [job, job]
+    assert linkedin.gaps()[0] >= 0.2
+    assert (jobs.get(job).failures, jobs.get(job).state) == (1, "applied")
+
+
+def test_a_pause_written_far_ahead_waits_no_longer_than_the_longest_pause(project: Path) -> None:
+    (project / "data" / "linkedin.next").write_text((START + timedelta(days=2)).isoformat())
+    wait = _lock(project, clock=MovableClock(START)).take(1)
+    assert wait == PAUSE[1].total_seconds()
+
+
+@pytest.mark.parametrize("name", ["linkedin.next", "linkedin.lock"])
+def test_a_time_without_its_time_zone_counts_as_a_damaged_file(project: Path, name: str) -> None:
+    naive = (START - STALE - timedelta(minutes=1)).replace(tzinfo=None).isoformat()
+    text = naive if name == "linkedin.next" else json.dumps({"job": 7, "taken_at": naive})
+    (project / "data" / name).write_text(text)
+    # A damaged pause is no pause; a damaged lock is as old as its file, written just now.
+    later = MovableClock(datetime.now(UTC) + STALE + timedelta(seconds=1))
+    assert _lock(project, clock=later).take(8) is None
+
+
+def test_a_lock_taken_while_the_clock_was_ahead_is_as_old_as_its_file(project: Path) -> None:
+    written = datetime.now(UTC)
+    (project / "data" / "linkedin.lock").write_text(
+        json.dumps({"job": 7, "taken_at": (written + timedelta(days=1)).isoformat()}))
+    clock = MovableClock(written + STALE - timedelta(minutes=1))
+    assert _lock(project, clock=clock).take(8) is not None
+    clock.advance(seconds=120)
+    assert _lock(project, clock=clock).take(8) is None
+
+
+def test_hunt_apply_on_the_command_line_hands_the_easy_apply_jobs_to_the_linkedin_worker(
+    hunt: JobsList, project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    site, easy, moved = _picked(hunt, 1), _picked(hunt, 2, kind="easy_apply"), _picked(hunt, 3, kind="easy_apply")
+    sites = Sites(project)
+    linkedin = LinkedIn(project, {moved: {"result": "company_site", "link": "https://careers.example.com/3"}})
+    monkeypatch.setattr(cli, "run_resume", Resumes(project))
+    monkeypatch.setattr(cli, "run_site", sites)
+    monkeypatch.setattr(cli, "run_linkedin", linkedin)
+    # The lock the command line makes, with its pause of three to six minutes made short.
+    monkeypatch.setattr("job_hunt.linkedin_lock.PAUSE", (timedelta(seconds=0.1), timedelta(seconds=0.2)))
+    assert cli.main(["apply"]) == 0
+    assert capsys.readouterr().out == "3 resumes written; 3 applied, 0 paused, 0 failed" + chr(10)
+    assert linkedin.gaps()[0] >= 0.1
+    assert [ran for ran, _, _ in linkedin.ran] == [easy, moved]
+    assert sorted(sites.ran) == [site, moved]
+    assert (project / "data" / "linkedin.next").exists()
+    assert not (project / "data" / "linkedin.lock").exists()
+    assert cli.main(["status"]) == 0
+    assert capsys.readouterr().out.splitlines()[:4] == [
+        "Applied (3):", f"  {site}. QA Engineer 1 at Example Co 1", f"  {easy}. QA Engineer 2 at Example Co 2",
+        f"  {moved}. QA Engineer 3 at Example Co 3"]
 
 
 def test_a_linkedin_worker_that_stops_with_no_report_releases_the_lock_and_its_job_pauses(

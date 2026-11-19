@@ -62,8 +62,8 @@ ADZUNA_PAGE = 50
 JOOBLE = "https://jooble.org/api/"
 # A keyed feed's search is read page by page up to its total; this only stops one that pages for ever.
 KEYED_PAGES = 10
-# "NO REMOTE", "not remote", "Remote: no": a first line that says the job is not remote.
-NOT_REMOTE = re.compile(r"\b(?:no|not|non)[\s-]+remote\b|\bremote\s*[:=]?\s*(?:no|none)\b", re.IGNORECASE)
+# "NO REMOTE", "not remote", "Remote: no": a part of a first line that says the job is not remote.
+NOT_REMOTE = re.compile(r"\b(?:no|not|non)[\s-]+remote\b|\bremote\s*[:=]\s*(?:no|none)\b", re.IGNORECASE)
 
 
 class Get(Protocol):
@@ -187,21 +187,25 @@ def _arbeitnow(settings: Settings, ask: Ask, since: datetime, now: datetime) -> 
     return read
 
 
+def _says_remote(text: str) -> bool:
+    return bool(re.search(r"\bremote\b", text, re.IGNORECASE)) and not NOT_REMOTE.search(text)
+
+
 def hn_job(comment: dict[str, Any], settings: Settings) -> Found:
     """One top-level comment of a "Who is hiring?" thread as a job."""
     text = comment["text"]
     first = " ".join(html_text(re.split(r"<p>", text, maxsplit=1)[0]).split())
     parts = [part.strip() for part in first.split("|") if part.strip()]
+    # Part by part: "Remote (US) | no remote outside the US" is remote.
     remote: Remote = ("hybrid" if re.search(r"\bhybrid\b", first, re.IGNORECASE)
-                      else "on_site" if NOT_REMOTE.search(first)
-                      else "remote" if re.search(r"\bremote\b", first, re.IGNORECASE) else "on_site")
+                      else "remote" if any(_says_remote(part) for part in (parts if len(parts) >= 3 else [first]))
+                      else "on_site")
     if len(parts) >= 3:
         company, rest = parts[0], parts[1:]
         title = next((part for part in rest if title_matches(part, settings.titles)), rest[0])
         places = [part for part in rest if part is not title]
         in_area = [part for part in places if area_of(part, settings.areas) is not None]
-        remote_named = [part for part in places
-                        if re.search(r"\bremote\b", part, re.IGNORECASE) and not NOT_REMOTE.search(part)]
+        remote_named = [part for part in places if _says_remote(part)]
         places = in_area[:1] or remote_named[:1]
     else:
         # A comment the code cannot read: its first line, cut at a word, stands for the title.

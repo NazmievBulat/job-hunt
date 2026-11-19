@@ -195,10 +195,29 @@ def test_a_hybrid_comment_is_hybrid_and_a_title_part_is_found_wherever_it_is(set
 
 @pytest.mark.parametrize("line", ["Example Labs | SDET | Raleigh, NC | NO REMOTE",
                                   "Example Labs | SDET | Raleigh, NC | ONSITE | not remote",
-                                  "Example Labs | SDET | Raleigh, NC | Remote: no"])
+                                  "Example Labs | SDET | Raleigh, NC | non-remote",
+                                  "Example Labs | SDET | Raleigh, NC | Remote: no",
+                                  "Example Labs | SDET | Raleigh, NC | Remote = none",
+                                  "Hiring an SDET in Raleigh, NC, no remote"])
 def test_a_comment_that_says_not_remote_is_on_site(settings: Settings, line: str) -> None:
     job, _ = hn_job({"id": 9, "text": line}, settings)
-    assert (job.remote, job.place, job.area) == ("on_site", "Raleigh, NC", "Raleigh-Durham-Chapel Hill")
+    assert (job.remote, job.area) == ("on_site", "Raleigh-Durham-Chapel Hill")
+
+
+@pytest.mark.parametrize(("line", "place"), [
+    ("Example Labs | SDET | Remote (US) | no remote outside the US", "Remote (US)"),
+    ("Example Labs | SDET | Remote no visa sponsorship", "Remote no visa sponsorship"),
+])
+def test_a_comment_remote_in_one_part_is_remote_whatever_another_part_says(
+    settings: Settings, line: str, place: str
+) -> None:
+    job, _ = hn_job({"id": 12, "text": line}, settings)
+    assert (job.remote, job.place) == ("remote", place)
+
+
+def test_a_part_that_says_not_remote_is_no_place(settings: Settings) -> None:
+    job, _ = hn_job({"id": 13, "text": "Example Labs | SDET | NO REMOTE"}, settings)
+    assert (job.remote, job.place) == ("on_site", "")
 
 
 def test_a_comment_of_two_parts_is_kept_as_text_and_a_part_that_is_no_place_is_not_its_place(
@@ -585,3 +604,55 @@ def test_a_job_two_searches_found_keeps_the_area_one_gave_and_an_unknown_area_it
     job = _job("jooble", lisbon, link="https://jooble.org/desc/2", title="SDET", company="Example Labs",
                places=["Example Street, OR"], remote="on_site", area="Lisbon")
     assert job.area == "Lisbon"
+
+
+def _pages(make):  # type: ignore[no-untyped-def]
+    """A feed answering each request with `make(number)`, counting from 1."""
+    asked: list[tuple[str, object]] = []
+
+    def get(url: str, body: object = None, headers: object = None) -> Answer:
+        asked.append((url, body))
+        answer = make(len(asked))
+        return answer if isinstance(answer, Answer) else Answer(200, json.dumps(answer))
+
+    return get, asked
+
+
+def _adzuna_page(number: int, size: int = 50, count: int = 10_000) -> dict:
+    return {"count": count, "results": [
+        {"id": f"{number}-{at}", "title": "SDET", "company": {"display_name": "Example Labs"},
+         "location": {"display_name": "Raleigh, NC"}} for at in range(size)]}
+
+
+ONE_SEARCH = {"titles": ["SDET"], "remote": "exclude", "areas": ["Raleigh-Durham-Chapel Hill"]}
+
+
+def test_a_keyed_search_stops_at_ten_pages(settings: Settings) -> None:
+    get, asked = _pages(_adzuna_page)
+    read = Feeds(get=get).read("adzuna", replace(settings, **ONE_SEARCH), STARTED, STARTED)
+    assert len(asked) == 10 and len(read.jobs) == 500
+
+
+def test_adzuna_stops_at_a_short_page_whatever_count_it_says(settings: Settings) -> None:
+    get, asked = _pages(lambda number: _adzuna_page(number, size=7, count=500))
+    Feeds(get=get).read("adzuna", replace(settings, **ONE_SEARCH), STARTED, STARTED)
+    assert len(asked) == 1
+
+
+def test_jooble_stops_at_an_empty_page_whatever_total_it_says(settings: Settings) -> None:
+    page = json.loads((HERE / "jooble.json").read_text()) | {"totalCount": 100}
+    get, asked = _pages(lambda number: page if number == 1 else {"totalCount": 100, "jobs": []})
+    Feeds(get=get).read("jooble", replace(settings, **ONE_SEARCH), STARTED, STARTED)
+    assert len(asked) == 2
+
+
+@pytest.mark.parametrize("name", ["adzuna", "jooble", "usajobs"])
+def test_a_later_page_that_fails_keeps_the_pages_read_before_it(settings: Settings, name: str) -> None:
+    usajobs = json.loads((HERE / "usajobs.json").read_text())
+    usajobs["SearchResult"]["SearchResultCountAll"] = 5000
+    jooble = json.loads((HERE / "jooble.json").read_text()) | {"totalCount": 100}
+    first = {"adzuna": _adzuna_page(1), "jooble": jooble, "usajobs": usajobs}[name]
+    get, asked = _pages(lambda number: first if number == 1 else Answer(500, "down"))
+    read = Feeds(get=get).read(name, replace(settings, **ONE_SEARCH), STARTED, STARTED)
+    assert len(asked) == 2 and len(read.jobs) >= 1
+    assert len(read.problems) == 1 and read.problems[0].endswith("HTTP 500")

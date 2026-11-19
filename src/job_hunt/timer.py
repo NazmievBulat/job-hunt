@@ -192,8 +192,12 @@ def timer(
             agent.unlink(missing_ok=True)
         watching = _agent(home, WATCH_LABEL)
         if watching.exists() or (action == "on" and watch_until is not None):
-            # Loaded or not, it is loaded again or removed; an agent that is not loaded is no error.
-            run(["launchctl", "bootout", f"gui/{uid}/{WATCH_LABEL}"])
+            unloaded = run(["launchctl", "bootout", f"gui/{uid}/{WATCH_LABEL}"])
+            said = f"{unloaded.stderr} {unloaded.stdout}"
+            # Kept while launchd refuses: removed, nothing would show it still runs.
+            if unloaded.returncode != 0 and action == "off" and not any(
+                    gone in said for gone in ("No such process", "Could not find")):
+                raise TimerError(f"launchctl bootout failed: {said.strip().splitlines()[-1] if said.strip() else 'no message'}")
             if action == "on" and watch_until is not None:
                 watching.write_text(watch_plist(root, hour, watch_until, uv, path))
                 _must(run, ["launchctl", "bootstrap", f"gui/{uid}", str(watching)])

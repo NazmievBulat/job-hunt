@@ -222,8 +222,8 @@ def test_a_reply_is_drafted_once_for_each_unanswered_thread(
     first, second = _saved(threads, jobs, _email(1), _linkedin(2))
     drafter = Drafter()
 
-    assert draft_replies(threads, jobs, project, run=drafter, fetch=no_fetch) == 2
-    assert draft_replies(threads, jobs, project, run=drafter, fetch=no_fetch) == 0
+    assert draft_replies(threads, project, run=drafter, fetch=no_fetch) == 2
+    assert draft_replies(threads, project, run=drafter, fetch=no_fetch) == 0
 
     assert sorted(drafter.ran) == [first, second]
     assert threads.get(first).state == "drafted" and threads.get(first).draft_id == "d1"
@@ -235,9 +235,9 @@ def test_a_draft_that_fails_twice_is_failed_and_told(project: Path, threads: Thr
     thread, = _saved(threads, jobs, _email(1))
     drafter = Drafter(failing=2)
 
-    draft_replies(threads, jobs, project, run=drafter, fetch=no_fetch)
+    draft_replies(threads, project, run=drafter, fetch=no_fetch)
     assert threads.get(thread).state == "new"
-    draft_replies(threads, jobs, project, run=drafter, fetch=no_fetch)
+    draft_replies(threads, project, run=drafter, fetch=no_fetch)
 
     assert threads.get(thread).state == "failed"
     assert "draft-reply" in questions(jobs, project / "data", threads)
@@ -269,7 +269,7 @@ def test_a_posting_the_message_links_to_is_saved_as_the_jobs_description(
     thread, = _saved(threads, jobs, _email(1, job_link="https://jobs.example.com/77", company="Nobody Inc"))
     page = "<html><body><main><h1>QA Lead</h1><p>Test the things.</p></main></body></html>"
 
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=lambda link: (link, page))
+    draft_replies(threads, project, run=Drafter(), fetch=lambda link: (link, page))
 
     posting = project / "jobs" / "replies" / str(thread) / "posting.md"
     assert "Test the things." in posting.read_text()
@@ -283,7 +283,7 @@ def test_a_drafted_reply_is_a_question_with_the_message_and_the_reply(
     project: Path, threads: Threads, jobs: JobsList
 ) -> None:
     thread, = _saved(threads, jobs, _email(1, asks_to_talk=True))
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=no_fetch)
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
 
     asked = questions(jobs, project / "data", threads)
 
@@ -296,7 +296,7 @@ def test_a_drafted_reply_is_a_question_with_the_message_and_the_reply(
 def test_nothing_is_sent_before_send_reply(project: Path, threads: Threads, jobs: JobsList) -> None:
     sender = Sender(project, {"result": "sent"})
     _saved(threads, jobs, _email(1))
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=no_fetch)
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
     questions(jobs, project / "data", threads)
 
     assert sender.sent == []
@@ -304,7 +304,7 @@ def test_nothing_is_sent_before_send_reply(project: Path, threads: Threads, jobs
 
 def test_send_reply_sends_the_drafted_text_once(project: Path, threads: Threads, jobs: JobsList) -> None:
     thread, = _saved(threads, jobs, _email(1))
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=no_fetch)
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
     sender = Sender(project, {"result": "sent"})
 
     send_reply(threads, project, thread, run=sender, lock=LinkedInLock(project / "data"), sleep=no_sleep)
@@ -318,7 +318,7 @@ def test_send_reply_sends_the_drafted_text_once(project: Path, threads: Threads,
 
 def test_an_edit_changes_the_reply_that_is_sent(project: Path, threads: Threads, jobs: JobsList) -> None:
     thread, = _saved(threads, jobs, _email(1))
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=no_fetch)
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
     sender = Sender(project, {"result": "sent"})
 
     edit_reply(threads, project, thread, "  Thanks! Tuesday works.  ")
@@ -329,7 +329,7 @@ def test_an_edit_changes_the_reply_that_is_sent(project: Path, threads: Threads,
 
 def test_skip_closes_the_thread_without_sending(project: Path, threads: Threads, jobs: JobsList) -> None:
     thread, = _saved(threads, jobs, _email(1))
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=no_fetch)
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
 
     skip_reply(threads, thread)
 
@@ -341,7 +341,7 @@ def test_a_send_with_no_report_is_unsure_and_never_sent_again_on_its_own(
     project: Path, threads: Threads, jobs: JobsList
 ) -> None:
     thread, = _saved(threads, jobs, _email(1))
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=no_fetch)
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
 
     send_reply(threads, project, thread, run=Sender(project, None), lock=LinkedInLock(project / "data"),
                sleep=no_sleep)
@@ -352,7 +352,7 @@ def test_a_send_with_no_report_is_unsure_and_never_sent_again_on_its_own(
 
 def test_a_send_that_failed_waits_again_with_the_reason(project: Path, threads: Threads, jobs: JobsList) -> None:
     thread, = _saved(threads, jobs, _email(1))
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=no_fetch)
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
 
     send_reply(threads, project, thread, run=Sender(project, {"result": "failed", "reason": "Gmail refused it"}),
                lock=LinkedInLock(project / "data"), sleep=no_sleep)
@@ -365,7 +365,7 @@ def test_a_linkedin_reply_is_sent_under_the_lock_and_an_email_is_not(
     project: Path, threads: Threads, jobs: JobsList
 ) -> None:
     email, linkedin = _saved(threads, jobs, _email(1), _linkedin(2))
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=no_fetch)
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
     lock = LinkedInLock(project / "data", pause=lambda: timedelta(0))
     sender = Sender(project, {"result": "sent"}, lock=lock.path)
 
@@ -380,7 +380,7 @@ def test_a_linkedin_reply_waits_for_the_application_holding_the_lock(
     project: Path, threads: Threads, jobs: JobsList
 ) -> None:
     _, linkedin = _saved(threads, jobs, _email(1), _linkedin(2))
-    draft_replies(threads, jobs, project, run=Drafter(), fetch=no_fetch)
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
     lock = LinkedInLock(project / "data", pause=lambda: timedelta(0))
     applying = LinkedInLock(project / "data")
     assert applying.take(12) is None
@@ -449,14 +449,14 @@ class Watch:
                                                       "linkedin_notifications": self.notifications}))
         self.emails = []
 
-    def read_linkedin(self) -> int:
+    def read_linkedin(self) -> int | None:
         self.linkedin_reads += 1
         found, _ = read_messages({"linkedin_messages": self.linkedin})
         self.linkedin = []
         return sum(self.threads.save(each, self.jobs) is not None for each in found)
 
     def draft(self) -> int:
-        return draft_replies(self.threads, self.jobs, self.project, run=self.drafter, fetch=no_fetch)
+        return draft_replies(self.threads, self.project, run=self.drafter, fetch=no_fetch)
 
     def tell(self, told: list) -> None:
         self.told.append([thread.id for thread in told])
@@ -612,3 +612,205 @@ def test_a_linkedin_read_that_could_not_reach_linkedin_fails_and_keeps_the_time_
     with pytest.raises(ReplyError, match="Chrome is closed"):
         read_linkedin(threads, jobs, project, run=run, lock=lock, sleep=no_sleep, clock=clock)
     assert threads.last_read("linkedin") is None and not lock.path.exists()
+
+
+# Found by the coverage review
+
+
+def test_a_send_stopped_by_anything_leaves_the_thread_to_look_at_not_lost(
+    project: Path, threads: Threads, jobs: JobsList
+) -> None:
+    thread, = _saved(threads, jobs, _email(1))
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
+
+    def stopped(command: list[str]) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        send_reply(threads, project, thread, run=stopped, lock=LinkedInLock(project / "data"), sleep=no_sleep)
+
+    assert threads.get(thread).state == "unsure"
+    assert f"hunt send-reply {thread}" in questions(jobs, project / "data", threads)
+
+
+def test_a_notification_whose_linkedin_read_failed_opens_linkedin_again_at_the_next_run(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    clock.advance(hours=1)
+    _read_linkedin_today(threads, clock)
+    run = Watch(project, threads, jobs, notifications=1)
+    run.read_linkedin = lambda: None  # type: ignore[method-assign]  # LinkedIn could not be read
+    run(clock)
+
+    clock.advance(seconds=20 * 60)
+    again = Watch(project, threads, jobs)
+    again(clock)
+
+    assert again.linkedin_reads == 1
+
+
+def test_a_draft_that_failed_once_is_drafted_and_asked_at_the_next_run(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    _read_linkedin_today(threads, clock)
+    run = Watch(project, threads, jobs, emails=[_email(1)])
+    run.drafter.failing = 1
+    run(clock)
+    assert run.told == []
+
+    clock.advance(seconds=20 * 60)
+    run(clock)
+
+    thread, = threads.in_states("drafted")
+    assert run.told == [[thread.id]]
+
+
+class FakeClaude:
+    """Stands in for every `claude -p` hunt starts, by its skill, writing what the run would."""
+
+    def __init__(self, found: dict | None = None, sent: dict | None = None) -> None:
+        self.found = found or {"emails": 0, "jobs": [], "recruiter_emails": [], "linkedin_notifications": 0}
+        self.sent = sent
+        self.skills: list[str] = []
+
+    def __call__(self, command: list[str], folder: Path, *, skill: str = ALERTS_SKILL,
+                 error: type[RuntimeError] = RuntimeError) -> None:
+        self.skills.append(skill)
+        arguments = _prompt(command, skill)
+        if skill == ALERTS_SKILL:
+            Path(arguments["out"]).write_text(json.dumps(self.found))
+        elif skill == DRAFT_SKILL:
+            Path(arguments["out"]).write_text(json.dumps({"reply": "Thanks, Jane. Ada", "draft_id": "d1"}))
+        elif skill == SEND_SKILL and self.sent is not None:
+            Path(arguments["report"]).write_text(json.dumps(self.sent))
+
+
+@pytest.fixture
+def hunt(project: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    (project / "data" / "settings.json").write_text(json.dumps({
+        "titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 0,
+        "summary_hour": 23}))
+    monkeypatch.setattr(cli, "ROOT", project)
+    monkeypatch.setattr(cli, "DATA", project / "data")
+    monkeypatch.setattr(cli, "fetch_page", no_fetch)
+    monkeypatch.setattr(cli, "tell_session", lambda root: None)
+    return project
+
+
+def test_hunt_find_saves_a_recruiters_email_as_a_thread(
+    hunt: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "run_claude", FakeClaude({"emails": 0, "jobs": [], "recruiter_emails": [_email(1)]}))
+
+    assert cli.main(["find"]) == 0
+
+    assert len(Threads(hunt / "data" / "jobs.db").in_states("new")) == 1
+
+
+@pytest.mark.parametrize(("sent", "code", "state"), [
+    ({"result": "sent"}, 0, "sent"), ({"result": "failed", "reason": "Gmail refused it"}, 1, "drafted"),
+    (None, 1, "unsure")])
+def test_hunt_watch_drafts_and_asks_and_send_reply_says_how_it_went(
+    hunt: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    sent: dict | None, code: int, state: str
+) -> None:
+    threads = Threads(hunt / "data" / "jobs.db")
+    threads.finished_read("linkedin", datetime.now().astimezone())
+    monkeypatch.setattr(cli, "run_claude", FakeClaude({"emails": 0, "jobs": [], "recruiter_emails": [_email(1)],
+                                                       "linkedin_notifications": 0}, sent))
+
+    assert cli.main(["watch"]) == 0
+    assert "1 new" in capsys.readouterr().out
+    assert cli.main(["questions"]) == 0
+    thread, = threads.in_states("drafted")
+    assert f"hunt send-reply {thread.id}" in capsys.readouterr().out
+
+    assert cli.main(["send-reply", str(thread.id)]) == code
+    assert threads.get(thread.id).state == state
+
+
+def test_hunt_edit_and_skip_reply_change_and_close_the_thread(
+    hunt: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    threads = Threads(hunt / "data" / "jobs.db")
+    thread, = _saved(threads, JobsList(hunt / "data" / "jobs.db"), _email(1))
+    monkeypatch.setattr(cli, "run_claude", FakeClaude())
+    assert cli.main(["draft-replies"]) == 0
+
+    assert cli.main(["edit-reply", str(thread), "Tuesday works."]) == 0
+    assert threads.get(thread).reply == "Tuesday works."
+    assert cli.main(["skip-reply", str(thread)]) == 0
+    assert threads.get(thread).state == "skipped"
+    assert cli.main(["send-reply", str(thread)]) == 1
+    assert "skipped" in capsys.readouterr().err
+
+
+# Found by Codex's review
+
+
+def test_a_send_whose_process_died_shows_as_unsure_once_no_send_runs(
+    project: Path, threads: Threads, jobs: JobsList
+) -> None:
+    thread, = _saved(threads, jobs, _email(1))
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
+    # A run killed while sending leaves only its state behind.
+    threads.move(thread, "sending")
+
+    assert f"hunt send-reply {thread}" in questions(jobs, project / "data", threads)
+    assert threads.get(thread).state == "unsure"
+
+
+def test_a_send_still_running_is_not_taken_for_a_dead_one(project: Path, threads: Threads, jobs: JobsList) -> None:
+    import fcntl
+
+    thread, = _saved(threads, jobs, _email(1))
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
+    threads.move(thread, "sending")
+    with (project / "data" / "send.lock").open("w") as running:
+        fcntl.flock(running, fcntl.LOCK_EX)
+        questions(jobs, project / "data", threads)
+        assert threads.get(thread).state == "sending"
+
+
+def test_the_newest_message_of_a_conversation_stays_open_whatever_order_they_were_read_in(
+    threads: Threads, jobs: JobsList
+) -> None:
+    found, _ = read_messages({"linkedin_messages": [
+        _linkedin(1, text="Second", date="2026-11-18T09:00:00-05:00"),
+        _linkedin(1, text="First", date="2026-11-18T08:00:00-05:00")]})
+    EmailMessages(threads, jobs).save_all(found)
+
+    (open_one,) = threads.in_states("new")
+    assert open_one.text == "Second"
+
+
+def test_read_times_written_in_different_time_zones_give_the_latest_instant(threads: Threads) -> None:
+    threads.finished_read("email", datetime(2026, 11, 18, 12, 0, tzinfo=UTC))
+    # 07:20 at UTC-5 is 12:20 UTC: later, though "07" sorts before "12".
+    threads.finished_read("email", datetime(2026, 11, 18, 7, 20, tzinfo=LOCAL))
+
+    assert threads.last_read("email") == datetime(2026, 11, 18, 12, 20, tzinfo=UTC)
+
+
+def test_two_drafting_runs_never_draft_one_thread_twice(project: Path, threads: Threads, jobs: JobsList) -> None:
+    import threading
+
+    _saved(threads, jobs, _email(1))
+    ran: list[int] = []
+    inside = threading.Event()
+
+    def slow(command: list[str]) -> None:
+        ran.append(_prompt(command, DRAFT_SKILL)["thread"])
+        inside.set()
+        import time
+        time.sleep(0.2)
+        Drafter()(command)
+
+    other = threading.Thread(target=lambda: draft_replies(
+        Threads(project / "data" / "jobs.db"), project, run=slow, fetch=no_fetch))
+    other.start()
+    inside.wait()
+    draft_replies(threads, project, run=slow, fetch=no_fetch)
+    other.join()
+
+    assert len(ran) == 1

@@ -114,8 +114,9 @@ DESCRIPTION_CHARACTERS = 600
 
 def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
     # Imported here: `replies` uses this module's `log_failure`.
-    from job_hunt.replies import posting_path
+    from job_hunt.replies import posting_path, recover_sends
 
+    recover_sends(threads, data)
     waiting = threads.in_states("drafted", "unsure")
     if not waiting:
         return None

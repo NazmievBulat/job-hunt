@@ -286,3 +286,18 @@ def test_on_and_off_load_and_unload_the_macos_watch_agent(tmp_path: Path) -> Non
     timer("off", "Darwin", home, root, 7, run=runner, uv="uv", path="/usr/bin", uid=501)
 
     assert not agent.exists()
+
+
+def test_a_macos_watch_agent_launchd_will_not_unload_is_not_called_off(tmp_path: Path) -> None:
+    home, root = tmp_path / "home", tmp_path / "project"
+    timer("on", "Darwin", home, root, 7, run=Runner(), uv="uv", path="/usr/bin", uid=501, watch_until=18)
+
+    class RefusingWatch(Runner):
+        def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+            self.commands.append(command)
+            refused = command[1] == "bootout" and command[2].endswith(WATCH_LABEL)
+            return subprocess.CompletedProcess(command, 5 if refused else 0, "", "Operation not permitted" if refused else "")
+
+    with pytest.raises(TimerError, match="Operation not permitted"):
+        timer("off", "Darwin", home, root, 7, run=RefusingWatch(), uv="uv", path="/usr/bin", uid=501)
+    assert (home / "Library" / "LaunchAgents" / f"{WATCH_LABEL}.plist").exists()

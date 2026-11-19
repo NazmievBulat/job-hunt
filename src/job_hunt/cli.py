@@ -273,7 +273,7 @@ def run_send(command: list[str]) -> None:
 
 
 def draft_step() -> int:
-    return draft_replies(Threads(DATA / "jobs.db"), JobsList(DATA / "jobs.db"), ROOT, run=run_draft, fetch=fetch_page)
+    return draft_replies(Threads(DATA / "jobs.db"), ROOT, run=run_draft, fetch=fetch_page)
 
 
 def linkedin_step() -> int:
@@ -294,13 +294,13 @@ def _worked(step: str) -> None:
     (DATA / f"{step.removeprefix('hunt ').replace(' ', '-')}.failed").unlink(missing_ok=True)
 
 
-def _watch_linkedin() -> int:
+def _watch_linkedin() -> int | None:
     try:
         new = linkedin_step()
     except ReplyError as error:
-        # The emails are still drafted and asked; LinkedIn is tried again at its next turn.
+        # The emails are still drafted and asked; LinkedIn is tried again at the next run.
         _told_once("hunt linkedin-messages", error)
-        return 0
+        return None
     _worked("hunt linkedin-messages")
     return new
 

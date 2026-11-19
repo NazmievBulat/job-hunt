@@ -33,10 +33,12 @@ never sent again on its own.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -206,6 +208,36 @@ def read_messages(data: Any) -> tuple[list[Message], list[str]]:
     return found, problems
 
 
+def _when(message: Message) -> datetime | None:
+    try:
+        when = datetime.fromisoformat(message.sent_at or "")
+    except ValueError:
+        return None
+    return when if when.tzinfo is not None else None
+
+
+def chronological(found: list[Message]) -> list[Message]:
+    """Oldest first, so the newest of a conversation is the one left open; as read when a date
+    cannot be read."""
+    times = [_when(each) for each in found]
+    if any(when is None for when in times):
+        return found
+    return [each for _, each in sorted(zip(times, found), key=lambda pair: pair[0])]
+
+
+@contextmanager
+def _locked(path: Path, *, wait: bool = True) -> Iterator[bool]:
+    """Hold an exclusive lock on the file; without `wait`, say whether it was free."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+
+
 def job_of(jobs: JobsList, message: Message) -> int | None:
     """The job the message is about: the one of its posting link, else the one job of its company."""
     every = jobs.all()
@@ -301,14 +333,16 @@ class Threads:
         self._set(thread, asked_at=self._stamp())
 
     def last_read(self, source: Source) -> datetime | None:
-        row = self._db.execute("SELECT max(started_at) FROM message_reads WHERE source = ?", (source,)).fetchone()
-        return datetime.fromisoformat(row[0]) if row[0] else None
+        # Compared as instants: the finder's clock is UTC, the watch's the computer's own.
+        times = [datetime.fromisoformat(row["started_at"]) for row in
+                 self._db.execute("SELECT started_at FROM message_reads WHERE source = ?", (source,))]
+        return max(times, default=None)
 
     def finished_read(self, source: Source, started: datetime) -> None:
         """Remember when a read that finished started: the next one reads from then."""
         with self._db:
             self._db.execute("INSERT INTO message_reads (source, started_at) VALUES (?, ?)",
-                             (source, started.isoformat()))
+                             (source, started.astimezone(UTC).isoformat()))
 
 
 class EmailMessages:
@@ -322,10 +356,16 @@ class EmailMessages:
     def since(self, now: datetime) -> datetime:
         return self.threads.last_read("email") or now - FIRST_READ
 
+    def save_all(self, found: list[Message]) -> int:
+        """Save the messages, oldest first; return how many threads are new."""
+        new = sum(self.threads.save(each, self.jobs) is not None for each in chronological(found))
+        self.new += new
+        return new
+
     def saved(self, data: Any, started: datetime) -> list[str]:
         """Save the emails and LinkedIn's notifications the run noted; return what was left out."""
         found, problems = read_messages(data)
-        self.new += sum(self.threads.save(each, self.jobs) is not None for each in found)
+        self.save_all(found)
         count = data.get("linkedin_notifications") if isinstance(data, dict) else None
         self.notifications += count if type(count) is int and count > 0 else 0
         self.threads.finished_read("email", started)
@@ -418,9 +458,16 @@ def _read_reply(path: Path) -> tuple[str, str | None]:
     return reply.strip(), draft.strip() or None if isinstance(draft, str) else None
 
 
-def draft_replies(threads: Threads, jobs: JobsList, root: Path, *, run: Run,
+def draft_replies(threads: Threads, root: Path, *, run: Run,
                   fetch: Callable[[str], tuple[str, str]], clock: Callable[[], datetime] = _now) -> int:
     """Draft a reply for each new thread; return how many were drafted."""
+    # One drafting run at a time, the morning's and the watch's: a thread is drafted once.
+    with _locked(root / "data" / "draft.lock"):
+        return _draft_replies(threads, root, run, fetch, clock)
+
+
+def _draft_replies(threads: Threads, root: Path, run: Run, fetch: Callable[[str], tuple[str, str]],
+                   clock: Callable[[], datetime]) -> int:
     drafted = 0
     for thread in threads.in_states("new"):
         here = folder(root, thread.id)
@@ -508,9 +555,24 @@ def _with_lock(lock: LinkedInLock, sleep: Callable[[float], None], work: Callabl
         lock.release()
 
 
+def recover_sends(threads: Threads, data: Path) -> None:
+    """A thread left `sending` while no send runs was stopped by a run that died: it may have gone."""
+    with _locked(data / "send.lock", wait=False) as free:
+        if free:
+            for thread in threads.in_states("sending"):
+                threads.move(thread.id, "unsure", f"{UNSURE}: hunt send-reply stopped while sending")
+
+
 def send_reply(threads: Threads, root: Path, thread: int, *, run: Run, lock: LinkedInLock,
                sleep: Callable[[float], None]) -> Thread:
     """Send the reply as the person approved it, once."""
+    # Held while sending, so a thread `sending` with the lock free is a dead run's.
+    with _locked(root / "data" / "send.lock"):
+        return _send_reply(threads, root, thread, run, lock, sleep)
+
+
+def _send_reply(threads: Threads, root: Path, thread: int, run: Run, lock: LinkedInLock,
+                sleep: Callable[[float], None]) -> Thread:
     found = _waiting(threads, thread, "drafted", "unsure")
     report = folder(root, thread) / "sent.json"
     report.unlink(missing_ok=True)
@@ -533,6 +595,10 @@ def send_reply(threads: Threads, root: Path, thread: int, *, run: Run, lock: Lin
     except ReplyError as error:
         threads.move(thread, "unsure", f"{UNSURE}: {failure or error}")
         return threads.get(thread)
+    except BaseException:
+        # Stopped in the middle (Ctrl-C, a killed run): it may have gone, and must not be lost.
+        threads.move(thread, "unsure", f"{UNSURE}: hunt send-reply stopped while sending")
+        raise
     if sent:
         threads.move(thread, "sent")
     else:
@@ -567,6 +633,6 @@ def read_linkedin(threads: Threads, jobs: JobsList, root: Path, *, run: Run, loc
     found, problems = read_messages(data)
     if problems:
         log_failure(root / "data", "hunt linkedin-messages", "left out " + "; ".join(problems), clock)
-    new = sum(threads.save(each, jobs) is not None for each in found)
+    new = EmailMessages(threads, jobs).save_all(found)
     threads.finished_read("linkedin", started)
     return new

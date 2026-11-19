@@ -57,12 +57,13 @@ def watch(
     settings: Settings,
     *,
     check: Run,
-    read_linkedin: Callable[[], int],
+    read_linkedin: Callable[[], int | None],
     draft: Callable[[], int],
     tell: Callable[[list[Thread]], None],
     clock: Callable[[], datetime] = _local_now,
 ) -> str:
-    """One run; return what to print ("" when nothing was new)."""
+    """One run; return what to print ("" when nothing was new). `read_linkedin` returns how many
+    threads are new, or None when LinkedIn could not be read."""
     now = clock()
     if not in_hours(now, settings):
         return ""
@@ -76,7 +77,8 @@ def watch(
         return _watch(threads, jobs, data, settings, check, read_linkedin, draft, tell, now)
 
 
-def _watch(threads: Threads, jobs: JobsList, data: Path, settings: Settings, check: Run, read_linkedin: Callable[[], int],
+def _watch(threads: Threads, jobs: JobsList, data: Path, settings: Settings, check: Run,
+           read_linkedin: Callable[[], int | None],
            draft: Callable[[], int], tell: Callable[[list[Thread]], None], now: datetime) -> str:
     out = data / "messages-check.json"
     emails = EmailMessages(threads, jobs)
@@ -88,8 +90,15 @@ def _watch(threads: Threads, jobs: JobsList, data: Path, settings: Settings, che
         raise ReplyError(f"the messages check wrote no file it can be read by ({out})") from error
     problems = emails.saved(found, now)
     new = emails.new
-    if emails.notifications or linkedin_due(threads.last_read("linkedin"), now, settings):
-        new += read_linkedin()
+    # Kept until LinkedIn is read: a read that failed is tried again at the next run.
+    owed = data / "linkedin.owed"
+    if emails.notifications:
+        owed.write_text(f"{now.isoformat()}\n")
+    if owed.exists() or linkedin_due(threads.last_read("linkedin"), now, settings):
+        read = read_linkedin()
+        if read is not None:
+            owed.unlink(missing_ok=True)
+            new += read
     if not new and not threads.in_states("new") and not threads.unasked():
         return "; ".join(problems)
     drafted = draft()

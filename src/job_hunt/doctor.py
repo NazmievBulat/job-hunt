@@ -5,7 +5,10 @@ connector is its line in `claude mcp list`; Claude in Chrome is its native messa
 the extension installs, and the `claude --chrome-native-host` process Chrome starts while the
 extension is connected, then the browsers the account has connected, listed by one short
 `claude --chrome -p` on Haiku allowed only the listing tool: the workers use only this
-computer's Chrome, so exactly one of them must be on this computer. Chrome Remote Desktop, for solving a paused application from the phone,
+computer's Chrome, so exactly one of them must be on this computer. When the settings name one
+browser by its deviceId (`chrome_browser`), the workers use only that one, on whatever computer
+it runs: the native-host checks, which are about this computer's Chrome, are left out, and that
+deviceId must be among the connected browsers. Chrome Remote Desktop, for solving a paused application from the phone,
 is optional: its host installed and turned on for this computer. The account's email is never
 printed.
 """
@@ -33,8 +36,9 @@ LIST_BROWSERS = "mcp__claude-in-chrome__list_connected_browsers"
 # The model only copies the tool's answer: which browser is this computer's is decided below.
 LIST_PROMPT = (
     "Call list_connected_browsers once and do nothing else. Reply with only one JSON list, no other "
-    'text: one object for each browser it lists, {"name": its display name, "system": its OS platform, '
-    '"isLocal": its isLocal, "onThisComputer": its onThisComputer, or null when it does not give one}, '
+    'text: one object for each browser it lists, {"deviceId": its deviceId, "name": its display name, '
+    '"system": its OS platform, "isLocal": its isLocal, "onThisComputer": its onThisComputer, or null when it '
+    'does not give one}, '
     "the values exactly as the tool gave them. With no browser connected, reply []."
 )
 # How each system names itself in the browser listing, in lower case.
@@ -110,9 +114,20 @@ def _native_hosts(machine: Machine) -> list[Path]:
     return [browser / "NativeMessagingHosts" / NATIVE_HOST for browser in browsers]
 
 
+def _named_browser(machine: Machine) -> str | None:
+    """The settings' chrome_browser; None without one, or with settings that cannot be read (their
+    own line says so), and then the workers use only this computer's Chrome."""
+    try:
+        return read_settings(machine.data / "settings.json").chrome_browser
+    except SettingsError:
+        return None
+
+
 def _chrome(machine: Machine) -> Line:
     if machine.which("claude") is None:
         return Line("chrome", "missing", "Claude in Chrome needs Claude Code first")
+    if (named := _named_browser(machine)) is not None:
+        return _chrome_named(machine, named)
     if not any(host.exists() for host in _native_hosts(machine)):
         return Line("chrome", "missing", "the Claude in Chrome extension is not installed: add it to Chrome from "
                     f"{EXTENSION}, sign it in to your Claude account, then run claude --chrome once")
@@ -130,7 +145,9 @@ def _chrome(machine: Machine) -> Line:
         return Line("chrome", "missing", "Claude in Chrome is not connected in this computer's Chrome"
                     + (f" (connected: {others}; workers never use them)" if others else "")
                     + ": open Chrome on this computer, click the Claude extension and sign it in to the same "
-                    "Claude account")
+                    "Claude account"
+                    + ("; or, to use one of those instead, hunt chrome-browser <its deviceId>"
+                       if any(browser.get("deviceId") for browser in browsers) else ""))
     if len(here) > 1:
         return Line("chrome", "missing", "more than one connected Chrome could be this computer's ("
                     + ", ".join(map(_named, here)) + "), so the workers use none: keep the Claude extension "
@@ -138,6 +155,41 @@ def _chrome(machine: Machine) -> Line:
     name, system = here[0]["name"], here[0]["system"]
     return Line("chrome", "ok", f"Claude in Chrome, connected in this computer's Chrome ({name}, {system})"
                 + (f"; also connected: {others}; workers never use them" if others else ""))
+
+
+def _chrome_named(machine: Machine, named: str) -> Line:
+    """The one browser the settings name, by its deviceId: connected, or what to do."""
+    setting = f"data/settings.json's chrome_browser ({named})"
+    browsers = _connected_browsers(machine)
+    if browsers is None:
+        return Line("chrome", "missing", "Claude in Chrome did not say which browsers are connected: open Chrome "
+                    f"with the browser {setting} names, click the Claude extension once, then run hunt doctor again")
+    chosen = [browser for browser in browsers if browser.get("deviceId") == named]
+    others = ", ".join(_named(browser) for browser in browsers if browser not in chosen)
+    if not chosen:
+        return Line("chrome", "missing", f"the browser {setting} names is not connected"
+                    + (f" (connected: {others}; workers never use them)" if others else "")
+                    + ": open Chrome where it runs, click the Claude extension and sign it in to the same Claude "
+                    "account; or name another with hunt chrome-browser <its deviceId>, or hunt chrome-browser off "
+                    "for this computer's Chrome")
+    name, system = chosen[0]["name"], chosen[0]["system"]
+    return Line("chrome", "ok", f"Claude in Chrome, connected in the browser {setting} names ({name}, {system}); "
+                "workers use only it" + (f"; also connected: {others}; workers never use them" if others else ""))
+
+
+def browsers_to_name(machine: Machine) -> tuple[bool, str]:
+    """The browsers the account has connected, each with its deviceId, for `hunt chrome-browser` to
+    name one: the Chrome line's listing, run also while this computer's Chrome is not connected, as
+    when the browser to name runs on another computer. False with what to do when it cannot list them."""
+    if machine.which("claude") is None:
+        return False, "Claude in Chrome needs Claude Code first"
+    browsers = _connected_browsers(machine)
+    if browsers is None:
+        return False, ("Claude in Chrome did not say which browsers are connected: click the Claude extension once in "
+                       "the Chrome to use, signed in to the same Claude account, then run it again")
+    if not browsers:
+        return True, "no browser is connected to Claude in Chrome"
+    return True, "connected now: " + ", ".join(map(_named, browsers))
 
 
 def _connected_browsers(machine: Machine) -> list[dict] | None:
@@ -155,7 +207,9 @@ def _connected_browsers(machine: Machine) -> list[dict] | None:
             isinstance(browser, dict) and isinstance(browser.get("name"), str)
             and isinstance(browser.get("system"), str) for browser in browsers):
         return None
-    return browsers
+    # A deviceId that is not text is no deviceId: such a browser is never the one the settings name.
+    return [{**browser, "deviceId": browser.get("deviceId") if isinstance(browser.get("deviceId"), str) else None}
+            for browser in browsers]
 
 
 def _could_be_here(browser: dict, system: str) -> bool:
@@ -168,6 +222,9 @@ def _could_be_here(browser: dict, system: str) -> bool:
 
 
 def _named(browser: dict) -> str:
+    """Its name and system, and its deviceId when the listing gave one: what hunt chrome-browser takes."""
+    if browser.get("deviceId"):
+        return f"{browser['name']} ({browser['system']}, deviceId {browser['deviceId']})"
     return f"{browser['name']} ({browser['system']})"
 
 

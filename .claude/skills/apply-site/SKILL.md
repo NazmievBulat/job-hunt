@@ -1,7 +1,7 @@
 ---
 name: apply-site
 description: Apply to one job on the company's own site in Chrome, with the resume PDF and the career's answers, and write a report of how it went. Run by `hunt apply` as `/apply-site {"job": ..., "link": ..., "resume": ..., "career": ..., "report": ...}`.
-argument-hint: '{"job": <id>, "link": "...", "title": "...", "company": "...", "resume": "<path>", "career": "<path>", "report": "<path>"}'
+argument-hint: '{"job": <id>, "link": "...", "title": "...", "company": "...", "resume": "<path>", "career": "<path>", "report": "<path>", "browser": "<deviceId>" (only when the settings name one)}'
 ---
 
 # Apply on a company site
@@ -21,29 +21,39 @@ $ARGUMENTS
 - `tab` and `tab_id`, only when this job paused before: the title and the id of the tab it
   paused in. The person has since done what it needed there (solved the CAPTCHA, signed in) or
   answered its question.
+- `browser`, only when the person's settings name one: the `deviceId` of the one browser to
+  use (see "The browser first").
 
 The person picked this job, so applying is what they asked for. Other workers apply to other
 jobs in the same Chrome at the same time: work only in your own tab, the one you open or `tab_id`.
 
-## This computer's Chrome first
+## The browser first
 
 Before anything else in Chrome, choose the browser. The person's Claude account may have
-Claude in Chrome connected in several browsers on several computers, and they use only the
-Chrome on the computer this runs on, never another computer's.
+Claude in Chrome connected in several browsers on several computers, and only one of them
+may be used.
 
 1. Call list_connected_browsers.
-2. This computer's Chrome is the browser it gives `onThisComputer: true`. A browser it gives no
-   `onThisComputer` for counts only when it says `isLocal: true`, its system is the one this
-   runs on, and no other browser could be this computer's.
-3. When exactly one browser is this computer's, select it with select_browser and its
+2. When the arguments give `browser`, the person named that one browser by its `deviceId` in
+   their settings, and no other may be used, not even this computer's Chrome. When a connected
+   browser has exactly that `deviceId`, select it with select_browser and that `deviceId`, and
+   note its name, its system and whether it is on this computer. Then go on. When none has it,
+   or when select_browser fails, do nothing in any
+   browser: report `{"result": "paused", "needs": "chrome", "connected": "<each connected browser's name and system, as Browser 1 (macOS), Browser 2 (macOS), or none>"}`.
+   That is the pause for "The browser the settings name is not connected".
+3. Without `browser`, only the Chrome on the computer this runs on may be used, never another
+   computer's. This computer's Chrome is the browser it gives `onThisComputer: true`. A browser
+   it gives no `onThisComputer` for counts only when it says `isLocal: true`, its system is the
+   one this runs on, and no other browser could be this computer's.
+4. When exactly one browser is this computer's, select it with select_browser and its
    `deviceId`, and note its name and system. Then go on.
-4. When none is, when more than one could be, or when select_browser fails, do nothing in any
+5. When none is, when more than one could be, or when select_browser fails, do nothing in any
    browser: report `{"result": "paused", "needs": "chrome", "connected": "<each connected browser's name and system, as Browser 1 (macOS), Browser 2 (macOS), or none>"}`.
    That is the pause for "Chrome on this computer is not connected".
 
-Never use switch_browser, never select another computer's browser, and never ask anyone which
-one to use: nobody is watching, and the person chose this computer's Chrome already, whatever a
-tool's own description advises.
+Never use switch_browser, never select a browser these steps did not choose, and never ask
+anyone which one to use: nobody is watching, and the person chose already, whatever a tool's own
+description advises.
 
 ## Apply
 
@@ -79,15 +89,15 @@ Some things only the person can do. Leave the tab open exactly where it is and r
 - you clicked Submit, but the site did not confirm it was sent: an error page, a page that
   never loads, or nothing changed (`check_sent`). It may have been sent, so never submit again.
 - Chrome cannot be reached: it is closed or its Claude extension does not answer (`chrome`).
-  There is no tab to name. This computer's Chrome not among the connected browsers is this
-  pause too, with `connected` (see "This computer's Chrome first").
+  There is no tab to name. The browser to use not among the connected browsers is this
+  pause too, with `connected` (see "The browser first").
 
 ## Report
 
 Write `report` with the Write tool, once, as the last thing you do. `tab_id` is the id
 Chrome's tools give the tab, a whole number. Every report but a `chrome` pause also names the
 browser you selected; `<the browser>` below is
-`{"name": "<its name>", "system": "<its system>", "on_this_computer": true}`. A report without it
+`{"device_id": "<its deviceId>", "name": "<its name>", "system": "<its system>", "on_this_computer": <true for this computer's Chrome, else false>}`. A report without it
 is not taken, and the person has to look whether the job was sent. One of:
 
 ```json

@@ -23,7 +23,7 @@ from job_hunt.career import (
     STANDING, Career, CareerError, career_from_export, career_from_resume, career_lock, read_career,
     resume_text, with_ready_answers, write_career,
 )
-from job_hunt.doctor import Machine, doctor, remote_desktop_ready
+from job_hunt.doctor import Machine, browsers_to_name, doctor, remote_desktop_ready
 from job_hunt.companies import Companies, fill_index
 from job_hunt.feeds import Feeds
 from job_hunt.finder import SKILL as ALERTS_SKILL, FinderError, fetch_page, find, run_claude
@@ -44,7 +44,7 @@ from job_hunt.resume import ContentError, write_pdf
 from job_hunt.scoring import SKILL as SCORE_SKILL, ScoreError, score
 from job_hunt.scoring import Summary as ScoreSummary
 from job_hunt.search import Pace, Search, http_get
-from job_hunt.settings import Settings, SettingsError, read_settings
+from job_hunt.settings import Settings, SettingsError, device_id, read_settings
 from job_hunt.timer import TimerError, timer
 from job_hunt.times import Talks, zone
 from job_hunt.watch import TELL, in_hours, tell_session, watch
@@ -318,6 +318,16 @@ def _captcha_setting() -> str:
         return "ask"
 
 
+def chrome_browser() -> str | None:
+    """The settings' chrome_browser, the one browser the workers use; None for this computer's
+    Chrome, as when it is left out, also with settings that cannot be read: a broken file never
+    sends a worker to another computer's browser."""
+    try:
+        return read_settings(DATA / "settings.json").chrome_browser
+    except SettingsError:
+        return None
+
+
 def day_plan() -> Plan | None:
     """The day's plan of the settings; None when they cannot be read, and then only `apply`'s own
     limits hold, as before there was a plan."""
@@ -338,7 +348,8 @@ def pick_step() -> str | None:
 def _apply(args: argparse.Namespace) -> int:
     try:
         summary = apply(JobsList(DATA / "jobs.db"), ROOT, run_resume=run_resume, run_site=run_site,
-                        run_linkedin=run_linkedin, captcha=_captcha_setting(), plan=day_plan())
+                        run_linkedin=run_linkedin, captcha=_captcha_setting(), plan=day_plan(),
+                        browser=chrome_browser)
     except ApplyError as error:
         print(f"hunt apply: {error}", file=sys.stderr)
         return 1
@@ -420,7 +431,7 @@ def _notes(args: argparse.Namespace) -> int:
         return 1
     lock = LinkedInLock(DATA, pause=note_pause)
     print(send_notes(notes, Threads(DATA / "jobs.db"), JobsList(DATA / "jobs.db"), ROOT, run=run_note_send,
-                     lock=lock, sleep=time.sleep, daily=daily))
+                     lock=lock, sleep=time.sleep, daily=daily, browser=chrome_browser))
     return 0
 
 
@@ -617,7 +628,7 @@ def draft_step() -> int:
 
 def linkedin_step() -> int:
     return read_linkedin(Threads(DATA / "jobs.db"), JobsList(DATA / "jobs.db"), ROOT, run=run_read,
-                         lock=LinkedInLock(DATA), sleep=time.sleep)
+                         lock=LinkedInLock(DATA), sleep=time.sleep, browser=chrome_browser)
 
 
 def _told_once(step: str, error: object) -> None:
@@ -699,7 +710,8 @@ def _reply(args: argparse.Namespace) -> int:
     threads = Threads(DATA / "jobs.db")
     try:
         if args.command == "send-reply":
-            thread = send_reply(threads, ROOT, args.thread, run=run_send, lock=LinkedInLock(DATA), sleep=time.sleep)
+            thread = send_reply(threads, ROOT, args.thread, run=run_send, lock=LinkedInLock(DATA), sleep=time.sleep,
+                                browser=chrome_browser)
         elif args.command == "offer-times":
             thread = offer_times(threads, ROOT, args.thread, run=run_draft)
         elif args.command == "edit-reply":
@@ -792,40 +804,93 @@ def this_machine() -> Machine:
                    timer_status=_timer_status)
 
 
-def _settings(args: argparse.Namespace) -> int:
+def _save_settings(given: dict) -> Settings:
+    """Write the settings, only as the hunt reads them: what it cannot read never replaces what it
+    can. SettingsError naming data/settings.json otherwise."""
     path = DATA / "settings.json"
     temporary: Path | None = None
     try:
-        given = json.loads(args.settings)
-        if not isinstance(given, dict):
-            raise SettingsError("give the settings as one JSON object")
-        for kept in ("pushover", "working_hours", "time_zone", "companies", "keys", "daily_applications",
-                     "auto_apply_from", "site_workers", "linkedin_daily"):
-            if kept not in given and path.exists():
-                # Keys given once stay (Pushover's and the feeds'), and so do the call hours, the companies
-                # added by hand and the day's plan: the search is changed without typing them again.
-                with contextlib.suppress(json.JSONDecodeError, AttributeError):
-                    if (value := json.loads(path.read_text()).get(kept)) is not None:
-                        given[kept] = value
         DATA.mkdir(parents=True, exist_ok=True)
         descriptor, name = tempfile.mkstemp(dir=DATA, prefix=".settings.json.")
         temporary = Path(name)
         with os.fdopen(descriptor, "w") as out:
             out.write(json.dumps(given, indent=2, ensure_ascii=False) + "\n")
-        # Saved only as the hunt reads it: what it cannot read never replaces what it can.
         settings = read_settings(temporary)
         os.replace(temporary, path)
-    except (json.JSONDecodeError, SettingsError) as error:
-        said = str(error).replace(str(temporary), str(path)) if temporary else str(error)
-        print(f"hunt settings: {said}", file=sys.stderr)
-        return 1
+        return settings
+    except SettingsError as error:
+        raise SettingsError(str(error).replace(str(temporary), str(path)) if temporary else str(error)) from None
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+
+
+def _settings(args: argparse.Namespace) -> int:
+    path = DATA / "settings.json"
+    try:
+        given = json.loads(args.settings)
+        if not isinstance(given, dict):
+            raise SettingsError("give the settings as one JSON object")
+        for kept in ("pushover", "working_hours", "time_zone", "companies", "keys", "daily_applications",
+                     "auto_apply_from", "site_workers", "linkedin_daily", "chrome_browser"):
+            if kept not in given and path.exists():
+                # Keys given once stay (Pushover's and the feeds'), and so do the call hours, the companies
+                # added by hand, the day's plan and the browser named: the search is changed without typing
+                # them again.
+                with contextlib.suppress(json.JSONDecodeError, AttributeError):
+                    if (value := json.loads(path.read_text()).get(kept)) is not None:
+                        given[kept] = value
+        settings = _save_settings(given)
+    except (json.JSONDecodeError, SettingsError) as error:
+        print(f"hunt settings: {error}", file=sys.stderr)
+        return 1
     remote = {"include": "remote jobs too", "exclude": "no remote jobs", "only": "remote jobs only"}[settings.remote]
     salary = f"at least {settings.lowest_salary}" if settings.lowest_salary is not None else "any salary"
     print(f"saved: {', '.join(settings.titles)}; in {', '.join(settings.areas) or 'no area'}, {remote}; {salary}; "
           f"the morning run at {settings.morning_hour:02d}:00{'; Pushover keys kept' if settings.pushover else ''}")
+    return 0
+
+
+def _browser_said(device: str | None) -> str:
+    if device is None:
+        return "the browser workers use only the Chrome on this computer"
+    return f"the browser workers use only the browser {device}, on whatever computer it runs, and never another"
+
+
+def _chrome_browser(args: argparse.Namespace) -> int:
+    """Name the one browser the workers use, by its deviceId, or `off` for this computer's Chrome;
+    without either, say which they use. Only chrome_browser changes in data/settings.json."""
+    path = DATA / "settings.json"
+    if args.list:
+        if args.device is not None:
+            print("hunt chrome-browser: give a deviceId, off or --list, one of them", file=sys.stderr)
+            return 1
+        # Changes nothing: the browsers to name one from, whatever this computer's Chrome is doing.
+        found, said = browsers_to_name(this_machine())
+        print(said if found else f"hunt chrome-browser: {said}", file=sys.stdout if found else sys.stderr)
+        return 0 if found else 1
+    try:
+        if args.device is None:
+            print(_browser_said(read_settings(path).chrome_browser))
+            return 0
+        if not path.exists():
+            raise SettingsError(f"{path} is missing: run /setup to make it")
+        try:
+            given = json.loads(path.read_text())
+        except json.JSONDecodeError as error:
+            raise SettingsError(f"{path} is not JSON: {error}") from error
+        if not isinstance(given, dict):
+            raise SettingsError(f"{path} must hold one object")
+        device = None if args.device.strip().lower() == "off" else device_id(args.device)
+        given.pop("chrome_browser", None)
+        if device is not None:
+            given["chrome_browser"] = device
+        settings = _save_settings(given)
+    except SettingsError as error:
+        print(f"hunt chrome-browser: {error}", file=sys.stderr)
+        return 1
+    print(f"saved: {_browser_said(settings.chrome_browser)}"
+          + ("; hunt doctor says whether it is connected" if settings.chrome_browser else ""))
     return 0
 
 
@@ -991,6 +1056,14 @@ def main(argv: list[str] | None = None) -> int:
         "areas, remote (include, exclude or only), lowest_salary and morning_hour; Pushover keys saved before stay")
     searching.add_argument("settings")
     searching.set_defaults(run=_settings)
+    naming = commands.add_parser(
+        "chrome-browser", help="name the one Chrome the browser workers use, by the deviceId hunt doctor lists, "
+        "on whatever computer it runs; off for only this computer's Chrome (as when none is named); without "
+        "either, say which they use. Saved as chrome_browser in data/settings.json")
+    naming.add_argument("device", nargs="?", help="the browser's deviceId, or off")
+    naming.add_argument("--list", action="store_true", help="list the browsers the account has connected, each "
+                        "with its deviceId, and change nothing")
+    naming.set_defaults(run=_chrome_browser)
     checking = commands.add_parser(
         "doctor", help="check what the hunt needs (Claude Code signed in, uv, Python 3.14, Claude in Chrome connected, "
         "the Gmail connector, the career, the settings, the timer, and optionally Chrome Remote Desktop) and print "

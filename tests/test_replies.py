@@ -425,6 +425,29 @@ def test_a_linkedin_reply_without_a_resume_cannot_upload_a_file(project: Path, t
     assert "mcp__claude-in-chrome__file_upload" not in tools
 
 
+def test_a_linkedin_reply_is_given_the_browser_the_settings_name_and_an_email_none(
+        project: Path, threads: Threads, jobs: JobsList) -> None:
+    email, linkedin = _saved(threads, jobs, _email(1), _linkedin(2))
+
+    assert _prompt(send_command(threads.get(linkedin), "Hi", project, browser="0b6c9a52-2"),
+                   SEND_SKILL)["browser"] == "0b6c9a52-2"
+    # Gmail needs no browser.
+    assert "browser" not in _prompt(send_command(threads.get(email), "Hi", project, browser="0b6c9a52-2"), SEND_SKILL)
+    assert "browser" not in _prompt(send_command(threads.get(linkedin), "Hi", project), SEND_SKILL)
+
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
+    seen: list[object] = []
+
+    def sender(command: list[str]) -> None:
+        arguments = _prompt(command, SEND_SKILL)
+        seen.append(arguments.get("browser"))
+        Path(arguments["report"]).write_text(json.dumps({"result": "sent"}))
+
+    send_reply(threads, project, linkedin, run=sender, lock=LinkedInLock(project / "data", pause=lambda: timedelta(0)),
+               sleep=lambda seconds: None, browser="0b6c9a52-2")
+    assert seen == ["0b6c9a52-2"] and threads.get(linkedin).state == "sent"
+
+
 # Reading LinkedIn
 
 
@@ -436,6 +459,23 @@ def test_the_linkedin_reader_has_no_tool_that_types_or_clicks(tmp_path: Path) ->
     assert_only_named_tools(command)
     assert "mcp__claude-in-chrome__get_page_text" in tools
     assert not [tool for tool in tools if tool.endswith(("computer", "form_input", "file_upload"))]
+
+
+def test_linkedin_is_read_in_the_browser_the_settings_name(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    seen: list[object] = []
+
+    def reader(command: list[str]) -> None:
+        arguments = _prompt(command, READ_SKILL)
+        seen.append(arguments.get("browser"))
+        Path(arguments["out"]).write_text(json.dumps({"linkedin_messages": []}))
+
+    lock = LinkedInLock(project / "data", pause=lambda: timedelta(0))
+    read_linkedin(threads, jobs, project, run=reader, lock=lock, sleep=lambda seconds: None, clock=clock,
+                  browser="0b6c9a52-2")
+    read_linkedin(threads, jobs, project, run=reader, lock=lock, sleep=lambda seconds: None, clock=clock)
+    assert seen == ["0b6c9a52-2", None]
 
 
 def test_linkedin_is_read_under_the_lock_and_its_messages_saved_once(
@@ -1048,3 +1088,38 @@ def test_two_runs_saving_at_once_keep_the_newest_message_open(project: Path, job
     assert errors == []
     states = {thread.email_id: thread.state for thread in Threads(path).in_states("new", "replaced")}
     assert states == {"m1": "replaced", "m2": "new"}
+
+
+@pytest.mark.parametrize("step", ["send-reply", "linkedin-messages"])
+def test_the_browser_is_read_once_the_linkedin_lock_is_held(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, step: str
+) -> None:
+    _, linkedin = _saved(threads, jobs, _email(1), _linkedin(2))
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
+    lock = LinkedInLock(project / "data", pause=lambda: timedelta(0))
+    applying = LinkedInLock(project / "data")
+    assert applying.take(12) is None
+    setting: list[str | None] = ["0b6c9a52-2"]
+    seen: list[object] = []
+
+    def sleep(seconds: float) -> None:
+        # `hunt chrome-browser off` while an application holds the lock.
+        setting[0] = None
+        applying.release()
+        (project / "data" / "linkedin.next").unlink()
+
+    def worker(command: list[str]) -> None:
+        skill = SEND_SKILL if step == "send-reply" else READ_SKILL
+        arguments = _prompt(command, skill)
+        seen.append(arguments.get("browser"))
+        if step == "send-reply":
+            Path(arguments["report"]).write_text(json.dumps({"result": "sent"}))
+        else:
+            Path(arguments["out"]).write_text(json.dumps({"linkedin_messages": []}))
+
+    if step == "send-reply":
+        send_reply(threads, project, linkedin, run=worker, lock=lock, sleep=sleep, browser=lambda: setting[0])
+    else:
+        read_linkedin(threads, jobs, project, run=worker, lock=lock, sleep=sleep, clock=clock,
+                      browser=lambda: setting[0])
+    assert seen == [None]

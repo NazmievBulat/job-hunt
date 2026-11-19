@@ -436,6 +436,51 @@ def test_the_sender_may_only_use_chrome_and_write_its_report(notes: Notes, jobs:
     assert_only_named_tools(command)
 
 
+def test_the_sender_is_given_the_browser_the_settings_name_only_when_they_name_one(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    [note] = _drafted(notes, jobs, project, _poster(1))
+    assert "browser" not in _prompt(send_command(notes.get(note), project), SEND_SKILL)
+    assert _prompt(send_command(notes.get(note), project, browser="0b6c9a52-2"), SEND_SKILL)["browser"] == "0b6c9a52-2"
+
+    seen: list[object] = []
+
+    class Seeing(Sender):
+        def __call__(self, command: list[str]) -> None:
+            seen.append(_prompt(command, SEND_SKILL).get("browser"))
+            super().__call__(command)
+
+    questions(jobs, project / "data", threads, notes)
+    decide(notes, "send", None)
+    lock = LinkedInLock(project / "data", clock=clock, pause=note_pause)
+    send_notes(notes, threads, jobs, project, run=Seeing(), lock=lock,
+               sleep=lambda seconds: clock.advance(seconds=seconds), clock=clock, browser="0b6c9a52-2")
+    assert seen == ["0b6c9a52-2"]
+
+
+def test_a_batch_of_notes_follows_the_setting_changed_while_it_sends(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    _drafted(notes, jobs, project, _poster(1), _poster(2))
+    setting: list[str | None] = ["0b6c9a52-2"]
+    seen: list[object] = []
+
+    class Seeing(Sender):
+        def __call__(self, command: list[str]) -> None:
+            seen.append(_prompt(command, SEND_SKILL).get("browser"))
+            super().__call__(command)
+
+    def wait(seconds: float) -> None:
+        # `hunt chrome-browser off` while the batch waits between notes.
+        setting[0] = None
+        clock.advance(seconds=seconds)
+
+    questions(jobs, project / "data", threads, notes)
+    decide(notes, "send", None)
+    lock = LinkedInLock(project / "data", clock=clock, pause=note_pause)
+    send_notes(notes, threads, jobs, project, run=Seeing(), lock=lock, sleep=wait, clock=clock,
+               browser=lambda: setting[0])
+    assert seen == ["0b6c9a52-2", None]
+
+
 # Settings
 
 

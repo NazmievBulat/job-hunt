@@ -1,7 +1,7 @@
 ---
 description: Set up the job hunt, one step at a time - check what it needs, read the resume, say what to look for, turn on job alerts, give the standing form answers, switch on the morning run. Run again to change one thing.
-argument-hint: '[resume | search | alerts | answers | pushover | remote desktop | timer]'
-allowed-tools: Bash(uv run hunt doctor), Bash(uv run hunt career:*), Bash(uv run hunt career-from-resume:*), Bash(uv run hunt settings:*), Bash(uv run hunt form-answers:*), Bash(uv run hunt timer:*), Bash(uv --version), Bash(uv sync), Bash(uv python install 3.14), Read(data/settings.json), Read(data/career.json), Skill(read-resume)
+argument-hint: '[resume | search | alerts | answers | pushover | remote desktop | timer | browser]'
+allowed-tools: Bash(uv run hunt doctor), Bash(uv run hunt career:*), Bash(uv run hunt career-from-resume:*), Bash(uv run hunt settings:*), Bash(uv run hunt form-answers:*), Bash(uv run hunt timer:*), Bash(uv run hunt chrome-browser:*), Bash(uv --version), Bash(uv sync), Bash(uv python install 3.14), Read(data/settings.json), Read(data/career.json), Skill(read-resume)
 ---
 
 # Set up the job hunt
@@ -31,6 +31,17 @@ other line marked `missing`, one at a time, say what to do in the doctor's words
 Say once, with the Chrome line: "The hunt uses only the Chrome on this computer, never a Chrome
 on another computer your Claude account is connected to. Sign in to LinkedIn and the job sites
 in this computer's Chrome." The doctor's Chrome line names the other browsers it saw.
+
+The browser (also `/setup browser`): when the person wants the hunt to use one of the other
+browsers instead, run `uv run hunt chrome-browser --list`, which lists each connected browser
+with its deviceId, also while this computer's Chrome is not connected. Ask which one, by its
+name and system, and never pick one they did not choose: run
+`uv run hunt chrome-browser <its deviceId>`, show the line it prints, then run the doctor
+again. From then on every worker uses only that browser, wherever it runs, and they sign in to
+LinkedIn and the job sites there. `uv run hunt chrome-browser off` goes back to this computer's
+Chrome; `uv run hunt chrome-browser` says which is used now. It saves into the settings, so on a
+first setup, when it says to run /setup to make them, do the search step (3) first and then this,
+and leave the Chrome line for now as the career and the settings are left.
 
 ## 2. The resume
 
@@ -107,7 +118,7 @@ Run `uv run hunt timer on` and show the line it prints. When it refuses, show it
 Run `uv run hunt doctor` and show what it prints. When every line is `ok` or `optional`, say:
 "All set. Each morning at <hour>:00 the hunt reads your job alerts and sends you the new jobs to
 pick from. To change one thing later, run /setup resume, search, alerts, answers, pushover,
-remote desktop or timer." Otherwise say which step to run again.
+remote desktop, timer or browser." Otherwise say which step to run again.
 
 Do nothing else: no other command, no other file read or written, no Chrome tab opened. Never
 type a password and never ask for one.

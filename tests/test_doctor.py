@@ -7,6 +7,7 @@ folders. Nothing real is run or read."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
@@ -462,3 +463,174 @@ def test_hunt_questions_carries_the_link_only_on_a_machine_with_remote_desktop(
     (machine.home / ".config/chrome-remote-desktop/host#0f0f.json").unlink()
     cli.main(["questions"])
     assert "This waits until you are at the computer" in capsys.readouterr().out
+
+
+# The one browser data/settings.json names (`chrome_browser`)
+
+WORK_ID, HOME_ID = "0b6c9a52-1111-4a2b-9c3d-000000000001", "0b6c9a52-1111-4a2b-9c3d-000000000002"
+
+
+def naming(machine: Machine, device: str) -> None:
+    (machine.data / "settings.json").write_text(json.dumps({**SETTINGS, "chrome_browser": device}))
+
+
+def test_the_listing_asks_for_each_browsers_device_id(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+
+    lines(machine)
+
+    [command] = runner.background
+    assert '"deviceId": its deviceId' in command[command.index("-p") + 1]
+
+
+def test_the_named_browser_connected_on_another_computer_is_ok_and_named(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    naming(machine, HOME_ID)
+    runner.answers["claude___chrome"] = listed({**WORK_MAC, "deviceId": WORK_ID}, {**HOME_MAC, "deviceId": HOME_ID},
+                                               {**this_computers(), "deviceId": "0b6c9a52-3"})
+
+    said = lines(machine)["chrome"]
+
+    # The others with their deviceIds, to name another with hunt chrome-browser.
+    assert said == (f"ok: Claude in Chrome, connected in the browser data/settings.json's chrome_browser ({HOME_ID}) "
+                    f"names (Browser 2, macOS); workers use only it; also connected: Browser 1 (macOS, deviceId "
+                    f"{WORK_ID}), Browser 3 (Linux, deviceId 0b6c9a52-3); workers never use them")
+
+
+def test_with_a_browser_named_this_computers_chrome_is_not_checked(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    naming(machine, HOME_ID)
+    # No extension here and no native host running: the named browser runs elsewhere.
+    (machine.home / ".config/google-chrome/NativeMessagingHosts" / NATIVE_HOST).unlink()
+    runner.answers["pgrep__f"] = (1, "")
+    runner.answers["claude___chrome"] = listed({**HOME_MAC, "deviceId": HOME_ID})
+
+    assert lines(machine)["chrome"].startswith("ok: Claude in Chrome, connected in the browser data/settings.json's")
+    assert ["pgrep", "-f", "chrome-native-host"] not in runner.commands
+
+
+@pytest.mark.parametrize("connected", [
+    [{**WORK_MAC, "deviceId": WORK_ID}],
+    # This computer's own Chrome is not the one named either.
+    [{**this_computers(), "deviceId": "0b6c9a52-3"}, {**WORK_MAC, "deviceId": WORK_ID}],
+    # A browser the tool gave no deviceId for is not the one named.
+    [{**HOME_MAC, "deviceId": None}],
+])
+def test_the_named_browser_not_connected_is_missing_with_the_others_ids_and_what_to_do(
+        tmp_path: Path, connected: list[dict]) -> None:
+    machine, runner = everything_ready(tmp_path)
+    naming(machine, HOME_ID)
+    runner.answers["claude___chrome"] = listed(*connected)
+
+    said = lines(machine)["chrome"]
+
+    assert said.startswith(f"missing: the browser data/settings.json's chrome_browser ({HOME_ID}) names is not "
+                           "connected (connected: ")
+    for browser in connected:
+        assert f"{browser['name']} ({browser['system']}" in said
+        assert browser["deviceId"] is None or f"deviceId {browser['deviceId']}" in said
+    assert "open Chrome where it runs, click the Claude extension and sign it in to the same Claude account" in said
+    assert "hunt chrome-browser <its deviceId>, or hunt chrome-browser off for this computer's Chrome" in said
+
+
+def test_the_named_browser_with_nothing_connected_or_an_unreadable_listing_is_missing(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    naming(machine, HOME_ID)
+    runner.answers["claude___chrome"] = listed()
+    assert lines(machine)["chrome"] == (
+        f"missing: the browser data/settings.json's chrome_browser ({HOME_ID}) names is not connected: open Chrome "
+        "where it runs, click the Claude extension and sign it in to the same Claude account; or name another with "
+        "hunt chrome-browser <its deviceId>, or hunt chrome-browser off for this computer's Chrome")
+
+    for answer in (None, (1, "error"), (0, "I could not list them."), (0, '[{"name": "Browser 2"}]')):
+        runner.answers["claude___chrome"] = answer
+        assert lines(machine)["chrome"].startswith(
+            "missing: Claude in Chrome did not say which browsers are connected: open Chrome with the browser "
+            f"data/settings.json's chrome_browser ({HOME_ID}) names")
+
+
+def test_settings_that_cannot_be_read_check_this_computers_chrome(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    (machine.data / "settings.json").write_text(json.dumps({**SETTINGS, "chrome_browser": "not a device id"}))
+    runner.answers["claude___chrome"] = listed({**HOME_MAC, "deviceId": HOME_ID}, this_computers())
+
+    said = lines(machine)
+
+    assert said["chrome"] == ("ok: Claude in Chrome, connected in this computer's Chrome (Browser 3, Linux); also "
+                              f"connected: Browser 2 (macOS, deviceId {HOME_ID}); workers never use them")
+    assert said["settings"].startswith("missing: data/settings.json: chrome_browser must be a browser's deviceId")
+
+
+def test_without_this_computers_chrome_the_others_ids_are_given_to_name_one(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    runner.answers["claude___chrome"] = listed({**WORK_MAC, "deviceId": WORK_ID}, {**HOME_MAC, "deviceId": HOME_ID})
+
+    said = lines(machine)["chrome"]
+
+    assert said == (f"missing: Claude in Chrome is not connected in this computer's Chrome (connected: Browser 1 "
+                    f"(macOS, deviceId {WORK_ID}), Browser 2 (macOS, deviceId {HOME_ID}); workers never use them): "
+                    "open Chrome on this computer, click the Claude extension and sign it in to the same Claude "
+                    "account; or, to use one of those instead, hunt chrome-browser <its deviceId>")
+
+    # Without deviceIds in the listing there is none to give.
+    runner.answers["claude___chrome"] = listed(WORK_MAC, HOME_MAC)
+    assert "hunt chrome-browser" not in lines(machine)["chrome"]
+
+
+@pytest.mark.parametrize("local", ["not running", "not installed"])
+def test_the_browsers_to_name_are_listed_while_this_computers_chrome_is_not_connected(
+        tmp_path: Path, local: str) -> None:
+    from job_hunt.doctor import browsers_to_name
+
+    machine, runner = everything_ready(tmp_path)
+    # The PC's own extension is not connected; the browser to name runs on a Mac.
+    if local == "not running":
+        runner.answers["pgrep__f"] = (1, "")
+    else:
+        (machine.home / ".config/google-chrome/NativeMessagingHosts" / NATIVE_HOST).unlink()
+    runner.answers["claude___chrome"] = listed({**WORK_MAC, "deviceId": WORK_ID}, {**HOME_MAC, "deviceId": HOME_ID})
+
+    assert browsers_to_name(machine) == (True, f"connected now: Browser 1 (macOS, deviceId {WORK_ID}), Browser 2 "
+                                               f"(macOS, deviceId {HOME_ID})")
+    # The doctor's own line still makes the free checks first and runs no listing for them.
+    assert lines(machine)["chrome"].startswith("missing:")
+    assert len([command for command in runner.background if command[:2] == ["claude", "--chrome"]]) == 1
+
+
+def test_the_browsers_to_name_say_what_to_do_when_they_cannot_be_listed(tmp_path: Path) -> None:
+    from job_hunt.doctor import browsers_to_name
+
+    machine, runner = everything_ready(tmp_path)
+    runner.answers["claude___chrome"] = listed()
+    assert browsers_to_name(machine) == (True, "no browser is connected to Claude in Chrome")
+    for answer in (None, (1, "error"), (0, "I could not list them.")):
+        runner.answers["claude___chrome"] = answer
+        found, said = browsers_to_name(machine)
+        assert not found and said.startswith("Claude in Chrome did not say which browsers are connected")
+    machine = dataclasses.replace(machine, which=lambda name: None)
+    assert browsers_to_name(machine) == (False, "Claude in Chrome needs Claude Code first")
+
+
+def test_a_device_id_that_is_not_text_is_none(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    runner.answers["claude___chrome"] = listed({**this_computers(), "deviceId": 7}, {**HOME_MAC, "deviceId": 8})
+    # Without a browser named, the listing is read as before.
+    assert lines(machine)["chrome"] == ("ok: Claude in Chrome, connected in this computer's Chrome (Browser 3, "
+                                        "Linux); also connected: Browser 2 (macOS); workers never use them")
+    naming(machine, HOME_ID)
+    assert lines(machine)["chrome"].startswith(f"missing: the browser data/settings.json's chrome_browser ({HOME_ID}) "
+                                               "names is not connected")
+
+
+def test_hunt_doctor_exits_1_while_the_named_browser_is_not_connected(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    machine, runner = everything_ready(tmp_path)
+    naming(machine, HOME_ID)
+    monkeypatch.setattr(cli, "this_machine", lambda: machine)
+    runner.answers["claude___chrome"] = listed({**HOME_MAC, "deviceId": HOME_ID})
+    assert cli.main(["doctor"]) == 0
+    runner.answers["claude___chrome"] = listed({**WORK_MAC, "deviceId": WORK_ID})
+    assert cli.main(["doctor"]) == 1
+    assert f"missing  the browser data/settings.json's chrome_browser ({HOME_ID}) names" in capsys.readouterr().out

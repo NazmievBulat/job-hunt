@@ -1,44 +1,54 @@
-"""Applying: a resume for every picked job, then the company-site applications.
+"""Applying: a resume for every picked job, then the applications.
 
 `apply` is the coordinator. It starts one resume worker per picked job, all at once (`claude -p`
 with the `write-resume` skill), and moves each job to `resume_ready` once its `resume.pdf` is
 built. Then up to three company-site workers at once (`claude --chrome -p` with the `apply-site`
-skill) each apply to one job in a Chrome tab of their own and write `jobs/<id>/report.json`:
+skill), and beside them one LinkedIn worker for the Easy Apply jobs (`apply-linkedin`), one job
+after another under the LinkedIn lock (`linkedin_lock`), three to six minutes apart. Each
+applies to one job in a Chrome tab of its own and writes `jobs/<id>/report.json`:
 
     {"result": "applied"}
     {"result": "paused", "needs": "captcha" | "sign_in" | "question" | "check_sent", "question": "...",
      "tab": "...", "tab_id": 123}
     {"result": "paused", "needs": "chrome"}
     {"result": "failed", "reason": "..."}
+    {"result": "company_site", "link": "..."}    (the LinkedIn worker only)
 
-The coordinator saves each report as the job's state. A `failed` report counts against its job
+The LinkedIn worker takes every job applied to on LinkedIn: the Easy Apply jobs, and the
+company-site jobs whose link is still their LinkedIn page, which only LinkedIn can lead to the
+company's site. Its last report is for those, and for an Easy Apply job whose page sends to
+the company's site: the job becomes a company-site job applied to at that link, in the same
+run, with no try spent. The coordinator saves each report as the job's state. A `failed` report counts against its job
 (`JobsList.fail`): tried once more, then `failed`. A worker that stops or ends with no report it
 can be read by may have sent the application, so its job is paused for the user to look in
 Chrome (`UNSURE`) and never tried again on its own. Run again, it picks up from each job's state
 and never starts a second worker on a job that was being applied to. A resume worker sends
-nothing: one that fails counts against its job. Easy Apply jobs keep their resume for the
-LinkedIn worker.
+nothing: one that fails counts against its job.
 """
 
 from __future__ import annotations
 
 import fcntl
 import json
+import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from job_hunt.career import read_career, write_career
 from job_hunt.jobs import Job, JobsList, State
+from job_hunt.linkedin_lock import LinkedInLock
 from resume_kit.contracts.form_answers import asks_self_identification
 
 MODEL = "claude-sonnet-5-5"
 RESUME_SKILL = "write-resume"
 SITE_SKILL = "apply-site"
+LINKEDIN_SKILL = "apply-linkedin"
 SITE_WORKERS = 3
-# What a site worker may do in Chrome: open its own tab, read and fill the page, upload the
+# What a site or LinkedIn worker may do in Chrome: open its own tab, read and fill the page, upload the
 # resume. No tab is closed (a paused job's tab waits for the user) and no script is run.
 CHROME_TOOLS = tuple(f"mcp__claude-in-chrome__{name}" for name in (
     "tabs_context_mcp", "tabs_create_mcp", "navigate", "read_page", "get_page_text", "find", "form_input",
@@ -65,13 +75,15 @@ class AnswerError(ValueError):
 
 @dataclass(frozen=True)
 class Report:
-    result: Literal["applied", "paused", "failed"]
+    result: Literal["applied", "paused", "failed", "company_site"]
     needs: str | None = None
     question: str | None = None
     tab: str | None = None
     # The id Chrome's tools give the tab: two paused tabs may share a title.
     tab_id: int | None = None
     reason: str | None = None
+    # The company's site an Easy Apply job sends to.
+    link: str | None = None
 
     def pause_reason(self) -> str:
         if self.needs is None:
@@ -119,15 +131,24 @@ def resume_command(job: int, root: Path) -> list[str]:
 def site_command(job: Job, root: Path, paused: Report | None = None) -> list[str]:
     """With the report of the job's pause, the worker carries on in the tab it paused in, where
     the user just did what it needed, instead of starting again in a new one."""
+    return _chrome_command(SITE_SKILL, job, job.apply_link or job.link, root, paused)
+
+
+def linkedin_command(job: Job, root: Path, paused: Report | None = None) -> list[str]:
+    """As `site_command`, on the job's LinkedIn page."""
+    return _chrome_command(LINKEDIN_SKILL, job, _linkedin_page(job) or job.link, root, paused)
+
+
+def _chrome_command(skill: str, job: Job, link: str, root: Path, paused: Report | None) -> list[str]:
     folder = _folder(root, job.id)
-    arguments = {"job": job.id, "link": job.link, "title": job.title, "company": job.company,
+    arguments = {"job": job.id, "link": link, "title": job.title, "company": job.company,
                  "resume": str(folder / "resume.pdf"), "career": str(_career(root)),
                  "report": str(folder / "report.json")}
     # A pause with no tab (Chrome out of reach) starts again in a new one.
     if paused is not None and paused.tab is not None:
         arguments |= {"tab": paused.tab, "tab_id": paused.tab_id}
     return [
-        "claude", "--chrome", "-p", f"/{SITE_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
+        "claude", "--chrome", "-p", f"/{skill} {json.dumps(arguments, ensure_ascii=False)}",
         "--model", MODEL,
         "--allowedTools", ",".join([
             f"Read(/{folder}/**)", f"Read(/{_career(root)})", f"Edit(/{folder}/report.json)", *CHROME_TOOLS,
@@ -140,40 +161,79 @@ def _text(data: dict, name: str) -> str | None:
     return (" ".join(value.split()) or None) if isinstance(value, str) else None
 
 
-def read_report(path: Path) -> Report:
+def _on_linkedin(link: str) -> bool:
+    host = (urlsplit(link).hostname or "").lower()
+    return host == "linkedin.com" or host.endswith(".linkedin.com")
+
+
+def _linkedin_page(job: Job) -> str | None:
+    """The job's LinkedIn page, the one its link ended at first: a click-tracking link may lead
+    there. None once LinkedIn sent the job on to the company's site."""
+    if job.apply_link is not None:
+        return None
+    return next((link for link in (job.page_link, job.link) if link and _on_linkedin(link)), None)
+
+
+def _skill(job: Job) -> str:
+    """Which worker applies to the job: a company-site worker never uses LinkedIn, as it would
+    apply beside the LinkedIn worker."""
+    if job.kind == "easy_apply" or (job.kind == "company_site" and _linkedin_page(job)):
+        return LINKEDIN_SKILL
+    return SITE_SKILL
+
+
+def read_report(path: Path, skill: str = SITE_SKILL) -> Report:
     """The worker's report, or ApplyError naming what is wrong with it."""
     if not path.exists():
-        raise ApplyError(f"the {SITE_SKILL} run wrote no report")
+        raise ApplyError(f"the {skill} run wrote no report")
     try:
         data = json.loads(path.read_text())
     # Not UTF-8: cut off inside a character by a worker that stopped while writing it.
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise ApplyError(f"the {SITE_SKILL} run wrote a report that is not JSON: {error}") from error
-    if not isinstance(data, dict) or data.get("result") not in ("applied", "paused", "failed"):
-        raise ApplyError(f'the {SITE_SKILL} run wrote a report whose "result" is not applied, paused or failed')
+        raise ApplyError(f"the {skill} run wrote a report that is not JSON: {error}") from error
+    results = ("applied", "paused", "failed", "company_site") if skill == LINKEDIN_SKILL else ("applied", "paused", "failed")
+    if not isinstance(data, dict) or data.get("result") not in results:
+        raise ApplyError(f'the {skill} run wrote a report whose "result" is not {", ".join(results[:-1])} or {results[-1]}')
     if data["result"] == "applied":
         return Report("applied")
+    if data["result"] == "company_site":
+        link = data.get("link")
+        try:
+            parts = urlsplit(link := link.strip()) if isinstance(link, str) else None
+            address = parts is not None and parts.scheme in ("http", "https") and bool(parts.hostname)
+            # Read only to raise on a port that is not a number.
+            _ = parts is not None and parts.port
+        # A broken address, such as "https://[broken" or "https://example.com:abc".
+        except ValueError:
+            address = False
+        if not address:
+            raise ApplyError(f"the {skill} run sent the job to the company's site without its web address")
+        if _on_linkedin(link):
+            raise ApplyError(f"the {skill} run sent the job to the company's site with a LinkedIn address")
+        return Report("company_site", link=link)
     if data["result"] == "failed":
         if not (reason := _text(data, "reason")):
-            raise ApplyError(f"the {SITE_SKILL} run reported a failure without a reason")
+            raise ApplyError(f"the {skill} run reported a failure without a reason")
         return Report("failed", reason=reason)
     needs = data.get("needs")
     if not isinstance(needs, str) or needs not in NEEDS:
-        raise ApplyError(f'the {SITE_SKILL} run paused, but "needs" is not one of {", ".join(NEEDS)}')
+        raise ApplyError(f'the {skill} run paused, but "needs" is not one of {", ".join(NEEDS)}')
     if needs == "chrome":
         return Report("paused", needs=needs)
     if not (tab := _text(data, "tab")):
-        raise ApplyError(f"the {SITE_SKILL} run paused without naming the tab")
+        raise ApplyError(f"the {skill} run paused without naming the tab")
     tab_id = data.get("tab_id")
     if tab_id is not None and type(tab_id) is not int:
-        raise ApplyError(f'the {SITE_SKILL} run paused with a "tab_id" that is not a whole number')
+        raise ApplyError(f'the {skill} run paused with a "tab_id" that is not a whole number')
     question = _text(data, "question")
     if needs == "question" and not question:
-        raise ApplyError(f"the {SITE_SKILL} run paused on a question without the question")
+        raise ApplyError(f"the {skill} run paused on a question without the question")
     return Report("paused", needs=needs, question=question if needs == "question" else None, tab=tab, tab_id=tab_id)
 
 
-def apply(jobs: JobsList, root: Path, *, run_resume: Run, run_site: Run) -> Summary:
+def apply(
+    jobs: JobsList, root: Path, *, run_resume: Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock | None = None
+) -> Summary:
     (root / "jobs").mkdir(exist_ok=True)
     # One run at a time: two would start two workers on one job.
     with (root / "jobs" / "apply.lock").open("w") as lock:
@@ -184,7 +244,7 @@ def apply(jobs: JobsList, root: Path, *, run_resume: Run, run_site: Run) -> Summ
         summary = Summary()
         _left_applying(jobs, root, summary)
         _resumes(jobs, root, run_resume, summary)
-        _sites(jobs, root, run_site, summary)
+        _applications(jobs, root, run_site, run_linkedin, linkedin or LinkedInLock(root / "data"), summary)
         return summary
 
 
@@ -192,6 +252,8 @@ def _save(jobs: JobsList, job: int, report: Report, summary: Summary) -> State:
     if report.result == "applied":
         jobs.move(job, "applied")
         summary.applied += 1
+    elif report.result == "company_site":
+        jobs.to_company_site(job, report.link or "")
     elif report.result == "paused":
         jobs.move(job, "paused", report.pause_reason())
         summary.paused += 1
@@ -205,7 +267,7 @@ def _left_applying(jobs: JobsList, root: Path, summary: Summary) -> None:
     saved; without one the application may have been sent, so the user looks."""
     for job in jobs.in_states("applying"):
         try:
-            report = read_report(_folder(root, job.id) / "report.json")
+            report = read_report(_folder(root, job.id) / "report.json", _skill(job))
         except ApplyError:
             jobs.move(job.id, "paused", f"{UNSURE}: the last hunt apply stopped while applying")
             summary.paused += 1
@@ -244,9 +306,9 @@ def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
                 summary.failed += 1
 
 
-def _paused(report: Path) -> Report | None:
+def _paused(report: Path, skill: str) -> Report | None:
     try:
-        earlier = read_report(report)
+        earlier = read_report(report, skill)
     except ApplyError:
         return None
     return earlier if earlier.result == "paused" else None
@@ -256,43 +318,73 @@ def _unsure(error: ApplyError) -> Report:
     return Report("paused", reason=str(error))
 
 
-def _apply_on_site(job: Job, root: Path, run: Run, paused: Report | None) -> Report:
+def _apply_one(job: Job, root: Path, run: Run, paused: Report | None) -> Report:
+    skill = _skill(job)
     report = _folder(root, job.id) / "report.json"
+    command = linkedin_command if skill == LINKEDIN_SKILL else site_command
     try:
-        run(site_command(job, root, paused))
+        run(command(job, root, paused))
     except ApplyError as error:
         # A worker that wrote its report and then stopped badly still did what it reports: an
         # application it sent must not be sent again.
         try:
-            return read_report(report)
+            return read_report(report, skill)
         except ApplyError:
             return _unsure(error)
     try:
-        return read_report(report)
+        return read_report(report, skill)
     except ApplyError as error:
         return _unsure(error)
 
 
-def _sites(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
-    waiting = [job.id for job in jobs.in_states("resume_ready") if job.kind == "company_site"]
-    running: dict[Future[Report], int] = {}
+def _applications(jobs: JobsList, root: Path, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock,
+                  summary: Summary) -> None:
+    ready = jobs.in_states("resume_ready")
+    waiting: dict[str, list[int]] = {SITE_SKILL: [], LINKEDIN_SKILL: []}
+    for job in ready:
+        if job.kind in ("easy_apply", "company_site"):
+            waiting[_skill(job)].append(job.id)
+    running: dict[Future[Report], tuple[int, str]] = {}
+
+    def start(job: int, run: Run) -> None:
+        skill = _skill(jobs.get(job))
+        report = _folder(root, job) / "report.json"
+        paused = _paused(report, skill)
+        # Gone before the job is `applying`: a run stopped in between must not take an
+        # earlier try's report for this one's.
+        report.unlink(missing_ok=True)
+        jobs.move(job, "applying")
+        running[pool.submit(_apply_one, jobs.get(job), root, run, paused)] = (job, skill)
+
     # The jobs list is written here only, on this thread; the workers run the skills.
-    with ThreadPoolExecutor(max_workers=SITE_WORKERS) as pool:
-        while waiting or running:
-            while waiting and len(running) < SITE_WORKERS:
-                job = waiting.pop(0)
-                report = _folder(root, job) / "report.json"
-                paused = _paused(report)
-                # Gone before the job is `applying`: a run stopped in between must not take an
-                # earlier try's report for this one's.
-                report.unlink(missing_ok=True)
-                jobs.move(job, "applying")
-                running[pool.submit(_apply_on_site, jobs.get(job), root, run, paused)] = job
-            done, _ = wait(running, return_when=FIRST_COMPLETED)
-            for future in done:
-                job = running.pop(future)
-                if _save(jobs, job, future.result(), summary) == "resume_ready":
-                    waiting.append(job)
+    try:
+        with ThreadPoolExecutor(max_workers=SITE_WORKERS + 1) as pool:
+            while any(waiting.values()) or running:
+                sites = sum(skill == SITE_SKILL for _, skill in running.values())
+                while waiting[SITE_SKILL] and sites < SITE_WORKERS:
+                    start(waiting[SITE_SKILL].pop(0), run_site)
+                    sites += 1
+                # How long until the LinkedIn worker may start, when it waits for the lock. The
+                # lock alone keeps it to one; while this run's own applies, it is not asked.
+                later = None
+                if waiting[LINKEDIN_SKILL] and all(skill != LINKEDIN_SKILL for _, skill in running.values()):
+                    later = linkedin.take(waiting[LINKEDIN_SKILL][0])
+                    if later is None:
+                        start(waiting[LINKEDIN_SKILL].pop(0), run_linkedin)
+                if not running:
+                    time.sleep(later or 0)
+                    continue
+                done, _ = wait(running, timeout=later, return_when=FIRST_COMPLETED)
+                for future in done:
+                    job, skill = running.pop(future)
+                    if skill == LINKEDIN_SKILL:
+                        linkedin.release()
+                    if _save(jobs, job, future.result(), summary) == "resume_ready":
+                        waiting[_skill(jobs.get(job))].append(job)
+    finally:
+        # A run stopped while the LinkedIn worker applied still starts the pause, once the
+        # worker ended.
+        linkedin.release()
 
 
 def _paused_job(jobs: JobsList, job: int) -> Job:
@@ -324,7 +416,7 @@ def answer(jobs: JobsList, root: Path, job: int, text: str) -> Job:
     it again, and put the job back."""
     found = _paused_job(jobs, job)
     try:
-        report = read_report(_folder(root, job) / "report.json")
+        report = read_report(_folder(root, job) / "report.json", _skill(found))
     except ApplyError:
         report = None
     if report is None or report.needs != "question" or not report.question:

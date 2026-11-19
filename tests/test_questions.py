@@ -167,11 +167,14 @@ def test_an_approved_application_left_unfinished_waits(jobs: JobsList, tmp_path:
     assert "Unfinished applications (1): run hunt apply" in questions(jobs, tmp_path / "data")
 
 
-def test_an_easy_apply_resume_waiting_for_the_linkedin_worker_does_not(jobs: JobsList, tmp_path: Path) -> None:
-    job = jobs.add(_found(1), kind="easy_apply")
+@pytest.mark.parametrize("kind", ["company_site", "easy_apply"])
+def test_an_approved_application_with_its_resume_ready_waits(jobs: JobsList, tmp_path: Path, kind: str) -> None:
+    # hunt apply applies to both kinds, the Easy Apply ones through the LinkedIn worker.
+    job = jobs.add(_found(1), kind=kind)
     assert job is not None
     jobs.score(job, 7, "A reason.")
     jobs.move(job, "picked")
     jobs.move(job, "resume_ready")
 
-    assert not anything_waiting(jobs, tmp_path / "data")
+    assert anything_waiting(jobs, tmp_path / "data")
+    assert "Unfinished applications (1): run hunt apply" in questions(jobs, tmp_path / "data")

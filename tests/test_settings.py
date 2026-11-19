@@ -101,3 +101,14 @@ def test_pushover_keys_need_both_a_token_and_a_user(tmp_path: Path, pushover: ob
         read_settings(_write(tmp_path, {**GOOD, "pushover": pushover}))
     # The keys are never repeated in an error.
     assert "aExampleAppToken" not in str(refused.value)
+
+
+def test_the_summary_hour_is_18_unless_the_settings_give_another(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).summary_hour == 18
+    assert read_settings(_write(tmp_path, {**GOOD, "summary_hour": 20})).summary_hour == 20
+
+
+@pytest.mark.parametrize("summary_hour", [7, 6, 24, "18", True])
+def test_a_summary_hour_not_after_the_morning_hour_is_refused(tmp_path: Path, summary_hour: object) -> None:
+    with pytest.raises(SettingsError, match="summary_hour"):
+        read_settings(_write(tmp_path, {**GOOD, "summary_hour": summary_hour}))

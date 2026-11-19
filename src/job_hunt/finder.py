@@ -9,6 +9,10 @@ mailbox through the Gmail connector and to write one file:
                "email_id": "...", "email_date": "2026-11-17T07:04:00+00:00",
                "area": "<one of the settings' areas>" | null}]}
 
+Given `messages` (`replies.EmailMessages`), the same run also notes the recruiters' emails since
+the last time they were read (`"recruiter_emails"`, `"linkedin_notifications"`), which `replies`
+saves as threads to answer.
+
 Everything after that is this script: it drops jobs the list already has, titles that hold
 none of the settings' titles, and jobs the area and remote settings leave out, saves the rest
 as `new`, and saves each one's page as `jobs/<id>/posting.md`.
@@ -25,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, Protocol, get_args
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -46,6 +50,14 @@ PAGE_SECONDS = 20
 PAGE_BYTES = 5_000_000
 REMOTE_WORDS = {"remote": "remote", "hybrid": "hybrid", "on_site": "on site"}
 TEXT_FIELDS = ("link", "title", "company", "board", "email_id", "email_date")
+
+
+class Messages(Protocol):
+    """Where the recruiters' emails the run noted go (`replies.EmailMessages`)."""
+
+    def since(self, now: datetime) -> datetime: ...
+
+    def saved(self, data: dict, started: datetime) -> list[str]: ...
 
 
 class FinderError(RuntimeError):
@@ -249,8 +261,15 @@ def fetch_page(link: str) -> tuple[str, str]:
         return url, body.decode("utf-8", errors="replace")
 
 
-def skill_command(since: datetime, areas: list[str], out: Path) -> list[str]:
-    arguments = {"after": int(since.timestamp()), "since": since.isoformat(), "areas": areas, "out": str(out)}
+def skill_command(
+    since: datetime | None, areas: list[str], out: Path, messages_after: datetime | None = None
+) -> list[str]:
+    """Without `since` the run reads no job alerts; with `messages_after` it also notes the
+    recruiters' emails and LinkedIn's message notifications since then (`replies`)."""
+    arguments: dict[str, Any] = {"after": int(since.timestamp()) if since else None,
+                                 "since": since.isoformat() if since else None, "areas": areas, "out": str(out)}
+    if messages_after is not None:
+        arguments["messages_after"] = int(messages_after.timestamp())
     # A permission rule's path: `//` starts an absolute one, `./` one in the working folder.
     # Edit rules cover every tool that writes a file, the Write tool among them.
     write = f"Edit(/{out})" if out.is_absolute() else f"Edit(./{out})"
@@ -317,6 +336,7 @@ def find(
     run: Callable[[list[str]], None],
     fetch: Callable[[str], tuple[str, str]],
     clock: Callable[[], datetime] = _now,
+    messages: Messages | None = None,
 ) -> Summary:
     # One run at a time: two would write one jobs file, and one could save the other's jobs and
     # move the time the next run reads from past alerts it never saved.
@@ -325,7 +345,7 @@ def find(
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise FinderError("another hunt find is already running") from error
-        return _find(settings, jobs, jobs_folder, found, run=run, fetch=fetch, clock=clock)
+        return _find(settings, jobs, jobs_folder, found, run=run, fetch=fetch, clock=clock, messages=messages)
 
 
 def _find(
@@ -337,12 +357,13 @@ def _find(
     run: Callable[[list[str]], None],
     fetch: Callable[[str], tuple[str, str]],
     clock: Callable[[], datetime],
+    messages: Messages | None,
 ) -> Summary:
     started = clock()
     since = jobs.last_run() or started - FIRST_RUN
     # A file an earlier run left must not pass for this run's.
     found.unlink(missing_ok=True)
-    run(skill_command(since, settings.areas, found))
+    run(skill_command(since, settings.areas, found, messages.since(started) if messages else None))
     if not found.exists():
         raise FinderError(f"the {SKILL} run wrote no jobs file ({found})")
     emails, found_jobs, problems = read_found(found, settings)
@@ -358,5 +379,8 @@ def _find(
     for job in jobs.all():
         if job.state == "new" and not (jobs_folder / str(job.id) / "posting.md").exists():
             _write_posting(job, jobs_folder)
+    # After the jobs: a message about a job of this run is linked to it.
+    if messages is not None:
+        problems += messages.saved(json.loads(found.read_text()), started)
     jobs.finished_run(started)
     return Summary(emails, len(found_jobs), new, problems)

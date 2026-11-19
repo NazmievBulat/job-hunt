@@ -320,7 +320,8 @@ class Talks:
     def booked_in(self, source: str, conversation: str, now: datetime) -> Talk | None:
         """The latest call of a conversation whose time went to the calendar, or may have, and is
         still to come: its next message is not offered times again, and may confirm it while it
-        is `held`. A call that is over leaves the next round to be offered anew."""
+        is `held`, until the last time offered: the recruiter may pick any of them. A call that is
+        over leaves the next round to be offered anew."""
         row = self._db.execute(
             "SELECT thread FROM talks WHERE source = ? AND conversation = ?"
             " AND state IN ('holding', 'held', 'confirmed', 'unsure') ORDER BY thread DESC LIMIT 1",
@@ -328,7 +329,8 @@ class Talks:
         talk = None if row is None else self.get(row["thread"])
         if talk is None:
             return None
-        last = datetime.fromisoformat(talk.start) if talk.start else max(talk.times())
+        # A held event sits at the first time offered; only a confirmed one is at the call's time.
+        last = datetime.fromisoformat(talk.start) if talk.state == "confirmed" and talk.start else max(talk.times())
         return talk if last + LENGTH > now else None
 
     def held_before(self, talk: Talk) -> Talk | None:

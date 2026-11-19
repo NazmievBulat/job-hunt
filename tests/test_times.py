@@ -676,9 +676,39 @@ def test_a_call_that_is_over_leaves_the_next_round_to_be_offered(
     project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
 ) -> None:
     thread, calendar = _held(project, threads, jobs, clock)
+    # The last time offered, Monday 14:30, is over.
+    clock.now = _at(23, 15, 30)
+    _saved(threads, jobs, _email(4, text="Great call! Could we set up a second round?", date="2026-11-23T16:00:00-05:00"))
+
+    draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+
+    assert "offer" in calendar.tasks()
+
+
+def test_a_confirmed_call_that_is_over_leaves_the_next_round_to_be_offered(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    thread, calendar = _held(project, threads, jobs, clock)
+    Talks(project / "data" / "jobs.db").move(thread, "confirmed", start=_at(19, 10).isoformat())
     clock.now = _at(19, 10, 30)
     _saved(threads, jobs, _email(4, text="Great call! Could we set up a second round?", date="2026-11-19T11:00:00-05:00"))
 
     draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
 
     assert "offer" in calendar.tasks()
+
+
+def test_a_later_time_picked_after_the_first_is_over_confirms_the_held_event(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    thread, calendar = _held(project, threads, jobs, clock)
+    # Friday: Thursday 10:00, the time held, is over; Monday 14:30 is still to come.
+    clock.now = _at(20, 9)
+    _saved(threads, jobs, _email(5, text="Monday 2:30 works, let's talk then!", date="2026-11-20T08:30:00-05:00"))
+    calendar.chosen = "2026-11-23T14:30:00-05:00"
+
+    draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+
+    assert "offer" not in calendar.tasks()
+    assert calendar.events == {"e1": {"title": "Call with Example Labs about QA Engineer", "start": "2026-11-23T14:30"}}
+    assert Talks(project / "data" / "jobs.db").get(thread).state == "confirmed"

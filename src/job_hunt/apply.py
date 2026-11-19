@@ -355,17 +355,23 @@ class _Run:
     captcha: str
     clock: Callable[[], datetime]
     plan: Plan | None = None
-    # The settings' chrome_browser: the one browser the workers use, or None for this computer's.
-    browser: str | None = None
+    # The settings' chrome_browser, read again at each worker's start: a run spread over the day
+    # follows `hunt chrome-browser`, and never starts a worker in a browser named off meanwhile.
+    chrome: Callable[[], str | None] = lambda: None
+
+    @property
+    def browser(self) -> str | None:
+        """The one browser the workers use now, or None for this computer's Chrome."""
+        return self.chrome()
 
 
 def apply(
     jobs: JobsList, root: Path, *, run_resume: Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock | None = None,
     captcha: str = "ask", sleep: Callable[[float], None] = time.sleep, plan: Plan | None = None,
-    browser: str | None = None,
+    browser: str | None | Callable[[], str | None] = None,
 ) -> Summary:
     """Without a plan, only the limits of this module hold: no daily number, no spread, no end of
-    the day. `browser` is the settings' chrome_browser."""
+    the day. `browser` is the settings' chrome_browser, or what reads it at each worker's start."""
     (root / "jobs").mkdir(exist_ok=True)
     # One run at a time: two would start two workers on one job.
     with (root / "jobs" / "apply.lock").open("w") as lock:
@@ -381,7 +387,8 @@ def apply(
                                      " it takes the jobs put back within a minute") from error
                 time.sleep(0.05)
         summary = Summary()
-        this = _Run(jobs, root, summary, captcha, jobs.now, plan, browser)
+        this = _Run(jobs, root, summary, captcha, jobs.now, plan,
+                    browser if callable(browser) else lambda: browser)
         _left_applying(this)
         _resumes(jobs, root, run_resume, summary)
         # A run spread over the day takes the jobs picked meanwhile too, by a later morning run.
@@ -637,7 +644,9 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         """Start the job's worker; False when the job was moved meanwhile (skipped from the chat)."""
         skill = _skill(jobs.get(job))
         report = _folder(root, job) / "report.json"
-        paused = _paused(report, skill, this.browser)
+        # Read once: the worker is started in, and its report judged by, the same browser.
+        browser = this.browser
+        paused = _paused(report, skill, browser)
         # Gone before the job is `applying`: a run stopped in between must not take an
         # earlier try's report for this one's.
         report.unlink(missing_ok=True)
@@ -646,7 +655,7 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         except MoveError:
             return False
         jobs.started_on(host(jobs.get(job)) if skill == SITE_SKILL else LINKEDIN_HOST, job)
-        running[pool.submit(_apply_one, jobs.get(job), root, run, paused, this.browser)] = (job, skill)
+        running[pool.submit(_apply_one, jobs.get(job), root, run, paused, browser)] = (job, skill)
         return True
 
     # The jobs list is written here only, on this thread; the workers run the skills.

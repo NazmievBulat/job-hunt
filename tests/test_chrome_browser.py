@@ -248,8 +248,9 @@ def test_each_hunt_command_that_starts_a_browser_worker_passes_the_settings_brow
         hunt: Path, monkeypatch: pytest.MonkeyPatch, argv: list[str], step: str) -> None:
     given: list[str | None] = []
 
-    def started(*args: object, browser: str | None = None, **named: object) -> object:
-        given.append(browser)
+    def started(*args: object, browser: object = None, **named: object) -> object:
+        # hunt apply is given what reads the setting at each worker's start.
+        given.append(browser() if callable(browser) else browser)
         raise Started
 
     monkeypatch.setattr(cli, step, started)
@@ -261,6 +262,35 @@ def test_each_hunt_command_that_starts_a_browser_worker_passes_the_settings_brow
 
 
 # hunt apply takes only a report from the browser named
+
+
+def test_a_run_follows_the_setting_changed_while_it_runs(project: Path, jobs: JobsList) -> None:
+    # Two jobs on one site, started ten minutes apart: the setting is turned off in between.
+    one, two = _picked(jobs, 1), _picked(jobs, 2)
+    setting: list[str | None] = [HOME_MAC]
+    started: list[dict] = []
+
+    def site(command: list[str]) -> None:
+        arguments = _arguments(command)
+        folder = project / "jobs" / str(arguments["job"])
+        if "build" in arguments:
+            (folder / "resume.pdf").write_bytes(b"%PDF-1.4 stand-in")
+            return
+        started.append(arguments)
+        # Each worker selects the browser it was given, and its report names that one.
+        used = THE_NAMED if arguments.get("browser") else THIS_CHROME
+        (folder / "report.json").write_text(json.dumps({"result": "applied", "browser": used}))
+
+    def wait(seconds: float) -> None:
+        setting[0] = None
+        jobs._clock.advance(seconds=seconds)
+
+    apply(jobs, project, run_resume=site, run_site=site, run_linkedin=no_linkedin, sleep=wait,
+          browser=lambda: setting[0])
+
+    assert [(arguments["job"], arguments.get("browser")) for arguments in started] == [(one, HOME_MAC), (two, None)]
+    # Each report is judged by the browser its own worker was given.
+    assert [jobs.get(job).state for job in (one, two)] == ["applied", "applied"]
 
 
 def test_a_worker_is_started_with_the_browser_and_its_report_from_it_is_taken(project: Path, jobs: JobsList) -> None:

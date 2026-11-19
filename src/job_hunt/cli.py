@@ -349,7 +349,7 @@ def _apply(args: argparse.Namespace) -> int:
     try:
         summary = apply(JobsList(DATA / "jobs.db"), ROOT, run_resume=run_resume, run_site=run_site,
                         run_linkedin=run_linkedin, captcha=_captcha_setting(), plan=day_plan(),
-                        browser=chrome_browser())
+                        browser=chrome_browser)
     except ApplyError as error:
         print(f"hunt apply: {error}", file=sys.stderr)
         return 1

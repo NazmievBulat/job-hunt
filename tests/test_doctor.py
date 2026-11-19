@@ -231,6 +231,14 @@ def test_without_on_this_computer_the_one_local_browser_of_this_system_counts(tm
     assert lines(machine)["chrome"].startswith("missing: Claude in Chrome is not connected in this computer's")
 
 
+def test_a_listing_in_a_code_fence_is_read(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    # As Claude Haiku answered in a dry run on made-up browsers.
+    runner.answers["claude___chrome"] = (0, "```json\n" + json.dumps([WORK_MAC, this_computers()], indent=2) + "\n```\n")
+
+    assert lines(machine)["chrome"].startswith("ok: Claude in Chrome, connected in this computer's Chrome (Browser 3")
+
+
 @pytest.mark.parametrize("answer", [None, (1, "error"), (0, "I could not list them."), (0, '{"browsers": 3}')])
 def test_a_listing_that_cannot_be_read_is_missing(tmp_path: Path, answer: tuple[int, str] | None) -> None:
     machine, runner = everything_ready(tmp_path)

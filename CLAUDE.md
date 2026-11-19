@@ -74,6 +74,8 @@ asks.
 
 At the end of the day, when nothing is running and nothing waits, send one summary: applied,
 waiting for the user, failed and why, as `uv run hunt status` prints it.
+When a message says the day ends and CAPTCHAs waited all day (the watch's last run types it
+in), ask nothing: send that summary at once, with the CAPTCHAs it names, and stop.
 
 ## Rules
 

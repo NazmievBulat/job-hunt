@@ -259,8 +259,10 @@ PDF and the worker's report. A worker sees only its own folder and the career.
   watch` looks every 20 minutes during the day and has the chat ask once the user is free; the
   check never asks the user anything itself. All waiting CAPTCHAs come in one question. A job
   still on its CAPTCHA after two questions is failed, "the site asks for a CAPTCHA", to apply
-  by hand; one that waited all day is named in the end of the day's summary instead. With the
-  settings' `captcha` set to `skip`, none is asked: after its try again it is failed at once.
+  by hand; one that waited all day is named in the end of the day's summary instead, which the
+  watch's last run of the day (the 20 minutes before the summary hour) has the chat send, once.
+  With the settings' `captcha` set to `skip`, none is asked: after its try again it is failed
+  at once.
 - If Chrome is closed or the computer is asleep, applying waits and says so once. (Built so
   far: a worker that cannot reach Chrome pauses its job, which costs it no try.)
 - Everything is files on the computer. If a session or worker stops halfway, `hunt apply`

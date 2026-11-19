@@ -11,10 +11,12 @@ from pathlib import Path
 import pytest
 
 from job_hunt import cli
-from job_hunt.available import TELL_JOBS, Verdict, available, replied, watch_jobs
+from job_hunt.available import TELL_JOBS, Verdict, available, day_ends, day_summary, replied, watch_jobs
 from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.morning import FIRST_MESSAGE, hook_settings, session_command
+from job_hunt.questions import on_captcha
 from job_hunt.settings import Settings
+from job_hunt.watch import in_hours
 from movable_clock import MovableClock
 
 # Taken before the tests' stand-in replaces it (conftest.py).
@@ -177,10 +179,14 @@ def jobs(tmp_path: Path, clock: MovableClock) -> JobsList:
 
 class Tell:
     def __init__(self) -> None:
-        self.times = 0
+        self.texts: list[str] = []
 
-    def __call__(self) -> None:
-        self.times += 1
+    def __call__(self, text: str) -> None:
+        self.texts.append(text)
+
+    @property
+    def times(self) -> int:
+        return len(self.texts)
 
 
 def test_waiting_captchas_are_told_at_once_when_free_and_held_otherwise(tmp_path: Path, jobs: JobsList) -> None:
@@ -209,6 +215,45 @@ def test_a_captcha_told_is_not_told_again_for_an_hour_and_never_once_asked(
     jobs.asked(job)
     clock.advance(hours=2)
     watch_jobs(jobs, tmp_path, verdict=free, tell=tell)
+    assert tell.times == 2
+
+
+def test_a_captcha_held_all_day_is_told_once_by_the_last_watch_of_the_day(
+        tmp_path: Path, jobs: JobsList, clock: MovableClock) -> None:
+    _job(jobs, 1)
+    tell, away = Tell(), lambda: Verdict(False, "you are away from the computer")
+    clock.now = datetime(2026, 11, 18, 7, 0, tzinfo=UTC)
+    # The watch's runs, every 20 minutes from the morning hour to the summary hour, and on.
+    while clock.now.hour < 20:
+        if in_hours(clock.now, SETTINGS):
+            watch_jobs(jobs, tmp_path, verdict=away, tell=tell, ends=day_ends(clock.now, SETTINGS))
+        clock.advance(seconds=20 * 60)
+    assert tell.texts == [day_summary(on_captcha(jobs))]
+    assert "Example Co 1" in tell.texts[0]
+    # The chat sends the summary from `hunt status`; the hook keeps no reply for it.
+    replied(json.dumps({"prompt": tell.texts[0]}), tmp_path, clock.now, automatic=(TELL_JOBS,))
+    assert not (tmp_path / "chat-reply").exists()
+
+
+def test_the_last_watch_tells_no_summary_for_a_captcha_already_asked_or_on_a_day_without_one(
+        tmp_path: Path, jobs: JobsList, clock: MovableClock) -> None:
+    tell, away = Tell(), lambda: Verdict(False, "you are away from the computer")
+    clock.now = datetime(2026, 11, 18, 17, 40, tzinfo=UTC)
+    assert day_ends(clock.now, SETTINGS) == "2026-11-18"
+    assert day_ends(clock.now - timedelta(seconds=60), SETTINGS) is None
+    watch_jobs(jobs, tmp_path, verdict=away, tell=tell, ends=day_ends(clock.now, SETTINGS))
+    jobs.asked(_job(jobs, 1))
+    watch_jobs(jobs, tmp_path, verdict=away, tell=tell, ends=day_ends(clock.now, SETTINGS))
+    assert tell.texts == []
+
+
+def test_a_captcha_held_two_days_is_in_each_day_s_summary(
+        tmp_path: Path, jobs: JobsList, clock: MovableClock) -> None:
+    _job(jobs, 1)
+    tell, away = Tell(), lambda: Verdict(False, "you are away from the computer")
+    for day in (18, 19):
+        clock.now = datetime(2026, 11, day, 17, 40, tzinfo=UTC)
+        watch_jobs(jobs, tmp_path, verdict=away, tell=tell, ends=day_ends(clock.now, SETTINGS))
     assert tell.times == 2
 
 
@@ -345,3 +390,29 @@ def test_a_failing_jobs_part_of_the_watch_leaves_the_messages_part_running(
     assert messages == [1, 1]
     # Told once, not every 20 minutes.
     assert (hunt / "data" / "morning.log").read_text().count("hunt watch jobs: disk full") == 1
+
+
+def test_hunt_watch_tells_the_day_s_summary_at_its_last_run(
+        hunt: Path, monkeypatch: pytest.MonkeyPatch, told) -> None:  # type: ignore[no-untyped-def]
+    _captcha_waits(hunt)
+    monkeypatch.setattr(cli, "watch", lambda *args, **kwargs: "")
+    monkeypatch.setattr(cli, "hold_times", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "in_hours", lambda now, settings: True)
+    monkeypatch.setattr(cli, "day_ends", lambda now, settings: None)
+    assert cli.main(["watch"]) == 0
+    assert told.texts == []
+    monkeypatch.setattr(cli, "day_ends", lambda now, settings: "2026-11-18")
+    assert cli.main(["watch"]) == 0
+    assert cli.main(["watch"]) == 0
+    assert told.texts == [day_summary(on_captcha(JobsList(hunt / "data" / "jobs.db")))]
+
+
+def test_a_session_the_watch_starts_opens_with_what_it_was_told(tmp_path: Path) -> None:
+    from job_hunt.watch import tell_session
+
+    started: list[tuple[Path, str]] = []
+    gone = lambda command: subprocess.CompletedProcess(command, 1, "", "")  # noqa: E731
+    tell_session(tmp_path, run=gone, start=lambda root, text: started.append((root, text)), text="The day ends")
+    assert started == [(tmp_path, "The day ends")]
+    assert session_command(tmp_path, message="The day ends")[-1] == "The day ends"
+    assert session_command(tmp_path)[-1] == FIRST_MESSAGE

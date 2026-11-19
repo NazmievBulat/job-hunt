@@ -18,7 +18,7 @@ from pathlib import Path
 from job_hunt.apply import (
     LINKEDIN_SKILL, NEEDS, RESUME_SKILL, SITE_SKILL, AnswerError, skip_captchas, ApplyError, answer, apply, applied, resume_job,
 )
-from job_hunt.available import TELL_JOBS, Verdict, available, replied, run_quietly, watch_jobs
+from job_hunt.available import TELL_JOBS, Verdict, available, day_ends, replied, run_quietly, watch_jobs
 from job_hunt.career import (
     STANDING, Career, CareerError, career_from_export, career_from_resume, career_lock, read_career,
     resume_text, with_ready_answers, write_career,
@@ -609,7 +609,8 @@ def _watch_jobs(jobs: JobsList, settings: Settings) -> None:
     try:
         if settings.captcha == "skip":
             skip_captchas(jobs)
-        said = watch_jobs(jobs, DATA, verdict=verdict, tell=lambda: tell_session(ROOT, text=TELL_JOBS))
+        said = watch_jobs(jobs, DATA, verdict=verdict, tell=lambda text: tell_session(ROOT, text=text),
+                          ends=day_ends(datetime.now(zone(settings)), settings))
     except (ReplyError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         _told_once("hunt watch jobs", error)
         return

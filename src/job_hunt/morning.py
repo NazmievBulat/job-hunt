@@ -142,16 +142,17 @@ def hook_settings(root: Path) -> str:
                                                                   "timeout": 10}]}]}})
 
 
-def session_command(root: Path) -> list[str]:
+def session_command(root: Path, message: str = FIRST_MESSAGE) -> list[str]:
     # The prompt comes last, after an option that takes one value: --allowedTools takes many.
     return ["tmux", "new-session", "-d", "-s", SESSION, "-c", str(root),
             "claude", "--allowedTools", TOOLS, "--remote-control", SESSION, "--name", SESSION,
-            "--settings", hook_settings(root), FIRST_MESSAGE]
+            "--settings", hook_settings(root), message]
 
 
-def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None] = time.sleep) -> None:
-    """End yesterday's session and start today's, then keep its Remote Control link in
-    `data/session.json` for the pushes, when the session shows one within `LINK_SECONDS`."""
+def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None] = time.sleep,
+                  message: str = FIRST_MESSAGE) -> None:
+    """End yesterday's session and start today's with `message`, then keep its Remote Control
+    link in `data/session.json` for the pushes, when the session shows one within `LINK_SECONDS`."""
     data, jobs = root / "data", root / "jobs"
     data.mkdir(exist_ok=True)
     jobs.mkdir(exist_ok=True)
@@ -160,7 +161,7 @@ def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None]
         fcntl.flock(lock, fcntl.LOCK_EX)
         run(["tmux", "kill-session", "-t", TARGET])
         (data / "session.json").unlink(missing_ok=True)
-        started = run(session_command(root))
+        started = run(session_command(root, message))
     if started.returncode != 0:
         said = (started.stderr.strip() or started.stdout.strip() or f"exit {started.returncode}").splitlines()[-1]
         raise RuntimeError(f"tmux could not start the {SESSION} session: {said}")

@@ -110,10 +110,11 @@ def _watch(threads: Threads, jobs: JobsList, data: Path, settings: Settings, che
 
 
 def tell_session(root: Path, *, run: Callable[[list[str]], subprocess.CompletedProcess[str]] = tmux,
-                 start: Callable[[Path], None] = start_session, text: str = TELL) -> None:
-    """Have the chat ask: typed into today's session, or a session started when none runs."""
+                 start: Callable[[Path, str], None] = lambda root, text: start_session(root, message=text),
+                 text: str = TELL) -> None:
+    """Have the chat ask: typed into today's session, or a session started with it when none runs."""
     if run(["tmux", "has-session", "-t", TARGET]).returncode != 0:
-        start(root)
+        start(root, text)
         return
     pane = f"{TARGET}:"
     typed = run(["tmux", "send-keys", "-t", pane, "-l", text])

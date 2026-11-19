@@ -32,6 +32,7 @@ from pathlib import Path
 
 from job_hunt.jobs import Job, JobsList
 from job_hunt.settings import Settings
+from job_hunt.timer import WATCH_MINUTES
 
 IDLE = timedelta(minutes=3)
 REPLY = timedelta(minutes=10)
@@ -108,6 +109,9 @@ def replied(hook_input: str, data: Path, now: datetime, automatic: Sequence[str]
         return
     if not isinstance(prompt, str) or prompt.strip() in {text.strip() for text in automatic}:
         return
+    if prompt.strip().startswith(SUMMARY):
+        # The watch's end of the day names the jobs, so it is known by its start.
+        return
     data.mkdir(parents=True, exist_ok=True)
     (data / REPLIED).write_text(now.isoformat() + "\n")
 
@@ -164,6 +168,9 @@ TOLD = "jobs.told"
 # A CAPTCHA the chat was told of, but did not ask about (the person was gone again when it
 # looked), is told again after this long.
 RETELL = timedelta(hours=1)
+# The watch's last run of the day: from this long before the summary hour (`timer`'s runs).
+LAST = timedelta(minutes=60 - max(WATCH_MINUTES))
+SUMMARY = "The day ends, and CAPTCHAs waited all day for you, as you were not free:"
 TELL_JOBS = ("Applications wait for you or may go on now. Run `uv run hunt questions` and ask what is new, "
              "as CLAUDE.md says.")
 
@@ -175,10 +182,25 @@ def _told(data: Path) -> dict[str, datetime]:
         return {}
 
 
-def watch_jobs(jobs: JobsList, data: Path, *, verdict: Callable[[], Verdict], tell: Callable[[], None]) -> str:
+def day_ends(now: datetime, settings: Settings) -> str | None:
+    """The day, when `now` is the watch's last run of it."""
+    end = now.replace(hour=settings.summary_hour, minute=0, second=0, microsecond=0)
+    return now.date().isoformat() if end - LAST <= now < end else None
+
+
+def day_summary(waiting: Sequence[Job]) -> str:
+    named = "; ".join(" ".join(f"{job.title} at {job.company}".split()) for job in waiting)
+    return (f"{SUMMARY} {named}. Run `uv run hunt status` and send the end of the day's summary, "
+            "as CLAUDE.md says.")
+
+
+def watch_jobs(jobs: JobsList, data: Path, *, verdict: Callable[[], Verdict], tell: Callable[[str], None],
+               ends: str | None = None) -> str:
     """Run by `hunt watch`: have the chat ask, once, when a job's try again or the next day of
     its site has come (`hunt questions` lists it as unfinished), or when CAPTCHAs wait and the
-    person is free. Return what to print ("" when there was nothing to tell)."""
+    person is free. At the day's last run (`ends`, the day), CAPTCHAs never asked go into the
+    end of the day's summary instead, once. Return what to print ("" when there was nothing to
+    tell)."""
     # Imported here: `questions` reads this module's verdicts.
     from job_hunt.questions import on_captcha
 
@@ -189,11 +211,11 @@ def watch_jobs(jobs: JobsList, data: Path, *, verdict: Callable[[], Verdict], te
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return ""
-        return _watch_jobs(jobs, data, verdict, tell, on_captcha(jobs))
+        return _watch_jobs(jobs, data, verdict, tell, on_captcha(jobs), ends)
 
 
-def _watch_jobs(jobs: JobsList, data: Path, verdict: Callable[[], Verdict], tell: Callable[[], None],
-                waiting: list[Job]) -> str:
+def _watch_jobs(jobs: JobsList, data: Path, verdict: Callable[[], Verdict], tell: Callable[[str], None],
+                waiting: list[Job], ends: str | None) -> str:
     now = jobs.now()
     told = _told(data)
     due = [f"due {job.id} {job.not_before}" for job in jobs.in_states("resume_ready")
@@ -204,16 +226,25 @@ def _watch_jobs(jobs: JobsList, data: Path, verdict: Callable[[], Verdict], tell
     if fresh and (said := verdict()).ask:
         telling += fresh
     if telling:
-        tell()
-    # Only what still waits is kept.
-    kept = {key: told[key] for key in due + captchas if key in told} | dict.fromkeys(telling, now)
+        tell(TELL_JOBS)
+    # Asked now, they need no summary; the chat may still find the person gone, as any day.
+    unasked = [job for job in waiting if not job.asked]
+    summary = f"summary {ends}"
+    summing = (ends is not None and bool(unasked) and summary not in told
+               and not any(key.startswith("captcha") for key in telling))
+    if summing:
+        tell(day_summary(unasked))
+    # Only what still waits is kept, and today's summary.
+    kept = ({key: told[key] for key in [*due, *captchas, summary] if key in told} | dict.fromkeys(telling, now)
+            | ({summary: now} if summing else {}))
     (data / TOLD).write_text(json.dumps({key: when.isoformat() for key, when in kept.items()}) + "\n")
-    if not telling:
-        return ""
     reasons = []
     if count := sum(key.startswith("due") for key in telling):
         reasons.append(f"{count} applications may go on" if count > 1 else "1 application may go on")
     if count := sum(key.startswith("captcha") for key in telling):
         reasons.append(f"{count} CAPTCHAs wait and {said.reason}" if count > 1 else
                        f"1 CAPTCHA waits and {said.reason}")
-    return "told the chat: " + "; ".join(reasons)
+    if summing:
+        reasons.append(f"the day ends with {len(unasked)} CAPTCHAs never asked" if len(unasked) > 1 else
+                       "the day ends with 1 CAPTCHA never asked")
+    return "told the chat: " + "; ".join(reasons) if reasons else ""

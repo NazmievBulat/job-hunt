@@ -58,7 +58,7 @@ from job_hunt.jobs import JobsList, clean_link
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.questions import log_failure
 from job_hunt.settings import SettingsError, read_settings
-from job_hunt.times import SKILL as TIMES_SKILL, Talks, TimesError, confirm, hold, offer_command, read_offer
+from job_hunt.times import UNSURE as TIMES_UNSURE, Talks, TimesError, confirm, hold, offer_command, read_offer
 from job_hunt.times import working_days, zone
 
 DRAFT_SKILL = "draft-reply"
@@ -579,9 +579,10 @@ def _draft_replies(threads: Threads, root: Path, run: Run, fetch: Callable[[str]
         _write(here / "message.md", _message_file(thread))
         _save_posting(thread, root, fetch)
         (here / "reply.json").unlink(missing_ok=True)
-        held = talks.held_in(thread.source, thread.conversation)
+        booked = talks.booked_in(thread.source, thread.conversation)
+        held = booked if booked is not None and booked.state == "held" else None
         try:
-            if thread.asks_to_talk and held is None:
+            if thread.asks_to_talk and booked is None:
                 drafted += _offer(threads, talks, root, threads.get(thread.id), run, clock)
                 continue
             run(draft_command(threads.get(thread.id), root, held.times() if held else None))
@@ -642,7 +643,17 @@ def offer_times(threads: Threads, root: Path, thread: int, *, run: Run,
 
 def hold_times(threads: Threads, root: Path, *, run: Run, clock: Callable[[], datetime] = _now) -> list[str]:
     """Hold in the calendar the first time of each offer whose reply went out; return the times held."""
+    # One holding run at a time, the watch's and send-reply's: with the lock, a talk still
+    # `holding` is a run's that died, and its event may have been added.
+    with _locked(root / "data" / "hold.lock"):
+        return _hold_times(threads, root, run, clock)
+
+
+def _hold_times(threads: Threads, root: Path, run: Run, clock: Callable[[], datetime]) -> list[str]:
     talks = Talks(root / "data" / "jobs.db", clock=clock)
+    for talk in talks.in_states("holding"):
+        talks.move(talk.thread, "unsure", f"{TIMES_UNSURE}: the run stopped while adding it")
+        log_failure(root / "data", "hunt send-reply", f"{talk.title} needs {TIMES_UNSURE}", clock)
     held: list[str] = []
     for talk in talks.in_states("offered"):
         if threads.get(talk.thread).state != "sent":
@@ -685,6 +696,8 @@ def edit_reply(threads: Threads, root: Path, thread: int, text: str) -> Thread:
     if not (text := text.strip()):
         raise ReplyError("the reply is empty")
     threads.edited(thread, text)
+    # The times of a changed offer are no longer known: nothing is held on its yes.
+    Talks(root / "data" / "jobs.db").forget(thread)
     _write(folder(root, thread) / "reply.md", text + "\n")
     return threads.get(thread)
 

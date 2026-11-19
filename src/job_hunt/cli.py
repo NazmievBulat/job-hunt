@@ -310,6 +310,8 @@ def _watch_linkedin() -> int | None:
 def _watch(args: argparse.Namespace) -> int:
     jobs, threads = JobsList(DATA / "jobs.db"), Threads(DATA / "jobs.db")
     try:
+        # An offer the person said yes to whose hold failed is tried again, also when nothing is new.
+        hold_times(threads, ROOT, run=run_draft)
         said = watch(threads, jobs, DATA, read_settings(DATA / "settings.json"), check=run_check,
                      read_linkedin=_watch_linkedin, draft=draft_step, tell=lambda told: tell_session(ROOT))
     except (SettingsError, ReplyError, RuntimeError, OSError, subprocess.SubprocessError) as error:

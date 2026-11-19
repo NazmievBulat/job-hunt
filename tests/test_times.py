@@ -480,3 +480,151 @@ def test_the_draft_runs_are_named_by_their_skill(monkeypatch: pytest.MonkeyPatch
     cli.run_draft(["claude", "-p", '/draft-reply {"thread": 1}'])
 
     assert named == ["offer-times", "draft-reply"]
+
+
+# What the reviews found
+
+
+def _offered(project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, **change: object) -> int:
+    thread, = _saved(threads, jobs, _email(**change))
+    draft_replies(threads, project, run=Calendar(offer=["2026-11-19T10:00:00-05:00", "2026-11-23T14:30:00-05:00"]),
+                  fetch=no_fetch, clock=clock)
+    return thread
+
+
+def test_an_offer_changed_by_hand_holds_nothing_on_its_yes(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    from job_hunt.replies import edit_reply
+
+    thread = _offered(project, threads, jobs, clock)
+    edit_reply(threads, project, thread, "Thanks, but I am no longer looking. Ada")
+    calendar = Calendar()
+
+    assert "Times offered" not in questions(jobs, project / "data", threads)
+    _send(threads, project, thread, calendar)
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+
+    assert calendar.events == {} and "resume" not in calendar.sent[0]
+
+
+def test_a_skipped_offer_is_never_held(project: Path, threads: Threads, jobs: JobsList, clock: MovableClock) -> None:
+    from job_hunt.replies import skip_reply
+
+    thread = _offered(project, threads, jobs, clock)
+    skip_reply(threads, thread)
+    calendar = Calendar()
+
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+
+    assert calendar.ran == []
+
+
+def test_an_offer_another_run_took_is_not_held_twice(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    from job_hunt.times import hold
+
+    thread = _offered(project, threads, jobs, clock)
+    _send(threads, project, thread, Calendar())
+    # Two runs read it `offered`; the second claims it after the first did.
+    first, second = Talks(project / "data" / "jobs.db"), Talks(project / "data" / "jobs.db")
+    assert first.claim(thread)
+    calendar = Calendar()
+
+    with pytest.raises(TimesError, match="no offer waiting"):
+        hold(second, thread, NEW_YORK, project / "event.json", calendar)
+    assert calendar.ran == []
+
+
+def test_a_hold_left_by_a_run_that_died_is_told_and_never_added_again(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    thread = _offered(project, threads, jobs, clock)
+    _send(threads, project, thread, Calendar())
+    assert Talks(project / "data" / "jobs.db").claim(thread)
+    calendar = Calendar()
+
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+
+    assert calendar.ran == [] and Talks(project / "data" / "jobs.db").get(thread).state == "unsure"
+    assert "needs a look in Google Calendar whether it was added" in questions(jobs, project / "data", threads)
+
+
+def test_a_hold_stopped_in_the_middle_is_unsure(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    thread = _offered(project, threads, jobs, clock)
+    _send(threads, project, thread, Calendar())
+
+    def stopped(command: list[str]) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.hold_times(threads, project, run=stopped, clock=clock)
+    assert Talks(project / "data" / "jobs.db").get(thread).state == "unsure"
+
+
+def test_the_watch_tries_a_failed_hold_again_when_nothing_is_new(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    thread = _offered(project, threads, jobs, clock)
+    _send(threads, project, thread, Calendar())
+    cli.hold_times(threads, project, run=Calendar(hold={"result": "failed", "reason": "busy server"}), clock=clock)
+    calendar = Calendar()
+    monkeypatch.setattr(cli, "ROOT", project)
+    monkeypatch.setattr(cli, "DATA", project / "data")
+    monkeypatch.setattr(cli, "run_draft", calendar)
+    monkeypatch.setattr(cli, "watch", lambda *args, **kwargs: None)
+
+    assert cli.main(["watch"]) == 0
+
+    assert calendar.tasks() == ["hold"] and Talks(project / "data" / "jobs.db").get(thread).state == "held"
+
+
+@pytest.mark.parametrize("then", ["confirmed", "unsure"])
+def test_a_conversation_with_a_call_booked_is_not_offered_times_again(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, then: str
+) -> None:
+    thread, calendar = _held(project, threads, jobs, clock)
+    Talks(project / "data" / "jobs.db").move(thread, then)
+    answer, = _saved(threads, jobs, _email(3, text="Looking forward to our call!"))
+
+    draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+
+    assert "offer" not in calendar.tasks()
+    skill, arguments = [run for run in calendar.ran if run[0] == DRAFT_SKILL][-1]
+    assert arguments["thread"] == answer and "offered_times" not in arguments
+
+
+def test_a_picked_time_with_no_offset_is_read_in_the_persons_zone(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    thread, calendar = _held(project, threads, jobs, clock)
+    _saved(threads, jobs, _email(2, text="Monday 2:30 works"))
+    calendar.chosen = "2026-11-23T14:30:00"
+
+    draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+
+    assert Talks(project / "data" / "jobs.db").get(thread).state == "confirmed"
+
+
+def test_an_offer_on_linkedin_goes_out_with_the_resume_to_upload(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    from job_hunt.replies import send_command
+
+    (project / "jobs" / "1" / "resume.pdf").write_bytes(b"%PDF-1.4 Ada Example")
+    found, _ = read_messages({"linkedin_messages": [{
+        "conversation": "https://www.linkedin.com/messaging/thread/9/", "from": "Sam Recruiter",
+        "text": "Can we talk?", "date": "2026-11-18T06:40:00-05:00", "job_link": "https://jobs.example.com/1",
+        "company": "Example Labs", "asks_to_talk": True}]})
+    thread = threads.save(found[0], jobs)
+    draft_replies(threads, project, run=Calendar(offer=["2026-11-19T10:00:00-05:00", "2026-11-23T14:30:00-05:00"]),
+                  fetch=no_fetch, clock=clock)
+
+    command = send_command(threads.get(thread), "Glad to talk", project)
+
+    skill, arguments = _arguments(command)
+    assert arguments["resume"] == str(project / "jobs" / "1" / "resume.pdf") and "resume_base64" not in arguments
+    assert "mcp__claude-in-chrome__file_upload" in command[command.index("--allowedTools") + 1]

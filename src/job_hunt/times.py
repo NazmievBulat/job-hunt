@@ -281,8 +281,7 @@ class Talks:
         """Keep the times a reply offers; an offer made again before the yes replaces them, and an
         offer of no time (the calendar was full) forgets them."""
         if not times:
-            with self._db:
-                self._db.execute("DELETE FROM talks WHERE thread = ? AND state = 'offered'", (thread,))
+            self.forget(thread)
             return
         with self._db:
             self._db.execute(
@@ -293,6 +292,17 @@ class Talks:
                 (thread, source, conversation, title, json.dumps([when.isoformat() for when in times]),
                  self._clock().isoformat()))
 
+    def forget(self, thread: int) -> None:
+        """Drop an offer not yet held: the reply that offered it was changed by hand."""
+        with self._db:
+            self._db.execute("DELETE FROM talks WHERE thread = ? AND state = 'offered'", (thread,))
+
+    def claim(self, thread: int) -> bool:
+        """Mark an offer `holding`, unless another run took it first."""
+        with self._db:
+            return self._db.execute("UPDATE talks SET state = 'holding', updated_at = ? WHERE thread = ?"
+                                    " AND state = 'offered'", (self._clock().isoformat(), thread)).rowcount == 1
+
     def get(self, thread: int) -> Talk | None:
         row = self._db.execute("SELECT * FROM talks WHERE thread = ?", (thread,)).fetchone()
         return None if row is None else Talk(**{field.name: row[field.name] for field in fields(Talk)})
@@ -302,11 +312,13 @@ class Talks:
         rows = self._db.execute(f"SELECT thread FROM talks WHERE state IN ({marks}) ORDER BY thread", states)
         return [talk for row in rows if (talk := self.get(row["thread"])) is not None]
 
-    def held_in(self, source: str, conversation: str) -> Talk | None:
-        """The held event of a conversation, which its next message may confirm."""
+    def booked_in(self, source: str, conversation: str) -> Talk | None:
+        """The latest call of a conversation whose time went to the calendar, or may have: its
+        next message is not offered times again, and may confirm it while it is `held`."""
         row = self._db.execute(
-            "SELECT thread FROM talks WHERE source = ? AND conversation = ? AND state = 'held'"
-            " ORDER BY thread DESC LIMIT 1", (source, conversation)).fetchone()
+            "SELECT thread FROM talks WHERE source = ? AND conversation = ?"
+            " AND state IN ('holding', 'held', 'confirmed', 'unsure') ORDER BY thread DESC LIMIT 1",
+            (source, conversation)).fetchone()
         return None if row is None else self.get(row["thread"])
 
     def _set(self, thread: int, **values: object) -> None:
@@ -332,11 +344,10 @@ class Talks:
 def hold(talks: Talks, thread: int, where: tzinfo, out: Path, run: Run) -> Talk:
     """Add the first time offered to the calendar as held, once: the person said yes to the reply."""
     talk = talks.get(thread)
-    if talk is None or talk.state != "offered":
+    if talk is None or not talks.claim(thread):
         raise TimesError(f"thread {thread} has no offer waiting to be held")
     start = talk.times()[0]
     out.unlink(missing_ok=True)
-    talks.move(thread, "holding")
     try:
         run(event_command("hold", talk, start, where, out))
     except Exception as error:

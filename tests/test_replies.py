@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import threading
 from datetime import UTC, datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from job_hunt.replies import (
 from job_hunt.settings import Settings
 from job_hunt.watch import linkedin_due, watch
 from movable_clock import MovableClock
+from only_named_tools import assert_only_named_tools
 
 # A local time zone of its own, so "the morning hour" does not depend on the machine's.
 LOCAL = timezone(timedelta(hours=-5))
@@ -254,6 +256,7 @@ def test_the_drafter_may_only_write_its_reply_and_reads_its_folder_the_career_an
 
     tools = draft_command(threads.get(email), project)
     allowed = tools[tools.index("--allowedTools") + 1].split(",")
+    assert_only_named_tools(tools)
     assert f"Edit(/{folder}/reply.json)" in allowed
     assert f"Read(/{project}/jobs/{job}/**)" in allowed
     assert "mcp__claude_ai_Gmail__create_draft" in allowed
@@ -261,6 +264,7 @@ def test_the_drafter_may_only_write_its_reply_and_reads_its_folder_the_career_an
 
     tools = draft_command(threads.get(linkedin), project)
     allowed = tools[tools.index("--allowedTools") + 1].split(",")
+    assert_only_named_tools(tools)
     assert not any(tool.startswith("mcp__") for tool in allowed)
 
 
@@ -404,6 +408,8 @@ def test_the_sender_gets_only_the_tools_of_its_channel(project: Path, threads: T
     linkedin_tools = send_command(threads.get(linkedin), "Hi", project)
 
     assert "--chrome" not in email_tools and "--chrome" in linkedin_tools
+    assert_only_named_tools(email_tools)
+    assert_only_named_tools(linkedin_tools)
     assert "mcp__claude_ai_Gmail__reply" in email_tools[email_tools.index("--allowedTools") + 1]
     assert "Gmail" not in linkedin_tools[linkedin_tools.index("--allowedTools") + 1]
 
@@ -416,6 +422,7 @@ def test_the_linkedin_reader_has_no_tool_that_types_or_clicks(tmp_path: Path) ->
     command = read_command(datetime(2026, 11, 18, tzinfo=UTC), tmp_path / "out.json")
     tools = command[command.index("--allowedTools") + 1].split(",")
     assert "mcp__claude-in-chrome__navigate" in tools
+    assert_only_named_tools(command)
     assert "mcp__claude-in-chrome__get_page_text" in tools
     assert not [tool for tool in tools if tool.endswith(("computer", "form_input", "file_upload"))]
 
@@ -726,7 +733,9 @@ def test_hunt_watch_drafts_and_asks_and_send_reply_says_how_it_went(
     sent: dict | None, code: int, state: str
 ) -> None:
     threads = Threads(hunt / "data" / "jobs.db")
-    threads.finished_read("linkedin", datetime.now().astimezone())
+    # The watch's own clock, not the machine's: from the summary hour (23 here) it does nothing.
+    monkeypatch.setattr(cli, "watch", partial(watch, clock=lambda: MORNING))
+    threads.finished_read("linkedin", MORNING)
     monkeypatch.setattr(cli, "run_claude", FakeClaude({"emails": 0, "jobs": [], "recruiter_emails": [_email(1)],
                                                        "linkedin_notifications": 0}, sent))
 

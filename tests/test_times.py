@@ -22,8 +22,11 @@ from job_hunt.replies import (
     DRAFT_SKILL, SEND_SKILL, ReplyError, Threads, draft_replies, offer_times, read_messages, send_reply,
 )
 from job_hunt.settings import SettingsError, read_settings
-from job_hunt.times import SKILL, Talks, TimesError, free_times, read_busy, working_days
+from job_hunt.times import (
+    SKILL, Talk, Talks, TimesError, event_command, free_times, offer_command, read_busy, working_days,
+)
 from movable_clock import MovableClock
+from only_named_tools import assert_only_named_tools
 
 NEW_YORK = ZoneInfo("America/New_York")
 # A Wednesday morning: the working days are Thursday, Friday, Monday, Tuesday and Wednesday.
@@ -902,3 +905,18 @@ def test_a_newer_message_read_while_a_pick_is_confirmed_is_told(
     assert Talks(project / "data" / "jobs.db").get(thread).state == "confirmed"
     told = (project / "data" / "morning.log").read_text()
     assert "newer message" in told and "Call with Example Labs about QA Engineer" in told
+
+
+def test_every_calendar_run_may_use_only_the_tools_its_command_names(tmp_path: Path) -> None:
+    out = tmp_path / "offer.json"
+    offer = offer_command({"out": str(out)}, [(_at(19, 9), _at(19, 17))], NEW_YORK, [], ())
+    talk = Talk(thread=1, source="email", conversation="t1", title="Example Labs, QA Engineer", offered="[]",
+                reply="Glad to talk", state="holding", state_reason=None, event_id="e1", start=None, failures=0,
+                updated_at=MORNING.isoformat())
+    hold = event_command("hold", talk, _at(19, 10), NEW_YORK, out)
+    confirm = event_command("confirm", talk, _at(19, 10), NEW_YORK, out)
+
+    for command in (offer, hold, confirm):
+        assert_only_named_tools(command)
+    assert hold[hold.index("--allowedTools") + 1].split(",") == [
+        "mcp__claude_ai_Google_Calendar__create_event", f"Edit(/{out})"]

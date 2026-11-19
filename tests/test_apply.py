@@ -901,7 +901,7 @@ def test_chrome_out_of_reach_pauses_every_job_and_costs_none_a_try(
 
 @pytest.mark.parametrize("browser", [
     None, {**THIS_CHROME, "on_this_computer": False}, {"name": "Browser 1", "system": "macOS"},
-    {**THIS_CHROME, "name": " "}, "Browser 3 (Linux)",
+    {**THIS_CHROME, "name": " "}, {**THIS_CHROME, "on_this_computer": "true"}, "Browser 3 (Linux)",
 ])
 def test_a_report_that_does_not_say_it_used_this_computers_chrome_pauses_the_job_for_a_look(
     project: Path, jobs: JobsList, browser: object
@@ -912,6 +912,20 @@ def test_a_report_that_does_not_say_it_used_this_computers_chrome_pauses_the_job
     # It may have applied in another computer's Chrome: never tried again on its own, no try spent.
     assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
     assert jobs.get(job).state_reason == UNSURE + "the apply-site run did not say it used this computer's Chrome"
+
+
+def test_a_worker_that_wrote_a_report_without_this_computers_chrome_then_stopped_pauses_for_a_look(
+    project: Path, jobs: JobsList
+) -> None:
+    job = _picked(jobs, 1)
+
+    def wrote_then_stopped(command: list[str]) -> None:
+        (project / "jobs" / str(job) / "report.json").write_text('{"result": "applied"}')
+        raise ApplyError("the apply-site run failed (1): no message")
+
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=wrote_then_stopped)
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
+    assert jobs.get(job).state_reason == UNSURE + "the apply-site run failed (1): no message"
 
 
 @pytest.mark.parametrize("result", [

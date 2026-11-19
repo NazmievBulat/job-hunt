@@ -226,6 +226,10 @@ def test_without_on_this_computer_the_one_local_browser_of_this_system_counts(tm
     runner.answers["claude___chrome"] = listed(unsure, {**unsure, "name": "Browser 4"})
     assert lines(machine)["chrome"].startswith("missing: more than one connected Chrome could be")
 
+    # The tool's word that it is not on this computer wins over its system and isLocal.
+    runner.answers["claude___chrome"] = listed({**unsure, "onThisComputer": False})
+    assert lines(machine)["chrome"].startswith("missing: Claude in Chrome is not connected in this computer's")
+
     # Said to be local, but of another system than this computer's: not this computer.
     runner.answers["claude___chrome"] = listed({**unsure, "system": "macOS"})
     assert lines(machine)["chrome"].startswith("missing: Claude in Chrome is not connected in this computer's")
@@ -239,7 +243,8 @@ def test_a_listing_in_a_code_fence_is_read(tmp_path: Path) -> None:
     assert lines(machine)["chrome"].startswith("ok: Claude in Chrome, connected in this computer's Chrome (Browser 3")
 
 
-@pytest.mark.parametrize("answer", [None, (1, "error"), (0, "I could not list them."), (0, '{"browsers": 3}')])
+@pytest.mark.parametrize("answer", [None, (1, "error"), (0, "I could not list them."), (0, '{"browsers": 3}'),
+                                    (0, '[{"name": "Browser 3"}]'), (0, '[{"name": 3, "system": "Linux"}]'), (0, '["Browser 3"]')])
 def test_a_listing_that_cannot_be_read_is_missing(tmp_path: Path, answer: tuple[int, str] | None) -> None:
     machine, runner = everything_ready(tmp_path)
     runner.answers["claude___chrome"] = answer
@@ -410,6 +415,11 @@ def test_the_command_exits_1_only_when_something_needed_is_missing(
     runner.answers["claude_mcp"] = (0, "")
     assert cli.main(["doctor"]) == 1
     assert "missing  the Gmail connector is not on" in capsys.readouterr().out
+    runner.answers["claude_mcp"] = (0, MCP_LIST)
+    runner.answers["claude___chrome"] = listed(WORK_MAC, HOME_MAC)
+    assert cli.main(["doctor"]) == 1
+    assert ("missing  Claude in Chrome is not connected in this computer's Chrome (connected: Browser 1 (macOS), "
+            "Browser 2 (macOS); workers never use them)") in capsys.readouterr().out
 
 
 def test_hunt_questions_carries_the_link_only_on_a_machine_with_remote_desktop(

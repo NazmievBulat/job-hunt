@@ -83,7 +83,7 @@ def _notes_to_send(notes: Notes | None, data: Path, daily: int) -> int:
 
 def anything_waiting(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
                      daily: int = 15) -> bool:
-    if notes is not None and (notes.in_states("drafted") or _notes_to_send(notes, data, daily)):
+    if notes is not None and (_notes_to_send(notes, data, daily) or notes.in_states("drafted", "unsure")):
         return True
     if threads is not None:
         # Imported here: `replies` uses this module's `log_failure`.

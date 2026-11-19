@@ -43,7 +43,10 @@ each part as a message of its own, one at a time, and wait for the reply before 
    today's LinkedIn applications:", each numbered line exactly as printed, then "Reply send
    all, send 1 3, or skip." "send all" runs `uv run hunt send-notes all`, "send 1 3" runs
    `uv run hunt send-notes 1 3` (the others are skipped), "skip" runs `uv run hunt skip-notes`.
-   Sending takes a few minutes a note: run it in the background, as `hunt apply`.
+   Sending takes a few minutes a note: run it in the background, as `hunt apply`. A note that
+   "needs a look on LinkedIn whether it was sent" is a message of its own: ask the person to
+   look in LinkedIn's messages; "it went" runs `uv run hunt note-went <n>`, "send it" runs
+   `uv run hunt send-notes <n>`.
 
 With each question, run `uv run hunt notify "<the question in one line>"` once, before you ask
 it. When it prints that it has no keys, go on without it.

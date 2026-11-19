@@ -218,8 +218,12 @@ class Notes:
     def move(self, note: int, state: State, reason: str | None = None) -> None:
         self._set(note, state=state, state_reason=reason)
 
-    def drafted(self, note: int, text: str) -> None:
-        self._set(note, state="drafted", state_reason=None, note=text)
+    def drafted(self, note: int, text: str) -> bool:
+        """Save the note, unless it left `new` meanwhile."""
+        with self._db:
+            done = self._db.execute("UPDATE notes SET state = 'drafted', state_reason = NULL, note = ?, updated_at = ?"
+                                    " WHERE id = ? AND state = 'new'", (text, self._stamp(), note)).rowcount
+        return done == 1
 
     def fail(self, note: int, reason: str, back_to: State) -> State:
         """Count a failure: back to `back_to` for the next run, then `failed`."""
@@ -307,6 +311,14 @@ def _read_note(path: Path) -> str:
 
 def draft_notes(notes: Notes, jobs: JobsList, root: Path, *, run: Run) -> int:
     """Draft a note for each new poster; return how many were drafted."""
+    notes.data.mkdir(parents=True, exist_ok=True)
+    # One drafting run at a time, the end of a hunt apply's and the morning's: a note is drafted once.
+    with (notes.data / "notes-draft.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _draft_notes(notes, jobs, root, run)
+
+
+def _draft_notes(notes: Notes, jobs: JobsList, root: Path, run: Run) -> int:
     drafted = 0
     for note in notes.in_states("new"):
         out = _folder(root, note.job) / "note.json"
@@ -318,33 +330,66 @@ def draft_notes(notes: Notes, jobs: JobsList, root: Path, *, run: Run) -> int:
             if notes.fail(note.id, str(error), "new") == "failed":
                 log_failure(notes.data, "hunt draft-notes", f"no note to {note.name}: {error}", notes.now)
             continue
-        notes.drafted(note.id, text)
-        drafted += 1
+        if notes.drafted(note.id, text):
+            drafted += 1
     return drafted
 
 
 # Asking
 
 
+def _line(note: Note, jobs: JobsList) -> str:
+    job = jobs.get(note.job)
+    who = ", ".join(part for part in (note.name, note.title, job.company) if part)
+    return f'  {note.id}. {who} (job {job.id}: {job.title}): "{note.note}"'
+
+
 def ask(notes: Notes, jobs: JobsList) -> str | None:
-    """The one question for every drafted note; showing it marks them asked."""
+    """The one question for every drafted note; showing it marks them asked. A note that may
+    have gone is asked about on its own."""
+    parts = []
     waiting = notes.in_states("drafted")
-    if not waiting:
-        return None
-    lines = [f"Notes to hiring managers ({len(waiting)}), for the LinkedIn applications:"]
-    for note in waiting:
-        job = jobs.get(note.job)
-        who = ", ".join(part for part in (note.name, note.title, job.company) if part)
-        lines.append(f'  {note.id}. {who} (job {job.id}: {job.title}): "{note.note}"')
-        notes.asked(note.id)
-    lines.append("  (then: hunt send-notes all, hunt send-notes <numbers>, hunt skip-notes)")
-    return "\n".join(lines)
+    if waiting:
+        lines = [f"Notes to hiring managers ({len(waiting)}), for the LinkedIn applications:"]
+        for note in waiting:
+            lines.append(_line(note, jobs))
+            notes.asked(note.id)
+        lines.append("  (then: hunt send-notes all, hunt send-notes <numbers>, hunt skip-notes)")
+        parts.append("\n".join(lines))
+    for note in notes.in_states("unsure"):
+        parts.append("\n".join([f"A note to a hiring manager needs {note.state_reason}:", _line(note, jobs),
+                                f"  (then: hunt note-went {note.id} if it went, hunt send-notes {note.id} to send it "
+                                f"again)"]))
+    return "\n\n".join(parts) or None
+
+
+def went(notes: Notes, note: int) -> Note:
+    """The person saw on LinkedIn that a note that may have gone did go."""
+    found = _unsure(notes, note)
+    notes.sent(found.id, found.conversation)
+    return notes.get(note)
+
+
+def _unsure(notes: Notes, note: int) -> Note:
+    try:
+        found = notes.get(note)
+    except KeyError as error:
+        raise NoteError(f"there is no note {note}") from error
+    if found.state != "unsure":
+        raise NoteError(f"note {note} is {found.state}, not waiting for a look whether it was sent")
+    return found
 
 
 def decide(notes: Notes, decision: Literal["send", "skip"], numbers: list[int] | None) -> list[Note]:
     """Approve or skip the notes asked about: all of them, or only those numbered, the others
     asked about then taking the other decision. Return the notes approved or skipped as asked."""
     asked = {note.id: note for note in notes.in_states("drafted") if note.asked_at is not None}
+    unsure = {note.id for note in notes.in_states("unsure")}
+    if decision == "send" and numbers and set(numbers) <= unsure:
+        # "send it again", after the person looked on LinkedIn and it had not gone.
+        for number in numbers:
+            notes.move(number, "approved")
+        return [notes.get(number) for number in numbers]
     if not asked:
         raise NoteError("no note waits for an answer: run hunt questions to ask")
     chosen = list(asked) if numbers is None else numbers

@@ -17,7 +17,7 @@ from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.notes import (
     DRAFT_SKILL, LIMIT, SEND_SKILL, NoteError, Notes, collect, decide, draft_command, draft_notes, note_pause,
-    send_command, send_notes, sendable, stopped_today,
+    send_command, send_notes, sendable, stopped_today, went,
 )
 from job_hunt.questions import anything_waiting, questions
 from job_hunt.replies import Threads, read_messages
@@ -640,3 +640,46 @@ def test_hunt_apply_drafts_the_notes_at_its_end(
     assert cli.main(["apply"]) == 0
 
     assert "1 notes to hiring managers drafted" in capsys.readouterr().out
+
+
+def test_a_note_drafted_by_another_run_meanwhile_is_not_overwritten(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path) -> None:
+    [note] = _approved(notes, threads, jobs, project, _poster(1))
+
+    assert notes.drafted(note, "older words") is False
+    assert notes.get(note).state == "approved" and notes.get(note).note != "older words"
+
+
+def test_a_note_that_may_have_gone_is_asked_about_and_ended_either_way(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    first, second = _approved(notes, threads, jobs, project, _poster(1), _poster(2))
+    sender = Sender(None, None)
+    _send(notes, threads, jobs, project, clock, sender)
+
+    assert anything_waiting(jobs, project / "data", threads, notes)
+    asked = questions(jobs, project / "data", threads, notes)
+    assert f"hunt note-went {first} if it went, hunt send-notes {first} to send it again" in asked
+    went(notes, first)
+    decide(notes, "send", [second])
+    _send(notes, threads, jobs, project, clock, sender)
+
+    assert notes.get(first).state == "sent"
+    assert notes.get(second).state == "sent" and [name for name, _ in sender.sent] == [
+        "https://www.linkedin.com/in/jane-doe-2"]
+    with pytest.raises(NoteError):
+        went(notes, first)
+
+
+def test_the_morning_drafts_again_a_note_whose_drafting_failed(
+        notes: Notes, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    from job_hunt.morning import morning
+
+    _applied(jobs, project, 1, _poster(1))
+    collect(notes, jobs, project)
+    started: list[bool] = []
+
+    morning(jobs, project / "data", find=lambda: None, score=lambda: None, start=lambda: started.append(True),
+            clock=clock, notes=notes, draft_notes=lambda: draft_notes(notes, jobs, project, run=Drafter()))
+
+    assert [note.state for note in notes.all()] == ["drafted"]
+    assert started == [True]

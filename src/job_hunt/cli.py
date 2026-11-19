@@ -23,7 +23,7 @@ from job_hunt.jobs import Job, JobsList, PickError
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.morning import morning, start_session
 from job_hunt.notes import DRAFT_SKILL as NOTE_DRAFT_SKILL, SEND_SKILL as NOTE_SEND_SKILL, NoteError, Notes, collect
-from job_hunt.notes import decide as decide_notes, draft_notes, note_pause, send_notes, stopped_today
+from job_hunt.notes import decide as decide_notes, draft_notes, note_pause, send_notes, stopped_today, went
 from job_hunt.notify import NotifyError, notify, post_pushover
 from job_hunt.questions import job_line, log_failure, questions, then
 from job_hunt.replies import (
@@ -223,6 +223,16 @@ def _draft_notes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _note_went(args: argparse.Namespace) -> int:
+    try:
+        note = went(Notes(DATA / "jobs.db"), args.note)
+    except NoteError as error:
+        print(f"hunt note-went: {error}", file=sys.stderr)
+        return 1
+    print(f"the note to {note.name} is sent")
+    return 0
+
+
 def _notes(args: argparse.Namespace) -> int:
     notes = Notes(DATA / "jobs.db")
     decision = "send" if args.command == "send-notes" else "skip"
@@ -326,7 +336,7 @@ def _morning(args: argparse.Namespace) -> int:
     try:
         print(morning(JobsList(DATA / "jobs.db"), DATA, find=_find_and_tell, score=_score_every_job,
                       start=lambda: start_session(ROOT), threads=Threads(DATA / "jobs.db"), draft=draft_step,
-                      notes=Notes(DATA / "jobs.db"), notes_daily=notes_daily()))
+                      notes=Notes(DATA / "jobs.db"), notes_daily=notes_daily(), draft_notes=draft_notes_step))
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         # Today's session did not start, so the next morning's questions tell it.
         log_failure(DATA, "hunt morning", error, lambda: datetime.now(UTC))
@@ -560,6 +570,10 @@ def main(argv: list[str] | None = None) -> int:
         "skip-notes", help="skip the notes asked about, all of them or those numbered (the others are approved)")
     skipping_notes.add_argument("numbers", nargs="*", help="the notes' numbers as hunt questions prints them")
     skipping_notes.set_defaults(run=_notes)
+    note_went = commands.add_parser(
+        "note-went", help="end a note that may have gone as sent, once LinkedIn shows it in the conversation")
+    note_went.add_argument("note", type=int, help="the note's number, as hunt questions prints it")
+    note_went.set_defaults(run=_note_went)
     pushing = commands.add_parser(
         "notify", help="push one question with Pushover, linking to the day's session, when data/settings.json "
         "has pushover keys")

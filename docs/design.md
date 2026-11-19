@@ -128,7 +128,7 @@ Each piece has one job and talks to the others only through the jobs list and fi
 
 | Piece | Kind | What it does |
 |---|---|---|
-| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`, `watch`, `linkedin-messages`, `draft-replies`, `send-reply`, `edit-reply`, `skip-reply`, `draft-notes`, `send-notes`, `skip-notes`. It is the coordinator. |
+| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`, `watch`, `linkedin-messages`, `draft-replies`, `send-reply`, `edit-reply`, `skip-reply`, `draft-notes`, `send-notes`, `skip-notes`, `note-went`. It is the coordinator. |
 | Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
 | Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the morning hour, the summary hour (18 when left out), the notes to hiring managers a day (`linkedin_notes_daily`, 15 when left out, at most 15). |

@@ -92,6 +92,10 @@ def test_a_signal_that_cannot_be_read_is_not_known_and_the_next_one_is_read(tmp_
     # A reply file that cannot be read is not known either.
     (tmp_path / "chat-reply").write_text("not a time")
     assert not _verdict(tmp_path, nothing).ask
+    # Nor is one that cannot be opened at all.
+    (tmp_path / "chat-reply").unlink()
+    (tmp_path / "chat-reply").mkdir()
+    assert _verdict(tmp_path, nothing) == Verdict(False, "you are away from the computer")
 
 
 def test_a_reply_in_the_chat_in_the_last_ten_minutes_asks_from_afar(tmp_path: Path) -> None:

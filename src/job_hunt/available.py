@@ -115,7 +115,7 @@ def replied(hook_input: str, data: Path, now: datetime, automatic: Sequence[str]
 def last_reply(data: Path) -> datetime | None:
     try:
         when = datetime.fromisoformat((data / REPLIED).read_text().strip())
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
         return None
     return when if when.tzinfo is not None else None
 

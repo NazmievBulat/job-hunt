@@ -181,6 +181,9 @@ def test_a_read_counts_only_in_its_own_tab_and_until_the_tab_navigates_or_clicks
     assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST, {"tabId": 8}))))
     # Read, then the tab went elsewhere, or clicked: the refs may name other elements now.
     assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST), ("navigate", "ok"))))
+    # A navigate that names no tab may have gone to this one.
+    unnamed = ("navigate", "ok", {"url": "https://www.linkedin.com/messaging/"})
+    assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST), unnamed)))
     assert refusal(_click("ref_12", _transcript(tmp_path, ("read_page", LIST), ("computer", "clicked", click))))
     # Read again after the click, or another tab navigated or clicked: it goes through.
     again = _transcript(tmp_path, ("read_page", LIST), ("computer", "clicked", click), ("read_page", LIST))

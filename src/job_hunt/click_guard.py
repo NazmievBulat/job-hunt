@@ -67,7 +67,9 @@ def page_reads(transcript: Path, tab: int, pending: object = None) -> list[str]:
                 given = given if isinstance(given, dict) else {}
                 calls[str(item.get("id"))] = (name, given.get("tabId"))
                 changes = name == NAVIGATE or (name == COMPUTER and given.get("action") == "left_click")
-                if (changes and given.get("tabId") == tab and item.get("id") != pending) or name in BROWSER_CHOICE:
+                # A navigate that names no tab goes to one the guard cannot tell: it may be this one.
+                in_tab = given.get("tabId") == tab or not isinstance(given.get("tabId"), int)
+                if (changes and in_tab and item.get("id") != pending) or name in BROWSER_CHOICE:
                     # Another browser has tabs and refs of its own.
                     reads.clear()
             elif entry.get("type") == "user" and item.get("type") == "tool_result":

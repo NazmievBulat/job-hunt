@@ -488,7 +488,8 @@ def _next_site(this: _Run, waiting: list[int], spread: float | None = None) -> t
 def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock,
                   sleep: Callable[[float], None]) -> bool:
     """Apply to the jobs ready now and to those ready meanwhile. True when it stopped, with
-    nothing running, for jobs picked meanwhile, whose resumes are written first."""
+    nothing running, for jobs picked meanwhile, whose resumes are written first, or for jobs put
+    back as it ended."""
     jobs, root = this.jobs, this.root
     waiting: dict[str, list[int]] = {SITE_SKILL: [], LINKEDIN_SKILL: []}
     running: dict[Future[Report], tuple[int, str]] = {}
@@ -574,6 +575,10 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
                         linkedin.release()
                     if _save(this, job, future.result()) == "resume_ready" and jobs.due(jobs.get(job)):
                         waiting[_skill(jobs.get(job))].append(job)
+            # Picked or put back while the last application ran: the same run goes on, a picked
+            # job's resume first.
+            return bool(jobs.in_states("picked")) or any(
+                job.kind in ("easy_apply", "company_site") and jobs.due(job) for job in jobs.in_states("resume_ready"))
     finally:
         # A run stopped while the LinkedIn worker applied still starts the pause, once the
         # worker ended.

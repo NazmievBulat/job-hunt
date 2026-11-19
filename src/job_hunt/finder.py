@@ -1,7 +1,14 @@
 """The finder: job alert emails, and the job sites' own searches, into the jobs list.
 
-One `claude -p` on Claude Haiku runs the `read-job-alerts` skill, allowed only to read the
-mailbox through the Gmail connector and to write one file:
+`claude -p` on Claude Haiku runs the `read-job-alerts` skill, allowed only to read the mailbox
+through the Gmail connector and to write one file. The script walks the mailbox, not the model:
+a first run only searches, and lists the alert emails since the last run,
+
+    {"alerts": [{"email_id": "...", "email_date": "2026-11-17T07:04:00+00:00"}]}
+
+then one run for each batch of at most `BATCH_EMAILS` of them, oldest first, is named the ids
+to read, may only open those emails one at a time (`get_message`, never the whole thread an
+alert's HTML fills), and writes a file of its own:
 
     {"emails": 4,
      "jobs": [{"link": "...", "title": "...", "company": "...", "place": "Durham, NC",
@@ -9,7 +16,12 @@ mailbox through the Gmail connector and to write one file:
                "email_id": "...", "email_date": "2026-11-17T07:04:00+00:00",
                "area": "<one of the settings' areas>" | null}]}
 
-Given `messages` (`replies.EmailMessages`), the same run also notes the recruiters' emails since
+Each batch's jobs are saved as soon as it ends, and the batches' files are merged into the
+first run's. A batch that fails is named and the others still count; the time the next run reads
+from moves only to the newest email of the batches that all succeeded in order, so a failed batch
+is read again.
+
+Given `messages` (`replies.EmailMessages`), the search run also notes the recruiters' emails since
 the last time they were read (`"recruiter_emails"`, `"linkedin_notifications"`), which `replies`
 saves as threads to answer.
 
@@ -42,7 +54,7 @@ import subprocess
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from html import unescape as html_unescape
 from html.parser import HTMLParser
@@ -61,11 +73,12 @@ if TYPE_CHECKING:
 
 MODEL = "claude-haiku-5-5"
 SKILL = "read-job-alerts"
-GMAIL_READ_TOOLS = (
-    "mcp__claude_ai_Gmail__search_threads",
-    "mcp__claude_ai_Gmail__get_thread",
-    "mcp__claude_ai_Gmail__get_message",
-)
+GMAIL_SEARCH = "mcp__claude_ai_Gmail__search_threads"
+GMAIL_GET_MESSAGE = "mcp__claude_ai_Gmail__get_message"
+# The recruiters' emails are read whole, thread and all; the alerts never are.
+GMAIL_READ_TOOLS = (GMAIL_SEARCH, "mcp__claude_ai_Gmail__get_thread", GMAIL_GET_MESSAGE)
+# An alert's plain text is a few thousand characters: ten fit a run with room to spare.
+BATCH_EMAILS = 10
 # Every background run: `--allowedTools` only adds to what the person's own settings allow (their
 # `Bash`, a plugin's browser, auto mode), so the run loads no user or local settings, and
 # `dontAsk` refuses any tool its command does not name. `dontAsk` still lets WebFetch reach Claude
@@ -85,6 +98,8 @@ PAGE_SECONDS = 20
 PAGE_BYTES = 5_000_000
 REMOTE_WORDS = {"remote": "remote", "hybrid": "hybrid", "on_site": "on site"}
 TEXT_FIELDS = ("link", "title", "company", "board", "email_id", "email_date")
+# Before every email: what an email without a date is put after.
+EARLIEST = datetime.min.replace(tzinfo=UTC)
 
 
 class Messages(Protocol):
@@ -319,21 +334,29 @@ def fetch_page(link: str) -> tuple[str, str]:
         return url, body.decode("utf-8", errors="replace")
 
 
-def skill_command(
-    since: datetime | None, areas: list[str], out: Path, messages_after: datetime | None = None
-) -> list[str]:
-    """Without `since` the run reads no job alerts; with `messages_after` it also notes the
-    recruiters' emails and LinkedIn's message notifications since then (`replies`)."""
+def skill_command(since: datetime | None, out: Path, messages_after: datetime | None = None) -> list[str]:
+    """The search run: it lists the alert emails since `since`, or none without it; with
+    `messages_after` it also notes the recruiters' emails and LinkedIn's message notifications
+    since then (`replies`)."""
     arguments: dict[str, Any] = {"after": int(since.timestamp()) if since else None,
-                                 "since": since.isoformat() if since else None, "areas": areas, "out": str(out)}
+                                 "since": since.isoformat() if since else None, "out": str(out)}
     if messages_after is not None:
         arguments["messages_after"] = int(messages_after.timestamp())
+    return _command(arguments, GMAIL_READ_TOOLS if messages_after is not None else (GMAIL_SEARCH,), out)
+
+
+def batch_command(email_ids: list[str], areas: list[str], out: Path) -> list[str]:
+    """A batch run: it reads the jobs of the alert emails it is named, and only those."""
+    return _command({"email_ids": email_ids, "areas": areas, "out": str(out)}, (GMAIL_GET_MESSAGE,), out)
+
+
+def _command(arguments: dict[str, Any], tools: tuple[str, ...], out: Path) -> list[str]:
     # A permission rule's path: `//` starts an absolute one. Edit rules cover every tool that
     # writes a file, the Write tool among them.
     return [
         "claude", "-p", f"/{SKILL} {json.dumps(arguments, ensure_ascii=False)}",
         "--model", MODEL, *ONLY_NAMED_TOOLS,
-        "--allowedTools", ",".join([*GMAIL_READ_TOOLS, f"Edit(/{out})"]),
+        "--allowedTools", ",".join([*tools, f"Edit(/{out})"]),
     ]
 
 
@@ -526,9 +549,8 @@ def _find(
                 search.pace.stop(read[3].removeprefix("HTTP "))
             return read
 
-    def alerts() -> tuple[int, list[FoundJob], list[str], int]:
-        emails, found_jobs, problems = _read_alerts(settings, shared, found, run, started, messages_after)
-        return emails, found_jobs, problems, sum(save(each, None) for each in found_jobs)
+    def alerts() -> _Alerts:
+        return _read_alerts(settings, shared, found, run, started, messages_after, save)
 
     # Read here: the recruiters' threads are not used from the sources' threads.
     messages_after = messages.since(started) if messages else None
@@ -560,12 +582,13 @@ def _find(
         # Whatever broke in the alerts, the other sources' jobs still get their postings.
         summary.failed.append(f"alert: {type(alert).__name__}: {alert}")
     else:
-        summary.emails, found_jobs, summary.problems, summary.new = alert
-        summary.jobs = len(found_jobs)
+        summary.emails, summary.jobs, summary.new = alert.emails, alert.jobs, alert.new
+        summary.problems, summary.failed = alert.problems, alert.failed
         # After every source's jobs: a message about a job of this run is linked to it.
         if messages is not None:
-            summary.problems += messages.saved(json.loads(found.read_text()), started)
-        jobs.finished_run(started)
+            summary.problems += messages.saved(alert.data, started)
+        if alert.through is not None:
+            jobs.finished_run(alert.through)
         summary.lines.append(f"alert: {summary.emails} emails, {summary.jobs} jobs, {summary.new} new")
     if search is not None:
         sweep: Sweep | Exception = ended["boards"]
@@ -604,15 +627,101 @@ def _add(summary: Summary, name: str, ended: tuple[list[str], list[str]] | Excep
         summary.failed += ended[1]
 
 
+@dataclass
+class _Alerts:
+    emails: int
+    jobs: int
+    new: int
+    problems: list[str]
+    # Each batch that failed, with why.
+    failed: list[str]
+    # The time the next run reads from, or None to read from the same time again.
+    through: datetime | None
+    # The search's file with every batch's jobs merged in, as one run would have written it.
+    data: dict[str, Any]
+
+
+def _email_date(text: Any) -> datetime | None:
+    try:
+        date = datetime.fromisoformat(text) if isinstance(text, str) else None
+    except ValueError:
+        return None
+    return None if date is None else (date if date.tzinfo else date.replace(tzinfo=UTC)).astimezone(UTC)
+
+
+def alert_emails(listed: list[Any]) -> tuple[list[tuple[str, datetime | None]], list[str]]:
+    """The alert emails the search listed, each once, oldest first and those without a date last;
+    and why each entry left out was left out."""
+    emails: dict[str, datetime | None] = {}
+    problems: list[str] = []
+    for number, entry in enumerate(listed, start=1):
+        email_id = entry.get("email_id") if isinstance(entry, dict) else None
+        if not isinstance(email_id, str) or not email_id.strip():
+            problems.append(f"alert email {number} has no email_id")
+            continue
+        date = _email_date(entry.get("email_date"))
+        emails[email_id.strip()] = emails.get(email_id.strip()) or date
+    order = sorted(emails.items(), key=lambda each: (each[1] is None, each[1] or EARLIEST))
+    return order, problems
+
+
+def _write_whole(path: Path, data: dict[str, Any]) -> None:
+    part = path.with_name(path.name + ".part")
+    part.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    part.replace(path)
+
+
 def _read_alerts(
     settings: Settings, jobs: JobsList, found: Path, run: Callable[[list[str]], None], started: datetime,
-    messages_after: datetime | None,
-) -> tuple[int, list[FoundJob], list[str]]:
-    """The alert emails since the alerts' last run, as the skill read them."""
+    messages_after: datetime | None, save: Callable[[FoundJob, str | None], bool],
+) -> _Alerts:
+    """The alert emails since the alerts' last run, listed by one run and read in batches, each
+    batch's jobs saved as it ends."""
     since = jobs.last_run() or started - FIRST_RUN
     # A file an earlier run left must not pass for this run's.
     found.unlink(missing_ok=True)
-    run(skill_command(since, settings.areas, found, messages_after))
+    run(skill_command(since, found, messages_after))
     if not found.exists():
-        raise FinderError(f"the {SKILL} run wrote no jobs file ({found})")
-    return read_found(found, settings)
+        raise FinderError(f"the {SKILL} search wrote no file ({found})")
+    try:
+        data = json.loads(found.read_text())
+    except json.JSONDecodeError as error:
+        raise FinderError(f"the {SKILL} search wrote a file that is not JSON: {error}") from error
+    if not isinstance(data, dict) or not isinstance(data.get("alerts"), list):
+        raise FinderError(f'the {SKILL} search wrote a file without a list of "alerts"')
+    emails, problems = alert_emails(data["alerts"])
+    batches = [emails[start:start + BATCH_EMAILS] for start in range(0, len(emails), BATCH_EMAILS)]
+    done = _Alerts(0, 0, 0, problems, [], started, data)
+    read: list[FoundJob] = []
+    # Whether every batch so far succeeded, and the newest email they read.
+    in_order, newest = True, None
+    for number, batch in enumerate(batches, start=1):
+        out = found.with_name(f"{found.stem}-{number}{found.suffix}")
+        out.unlink(missing_ok=True)
+        try:
+            run(batch_command([email_id for email_id, _ in batch], settings.areas, out))
+            if not out.exists():
+                raise FinderError(f"the {SKILL} batch wrote no file ({out})")
+            count, found_jobs, left_out = read_found(out, settings)
+        except Exception as error:
+            said = str(error) if isinstance(error, FinderError) else f"{type(error).__name__}: {error}"
+            done.failed.append(f"alert: batch {number} of {len(batches)} failed: {said}")
+            if in_order:
+                # A second before it: the search's `after:` may leave out an email of that very second.
+                done.through = newest - timedelta(seconds=1) if newest else None
+                in_order = False
+            continue
+        finally:
+            out.unlink(missing_ok=True)
+        if in_order:
+            newest = max([newest, *(date for _, date in batch)], key=lambda date: date or EARLIEST)
+        done.problems += [f"batch {number} {problem}" if len(batches) > 1 else problem for problem in left_out]
+        done.emails += count
+        read += found_jobs
+        done.new += sum(save(each, None) for each in found_jobs)
+    done.jobs = len(read)
+    data = {name: value for name, value in data.items() if name != "alerts"}
+    data.update(emails=done.emails, jobs=[asdict(each) for each in read])
+    _write_whole(found, data)
+    done.data = data
+    return done

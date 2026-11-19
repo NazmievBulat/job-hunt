@@ -118,17 +118,24 @@ Without it the job waits until the user is at the computer, and the other jobs g
    ends when all have ended; a source that fails, waits on its own pauses or is told to stop by
    LinkedIn never holds back another, and is named while the others go on. Each source's line
    says how many jobs it found and how many were new, and one more line how long each took.
-   - **Alerts.** One `claude -p` on Claude Haiku reads the job alert emails through the Gmail
-     connector and writes each job's link, title, company and place, and which of the user's
-     areas each job is in.
+   - **Alerts.** `claude -p` on Claude Haiku reads the job alert emails through the Gmail
+     connector, walked by the script: one run only searches and lists the alert emails since
+     the last run, then one run for each batch of at most 10 of them, oldest first, opens only
+     the emails it is named, in plain text one at a time (an alert's HTML is larger than a
+     tool's answer may be), and writes each job's link, title, company and place, and which of
+     the user's areas each job is in. A click-tracking link is kept as it is and followed to the
+     job's page. Each batch's jobs are saved as it ends; a batch that fails is named and the
+     others still count, and the next run reads from the newest email of the batches that all
+     succeeded in order.
    - **LinkedIn, signed out.** Its public guest search, plain HTTP with no cookies and never the
      user's account: each title in each area, and once per title for remote jobs, over the time
      since its last run; at most 5 pages a search, 2 to 5 seconds between requests, and a 429
-     or 999 ends LinkedIn for that run. The LinkedIn job pages the alerts lead to share that
+     or 999 ends LinkedIn for that run, its line saying how many search pages had answered. The LinkedIn job pages the alerts lead to share that
      pace: one LinkedIn request at a time, whichever source makes it, with the pause between.
    - **Every company's job board.** `data/companies.db` indexes the companies on Greenhouse,
      Lever, Ashby, Workday, SmartRecruiters and Workable: filled once a week from Common Crawl's
-     public URL index (`hunt companies`), from every link a job leads to a board by, and from
+     public URL index (`hunt companies`; a query that does not answer is tried again 3 times,
+     30 seconds apart), from every link a job leads to a board by, and from
      the settings' `companies`. The first run of a day reads every board's public JSON, the
      later runs only the boards that posted in the last week; at most 4 requests at a time to
      one host. A board that answers 404 twice is dropped. The boards the alerts' and LinkedIn's

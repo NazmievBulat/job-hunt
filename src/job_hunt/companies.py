@@ -33,9 +33,11 @@ CRAWL_PATTERNS = (
     "boards.greenhouse.io/*", "job-boards.greenhouse.io/*", "jobs.lever.co/*", "jobs.ashbyhq.com/*",
     "*.myworkdayjobs.com", "jobs.smartrecruiters.com/*", "apply.workable.com/*",
 )
-# The index answers 504 when it is busy; each query is tried this many times.
-CRAWL_TRIES = 3
-CRAWL_PAUSE = 10.0
+# The index answers 504 when it is busy, or closes the connection without an answer; each query
+# is tried again 3 times, 30 seconds apart. A list of crawls that never answers leaves the index
+# as it was, and the boards the run's links lead to are still swept.
+CRAWL_TRIES = 4
+CRAWL_PAUSE = 30.0
 # A query's pages are read up to this many: the boards' addresses fill far fewer.
 CRAWL_PAGES = 100
 MISSES = 2

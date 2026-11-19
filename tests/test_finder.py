@@ -24,7 +24,9 @@ from job_hunt import cli
 from job_hunt import finder
 from job_hunt.finder import (
     GMAIL_READ_TOOLS,
+    GMAIL_SEARCH,
     FinderError,
+    batch_command,
     PageError,
     fetch_page,
     find,
@@ -36,6 +38,7 @@ from job_hunt.finder import (
 )
 from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.settings import Settings, read_settings
+from alert_skill import AlertSkill, arguments
 from movable_clock import MovableClock
 from only_named_tools import assert_only_named_tools
 
@@ -63,15 +66,12 @@ def _fetch(link: str) -> tuple[str, str]:
     return link, (HERE / "pages" / PAGES[link]).read_text()
 
 
-class FakeSkill:
-    """Stands in for the `claude -p` run: writes what the skill wrote for the made-up emails."""
+class FakeSkill(AlertSkill):
+    """Stands in for the `claude -p` runs: writes what the skill wrote for the made-up emails."""
 
-    def __init__(self, found: Path, source: Path = HERE / "found-jobs.json") -> None:
-        self.found, self.source, self.commands = found, source, []
-
-    def __call__(self, command: list[str]) -> None:
-        self.commands.append(command)
-        shutil.copy(self.source, self.found)
+    def __init__(self, found: Path, source: Path = HERE / "found-jobs.json", fail: set[int] | None = None) -> None:
+        super().__init__(source, fail)
+        self.found = found
 
 
 def _job(**change: object) -> FoundJob:
@@ -199,21 +199,41 @@ def test_a_sign_in_page_is_a_page_that_cannot_be_read(form: str) -> None:
         page_text_and_kind("https://www.linkedin.com/jobs/view/4012345678", html)
 
 
-def test_the_skill_runs_on_haiku_with_only_gmails_read_tools_and_its_one_file(tmp_path: Path) -> None:
+def test_the_search_runs_on_haiku_with_only_gmails_search_and_its_one_file(tmp_path: Path) -> None:
     since = datetime(2026, 11, 4, 7, 0, tzinfo=UTC)
     out = tmp_path / "data" / "found-jobs.json"
-    command = skill_command(since, ["Raleigh-Durham-Chapel Hill"], out)
+    command = skill_command(since, out)
     assert command[:3] == ["claude", "-p", command[2]]
     assert command[2].startswith("/read-job-alerts ")
     assert json.loads(command[2].removeprefix("/read-job-alerts ")) == {
         "after": int(since.timestamp()),
         "since": "2026-11-04T07:00:00+00:00",
+        "out": str(out),
+    }
+    assert command[command.index("--model") + 1] == "claude-haiku-5-5"
+    allowed = command[command.index("--allowedTools") + 1].split(",")
+    # Without messages to read, the search opens no email at all.
+    assert allowed == [GMAIL_SEARCH, f"Edit(/{out})"]
+    assert_only_named_tools(command)
+    with_messages = skill_command(since, out, since)
+    assert with_messages[with_messages.index("--allowedTools") + 1].split(",") == [*GMAIL_READ_TOOLS, f"Edit(/{out})"]
+    assert all(tool.startswith("mcp__claude_ai_Gmail__") for tool in GMAIL_READ_TOOLS)
+    assert not any(word in tool for tool in GMAIL_READ_TOOLS for word in ("send", "draft", "label", "trash", "spam", "forward", "reply"))
+
+
+def test_a_batch_runs_on_haiku_naming_its_emails_with_only_get_message_and_its_one_file(tmp_path: Path) -> None:
+    out = tmp_path / "data" / "found-jobs-2.json"
+    command = batch_command(["18c0ffee00000011", "18c0ffee00000012"], ["Raleigh-Durham-Chapel Hill"], out)
+    assert command[:3] == ["claude", "-p", command[2]]
+    assert json.loads(command[2].removeprefix("/read-job-alerts ")) == {
+        "email_ids": ["18c0ffee00000011", "18c0ffee00000012"],
         "areas": ["Raleigh-Durham-Chapel Hill"],
         "out": str(out),
     }
     assert command[command.index("--model") + 1] == "claude-haiku-5-5"
     allowed = command[command.index("--allowedTools") + 1].split(",")
-    assert allowed == [*GMAIL_READ_TOOLS, f"Edit(/{out})"]
+    # Never get_thread: an alert's thread is its HTML, larger than a tool's answer may be.
+    assert allowed == ["mcp__claude_ai_Gmail__get_message", f"Edit(/{out})"]
     assert_only_named_tools(command)
     assert all(tool.startswith("mcp__claude_ai_Gmail__") for tool in GMAIL_READ_TOOLS)
     assert not any(word in tool for tool in GMAIL_READ_TOOLS for word in ("send", "draft", "label", "trash", "spam", "forward", "reply"))
@@ -283,7 +303,8 @@ def test_the_next_run_reads_from_when_the_last_finished_run_started_and_finds_no
     clock.advance(days=1)
     summary = find(settings, jobs, tmp_path / "jobs", skill.found, run=skill, fetch=_fetch, clock=clock)
     assert (summary.jobs, summary.new) == (8, 0)
-    assert json.loads(skill.commands[1][2].removeprefix("/read-job-alerts "))["since"] == first.isoformat()
+    searches = [arguments(command) for command in skill.commands if "email_ids" not in arguments(command)]
+    assert searches[1]["since"] == first.isoformat()
 
 
 def test_a_run_that_writes_no_file_fails_and_the_next_run_reads_from_the_same_time(
@@ -294,7 +315,7 @@ def test_a_run_that_writes_no_file_fails_and_the_next_run_reads_from_the_same_ti
     # A file left by an earlier run is not read as this run's.
     found.write_text((HERE / "found-jobs.json").read_text())
     summary = find(settings, jobs, tmp_path / "jobs", found, run=lambda command: None, fetch=_fetch, clock=clock)
-    assert len(summary.failed) == 1 and summary.failed[0].startswith("alert: the read-job-alerts run wrote no")
+    assert len(summary.failed) == 1 and summary.failed[0].startswith("alert: the read-job-alerts search wrote no")
     assert (summary.lines, jobs.last_run(), jobs.all()) == (
         ["same job from two sources: 0", "took: alert 0s"], None, [])
 
@@ -355,7 +376,7 @@ def test_a_page_with_no_text_cannot_be_read() -> None:
 
 
 def test_the_skill_may_write_only_its_own_file_when_the_path_is_absolute(tmp_path: Path) -> None:
-    command = skill_command(datetime(2026, 11, 4, tzinfo=UTC), [], tmp_path / "found.json")
+    command = skill_command(datetime(2026, 11, 4, tzinfo=UTC), tmp_path / "found.json")
     # `//` starts an absolute path in a permission rule; one slash is the project folder.
     assert command[command.index("--allowedTools") + 1].split(",")[-1] == f"Edit(/{tmp_path}/found.json)"
 
@@ -426,14 +447,25 @@ def test_an_unexpected_error_while_reading_a_page_still_saves_the_job_and_finish
 
 FAKE_CLAUDE = """#!{python}
 import json, os, shutil, sys
-with open(os.environ["FAKE_CLAUDE_LOG"], "w") as log:
-    json.dump({{"argv": sys.argv[1:], "cwd": os.getcwd()}}, log)
+with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
+    print(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd()}}), file=log)
 if os.environ.get("FAKE_CLAUDE_FAIL"):
     print("starting", file=sys.stderr)
     print("Not logged in. Run claude to sign in.", file=sys.stderr)
     sys.exit(1)
 arguments = json.loads(sys.argv[2].removeprefix("/read-job-alerts "))
-shutil.copy(os.environ["FAKE_CLAUDE_FOUND"], arguments["out"])
+with open(os.environ["FAKE_CLAUDE_FOUND"]) as source:
+    written = json.load(source)
+if "email_ids" in arguments:
+    answer = {{"emails": len(arguments["email_ids"]),
+              "jobs": [job for job in written["jobs"] if job["email_id"] in arguments["email_ids"]]}}
+else:
+    answer = {{"alerts": [{{"email_id": job["email_id"], "email_date": job["email_date"]}} for job in written["jobs"]]}}
+    if "messages_after" in arguments:
+        answer.update(recruiter_emails=written["recruiter_emails"],
+                      linkedin_notifications=written["linkedin_notifications"])
+with open(arguments["out"], "w") as out:
+    json.dump(answer, out)
 """
 
 
@@ -462,13 +494,20 @@ def test_hunt_find_starts_claude_on_haiku_in_the_run_folder_with_only_gmail_read
 ) -> None:
     assert cli.main(["find"]) == 0
     assert capsys.readouterr().out == "alert: 4 emails, 8 jobs, 4 new\nsame job from two sources: 0\ntook: alert 0s\n"
-    started = json.loads((tmp_path / "claude.json").read_text())
-    argv = started["argv"]
-    assert Path(started["cwd"]) == fake_claude / ".background"
-    assert argv[0] == "-p" and argv[1].startswith("/read-job-alerts {")
-    assert argv[argv.index("--model") + 1] == "claude-haiku-5-5"
+    search, batch = (json.loads(line) for line in (tmp_path / "claude.json").read_text().splitlines())
+    for started in (search, batch):
+        argv = started["argv"]
+        assert Path(started["cwd"]) == fake_claude / ".background"
+        assert argv[0] == "-p" and argv[1].startswith("/read-job-alerts {")
+        assert argv[argv.index("--model") + 1] == "claude-haiku-5-5"
     found = fake_claude / "data" / "found-jobs.json"
-    assert argv[argv.index("--allowedTools") + 1].split(",") == [*GMAIL_READ_TOOLS, f"Edit(/{found})"]
+    # The search reads the recruiters' emails too; the batch only the alerts it is named.
+    assert search["argv"][search["argv"].index("--allowedTools") + 1].split(",") == [
+        *GMAIL_READ_TOOLS, f"Edit(/{found})"]
+    assert batch["argv"][batch["argv"].index("--allowedTools") + 1].split(",") == [
+        "mcp__claude_ai_Gmail__get_message", f"Edit(/{found.with_name('found-jobs-1.json')})"]
+    # The batch's own file is merged into the jobs file and gone.
+    assert not found.with_name("found-jobs-1.json").exists()
     assert len(list((fake_claude / "jobs").iterdir())) == 4
 
 
@@ -511,7 +550,7 @@ def test_two_tracking_links_that_end_at_the_same_page_are_one_job(
         return pages[link], (HERE / "pages" / "company.html").read_text()
 
     jobs = JobsList(tmp_path / "jobs.db", clock=clock)
-    summary = find(settings, jobs, tmp_path / "jobs", found, run=lambda command: found.write_text(written),
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=AlertSkill(json.loads(written)),
                    fetch=redirect, clock=clock)
     assert (summary.jobs, summary.new) == (2, 1)
     assert [(each.link, each.page_link) for each in jobs.all()] == [
@@ -533,7 +572,8 @@ def test_a_second_run_while_one_runs_fails_and_neither_reads_the_others_file(
         skill(command)
 
     summary = find(settings, jobs, tmp_path / "jobs", skill.found, run=first_run, fetch=_fetch, clock=clock)
-    assert refused and len(skill.commands) == 1 and (summary.jobs, summary.new) == (8, 4)
+    # The search and its one batch: each refused the second run.
+    assert len(refused) == len(skill.commands) == 2 and (summary.jobs, summary.new) == (8, 4)
     assert jobs.last_run() == clock.now
     # The lock goes with the run: the next one runs.
     clock.advance(days=1)
@@ -624,3 +664,158 @@ def test_how_long_a_source_took_is_said_in_hours_minutes_or_seconds(seconds: flo
     from job_hunt.finder import took
 
     assert took(seconds) == said
+
+
+# The alert emails in batches
+
+
+def _alerts(count: int) -> dict:
+    """One remote job in each of `count` alert emails, an hour apart, listed newest first."""
+    first = datetime(2026, 11, 5, 7, 0, tzinfo=UTC)
+    jobs = [{**_job().__dict__, "link": f"https://jobs.example.com/careers/{number}", "remote": "remote",
+             "title": f"QA Automation Engineer {number}", "board": "company", "area": None,
+             "email_id": f"18c0ffee{number:08d}", "email_date": (first + timedelta(hours=number)).isoformat()}
+            for number in range(1, count + 1)]
+    for job in jobs:
+        del job["source"]
+    return {"emails": count, "jobs": list(reversed(jobs))}
+
+
+def _any_page(link: str) -> tuple[str, str]:
+    return link, (HERE / "pages" / "company.html").read_text()
+
+
+def test_25_alert_emails_are_read_in_3_batches_of_at_most_10_oldest_first(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    skill = AlertSkill(_alerts(25))
+    found = tmp_path / "found-jobs.json"
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=skill, fetch=_any_page, clock=clock)
+    assert [len(batch) for batch in skill.batches] == [10, 10, 5]
+    assert [id for batch in skill.batches for id in batch] == [f"18c0ffee{number:08d}" for number in range(1, 26)]
+    # Each batch writes a file of its own, which the script merges into one.
+    outs = [arguments(command)["out"] for command in skill.commands]
+    assert outs == [str(found), *(str(tmp_path / f"found-jobs-{number}.json") for number in (1, 2, 3))]
+    assert sorted(path.name for path in tmp_path.glob("found-jobs*.json")) == ["found-jobs.json"]
+    merged = json.loads(found.read_text())
+    assert (merged["emails"], len(merged["jobs"])) == (25, 25)
+    assert (summary.emails, summary.jobs, summary.new, summary.failed) == (25, 25, 25, [])
+    assert jobs.last_run() == clock.now
+
+
+def test_a_failed_middle_batch_is_named_the_others_save_and_the_next_run_reads_it_again(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    # Run 3 is the second batch: it writes nothing.
+    skill = AlertSkill(_alerts(25), fail={3})
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=skill, fetch=_any_page,
+                   clock=clock)
+    assert summary.failed == [f"alert: batch 2 of 3 failed: the read-job-alerts batch wrote no file "
+                              f"({tmp_path / 'found-jobs-2.json'})"]
+    assert (summary.emails, summary.jobs, summary.new) == (15, 15, 15)
+    assert str(summary).splitlines()[0] == "alert: 15 emails, 15 jobs, 15 new"
+    # The last run moves only to the newest email of the first batch, so the next run reads from it.
+    tenth = datetime(2026, 11, 5, 17, 0, tzinfo=UTC)
+    assert jobs.last_run() == tenth - timedelta(seconds=1)
+    clock.advance(days=1)
+    again = AlertSkill(_alerts(25))
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=again, fetch=_any_page,
+                   clock=clock)
+    assert arguments(again.commands[0])["after"] == int((tenth - timedelta(seconds=1)).timestamp())
+    assert (summary.new, summary.failed, jobs.last_run()) == (10, [], clock.now)
+    assert len(jobs.all()) == 25
+
+
+def test_a_failed_first_batch_leaves_the_last_run_where_it_was(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    skill = AlertSkill(_alerts(12), fail={2})
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=skill, fetch=_any_page,
+                   clock=clock)
+    assert [line.split(":", 2)[1] for line in summary.failed] == [" batch 1 of 2 failed"]
+    assert (summary.new, jobs.last_run()) == (2, None)
+
+
+def test_a_batch_whose_run_fails_is_named_with_why_and_the_others_still_count(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    skill = AlertSkill(_alerts(12))
+
+    def run(command: list[str]) -> None:
+        if arguments(command).get("email_ids", [""])[0] == "18c0ffee00000011":
+            raise FinderError("the read-job-alerts run failed (1): Gmail is not connected")
+        skill(command)
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=run, fetch=_any_page,
+                   clock=clock)
+    assert summary.failed == ["alert: batch 2 of 2 failed: the read-job-alerts run failed (1): Gmail is not connected"]
+    assert summary.new == 10
+
+
+def test_no_alert_email_runs_no_batch(tmp_path: Path, settings: Settings, clock: MovableClock) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    skill = AlertSkill({"emails": 0, "jobs": []})
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=skill, fetch=_any_page,
+                   clock=clock)
+    assert (len(skill.commands), skill.batches, summary.emails, summary.failed) == (1, [], 0, [])
+    assert jobs.last_run() == clock.now
+
+
+def test_a_search_that_lists_an_email_twice_or_without_its_date_reads_it_once_last(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    found = tmp_path / "found-jobs.json"
+    batches: list[list[str]] = []
+
+    def run(command: list[str]) -> None:
+        args = arguments(command)
+        if "email_ids" in args:
+            batches.append(args["email_ids"])
+            Path(args["out"]).write_text(json.dumps({"emails": len(args["email_ids"]), "jobs": []}))
+        else:
+            found.write_text(json.dumps({"alerts": [
+                {"email_id": "18c0ffee00000002", "email_date": "2026-11-05T09:00:00+00:00"},
+                {"email_id": "18c0ffee00000009"},
+                {"email_id": "18c0ffee00000001", "email_date": "2026-11-05T08:00:00+00:00"},
+                {"email_id": "18c0ffee00000002", "email_date": "2026-11-05T09:00:00+00:00"},
+                {"email_date": "2026-11-05T09:00:00+00:00"}]}))
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=run, fetch=_any_page, clock=clock)
+    assert batches == [["18c0ffee00000001", "18c0ffee00000002", "18c0ffee00000009"]]
+    assert summary.problems == ["alert email 5 has no email_id"]
+
+
+def test_a_click_tracking_link_is_saved_as_it_is_and_followed_to_its_page(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    tracking = ("https://click.appcast.io/track/7a1b2c3d?cs=jobot&jg=4xyz&bid=Q2xpY2tIZXJl&u=aHR0cHM6Ly9qb2JzLmV4YW1w"
+                "bGUuY29tL2NhcmVlcnMvMTIzNA%3D%3D&utm_source=jobot&utm_medium=email")
+    job = {**_job().__dict__, "link": tracking, "board": "company", "remote": "remote", "area": None}
+    del job["source"]
+    followed: list[str] = []
+
+    def redirect(link: str) -> tuple[str, str]:
+        followed.append(link)
+        return "https://jobs.example.com/careers/1234?utm_source=jobot", (HERE / "pages" / "company.html").read_text()
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json",
+                   run=AlertSkill({"emails": 1, "jobs": [job]}), fetch=redirect, clock=clock)
+    assert (summary.new, summary.problems) == (1, [])
+    (saved,) = jobs.all()
+    assert followed == [saved.link]
+    assert saved.page_link == "https://jobs.example.com/careers/1234"
+    assert saved.description and saved.page_problem is None
+
+
+def test_the_skill_reads_each_alert_in_plain_text_by_its_id_and_keeps_a_tracking_link() -> None:
+    skill = " ".join((Path(cli.ROOT) / ".claude" / "skills" / "read-job-alerts" / "SKILL.md").read_text().split())
+    assert 'with the Gmail connector\'s `get_message` and `"messageFormat": "PLAIN_TEXT"`. Never use another format, ' \
+           "and never `get_thread`" in skill
+    assert "Read each email of `email_ids`" in skill and "Read no other email and make no search." in skill
+    assert "also a click-tracking address" in skill and "never leave a job out because of its link" in skill

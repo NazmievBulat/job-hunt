@@ -118,9 +118,12 @@ class Pace:
         self._first = True
         self._turn = threading.Lock()
         self.stopped: str | None = None
+        # The search pages LinkedIn answered this run, which the stop names.
+        self.pages = 0
 
     def stop(self, status: int | str) -> None:
-        self.stopped = f"LinkedIn answered {status}, so it is not searched again this run"
+        pages = f"{self.pages} search page" + ("" if self.pages == 1 else "s")
+        self.stopped = f"LinkedIn answered {status} after {pages}, so it is not searched again this run"
 
     @contextmanager
     def turn(self) -> Iterator[None]:
@@ -357,6 +360,7 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
             if answer.status != 200:
                 result.problems.append(f"{named}: HTTP {answer.status}")
                 break
+            pace.pages += 1
             cards = linkedin_cards(answer.text)
             for card in cards:
                 job = found.setdefault(card.link, FoundJob(

@@ -222,3 +222,70 @@ def test_a_session_that_did_not_start_is_logged_for_the_next_morning(
     assert cli.main(["morning"]) == 1
     assert "hunt morning: tmux is not installed" in (data / "morning.log").read_text()
     assert "tmux is not installed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired(["tmux"], 60), PermissionError("jobs/apply.lock")])
+def test_any_failure_to_start_the_session_is_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    from job_hunt import cli
+
+    data = tmp_path / "data"
+    job = JobsList(data / "jobs.db").add(_found(1))
+    assert job is not None
+    JobsList(data / "jobs.db").score(job, 7, "A reason.")
+    monkeypatch.setattr(cli, "DATA", data)
+    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    monkeypatch.setattr(cli, "find_step", lambda: None)
+    monkeypatch.setattr(cli, "score_step", lambda: None)
+
+    def failing(root: Path) -> None:
+        raise error
+
+    monkeypatch.setattr(cli, "start_session", failing)
+
+    assert cli.main(["morning"]) == 1
+    assert "hunt morning: " in (data / "morning.log").read_text()
+
+
+def test_a_hung_tmux_is_a_failure_in_words() -> None:
+    from job_hunt import morning as module
+
+    def hung(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(["tmux"], 60)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(module.subprocess, "run", hung)
+        with pytest.raises(RuntimeError, match="tmux did not answer in 60 seconds"):
+            module.tmux(["tmux", "kill-session", "-t", SESSION])
+
+
+def test_a_session_that_ends_as_it_starts_is_a_failure(tmp_path: Path) -> None:
+    class Gone(Tmux):
+        def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+            done = super().__call__(command)
+            if command[1] == "capture-pane":
+                return subprocess.CompletedProcess(command, 1, "", f"can't find session: {SESSION}")
+            return done
+
+    with pytest.raises(RuntimeError, match="ended as it started"):
+        start_session(tmp_path, run=Gone(), sleep=lambda seconds: None)
+
+
+def test_jobs_the_scoring_left_out_are_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+    from job_hunt.scoring import Summary
+
+    data = tmp_path / "data"
+    monkeypatch.setattr(cli, "DATA", data)
+    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    monkeypatch.setattr(cli, "find_step", lambda: JobsList(data / "jobs.db").add(_found(1)))
+    monkeypatch.setattr(cli, "score_step", lambda: Summary(0, ["job 1 (QA Automation Engineer at Example Labs)"]))
+    started: list[Path] = []
+    monkeypatch.setattr(cli, "start_session", started.append)
+
+    assert cli.main(["morning"]) == 0
+
+    assert "hunt score: not scored, still new: job 1 (QA Automation Engineer at Example Labs)" in (
+        data / "morning.log").read_text()
+    assert started == [tmp_path]

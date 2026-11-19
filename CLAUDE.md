@@ -17,10 +17,14 @@ each part as a message of its own, one at a time, and wait for the reply before 
 
 1. **The morning run had a problem.** Say it in one line with the next question, not as a
    question of its own. It is told once.
-2. **New jobs.** Show the numbered lines exactly as printed, then: "Apply? Reply like 1 3, all,
+2. **Unfinished applications.** These the user already approved; ask nothing. Run
+   `uv run hunt apply` in the background for them (see below) and go on with the questions.
+3. **New jobs.** Show the numbered lines exactly as printed, then: "Apply? Reply like 1 3, all,
    all above 7, or skip 2." Turn the reply into `uv run hunt pick …` or `uv run hunt skip …` as
-   `/jobs` says, with the numbers just printed.
-3. **Paused applications.** Each line says what the job needs, in which Chrome tab, and the
+   `/jobs` says, with the numbers last printed. Asked again, the jobs keep their numbers; when
+   the heading says "numbered anew", show the whole list again and say the numbers changed
+   before taking any number.
+4. **Paused applications.** Each line says what the job needs, in which Chrome tab, and the
    command after it. Ask once for all of them, offering each job only the replies its command
    takes: "done 12" for `hunt resume-job 12` (a CAPTCHA, a sign-in, Chrome to open), "12: and
    the answer" for `hunt answer 12`, and "sent 12" or "done 12" for a job whose command is

@@ -27,15 +27,25 @@ class TimerError(RuntimeError):
     """The timer could not be turned on or off, and why."""
 
 
+def _literal(value: object) -> str:
+    """A value systemd reads as it is: `%` starts a specifier."""
+    return str(value).replace("%", "%%")
+
+
+def _quoted(value: object) -> str:
+    """One word of a systemd command line or setting, spaces and all."""
+    return '"' + _literal(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def systemd_units(root: Path, hour: int, uv: str, path: str) -> tuple[str, str]:
     service = f"""[Unit]
 Description=The job hunt's morning run
 
 [Service]
 Type=oneshot
-WorkingDirectory={root}
-Environment=PATH={path}
-ExecStart={uv} run --project {root} hunt morning
+WorkingDirectory={_literal(root)}
+Environment={_quoted(f"PATH={path}")}
+ExecStart={_quoted(uv)} run --project {_quoted(root)} hunt morning
 KillMode=process
 """
     timer = f"""[Unit]

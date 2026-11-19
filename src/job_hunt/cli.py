@@ -21,6 +21,7 @@ from job_hunt.notify import NotifyError, notify, post_pushover
 from job_hunt.questions import job_line, log_failure, questions, then
 from job_hunt.resume import ContentError, write_pdf
 from job_hunt.scoring import SKILL as SCORE_SKILL, ScoreError, score
+from job_hunt.scoring import Summary as ScoreSummary
 from job_hunt.settings import SettingsError, read_settings
 from job_hunt.timer import TimerError, timer
 
@@ -81,11 +82,19 @@ def run_scoring(command: list[str]) -> None:
     run_claude(command, ROOT, skill=SCORE_SKILL, error=ScoreError)
 
 
-def score_step() -> None:
+def score_step() -> ScoreSummary:
     summary = score(JobsList(DATA / "jobs.db"), ROOT, run=run_scoring)
     for job in summary.missing:
         print(f"hunt score: not scored, still new: {job}", file=sys.stderr)
     print(summary)
+    return summary
+
+
+def _score_every_job() -> None:
+    """For the morning: a job the scoring left out is a failure it tells, not only a line."""
+    summary = score_step()
+    if summary and summary.missing:
+        raise ScoreError(f"not scored, still new: {', '.join(summary.missing)}")
 
 
 def _score(args: argparse.Namespace) -> int:
@@ -207,9 +216,9 @@ def _status(args: argparse.Namespace) -> int:
 
 def _morning(args: argparse.Namespace) -> int:
     try:
-        print(morning(JobsList(DATA / "jobs.db"), DATA, find=find_step, score=score_step,
+        print(morning(JobsList(DATA / "jobs.db"), DATA, find=find_step, score=_score_every_job,
                       start=lambda: start_session(ROOT)))
-    except RuntimeError as error:
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         # Today's session did not start, so the next morning's questions tell it.
         log_failure(DATA, "hunt morning", error, lambda: datetime.now(UTC))
         print(f"hunt morning: {error}", file=sys.stderr)

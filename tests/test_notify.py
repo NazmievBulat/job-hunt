@@ -106,3 +106,32 @@ def test_hunt_notify_prints_no_key(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     printed = capsys.readouterr()
     assert "is invalid" in printed.err
     assert TOKEN not in printed.out + printed.err and USER not in printed.out + printed.err
+
+
+def test_keys_removed_after_a_push_are_told_again(tmp_path: Path) -> None:
+    data = _data(tmp_path)
+    assert "no Pushover keys" in notify("A question", data, post=Post())
+    (data / "settings.json").write_text(json.dumps({**SETTINGS, "pushover": {"token": TOKEN, "user": USER}}))
+    notify("A question", data, post=Post())
+    (data / "settings.json").write_text(json.dumps(SETTINGS))
+
+    assert "no Pushover keys" in notify("A question", data, post=Post())
+
+
+@pytest.mark.parametrize("answer", [[], {"status": 0}])
+def test_an_answer_that_is_not_a_success_is_refused(tmp_path: Path, answer: object) -> None:
+    data = _data(tmp_path, pushover={"token": TOKEN, "user": USER})
+
+    with pytest.raises(NotifyError, match="did not say why"):
+        notify("A question", data, post=Post(answer))  # type: ignore[arg-type]
+
+
+def test_hunt_notify_without_keys_says_so_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                               capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(cli, "DATA", _data(tmp_path))
+    monkeypatch.setattr(cli, "post_pushover", Post())
+
+    assert cli.main(["notify", "A question"]) == 0
+    assert cli.main(["notify", "A question"]) == 0
+
+    assert capsys.readouterr().out.count("no Pushover keys") == 1

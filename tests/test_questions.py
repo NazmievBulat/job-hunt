@@ -110,3 +110,68 @@ def test_a_failure_logged_after_the_questions_is_told_next_time(
     text = questions(jobs, data)
 
     assert "second" in text and "first" not in text
+
+
+def test_a_log_cut_by_hand_in_a_letter_still_reads(jobs: JobsList, tmp_path: Path, clock: MovableClock) -> None:
+    data = tmp_path / "data"
+    log_failure(data, "hunt find", "the page of Société Example could not be read", clock)
+    # Told up to the middle of the two bytes of "é".
+    (data / "morning.told").write_text(f"{(data / 'morning.log').read_bytes().index('é'.encode()) + 1}\n")
+
+    assert "could not be read" in questions(jobs, data)
+
+
+def test_asking_again_keeps_the_numbers_of_the_jobs_still_waiting(jobs: JobsList, tmp_path: Path) -> None:
+    for number, score in ((1, 9), (2, 8), (3, 7)):
+        job = jobs.add(_found(number, f"Role {number}"))
+        assert job is not None
+        jobs.score(job, score, "A reason.")
+    questions(jobs, tmp_path / "data")
+    jobs.decide([1], "picked")
+
+    again = questions(jobs, tmp_path / "data")
+
+    # "2" still names Role 2, as when the list was shown.
+    assert " 2.  8  Role 2" in again and " 3.  7  Role 3" in again and "Role 1 ·" not in again
+    assert [job.title for _, job in jobs.decide([2], "picked")] == ["Role 2"]
+
+
+def test_a_new_job_renumbers_the_whole_list(jobs: JobsList, tmp_path: Path) -> None:
+    for number, score in ((1, 9), (2, 8)):
+        job = jobs.add(_found(number, f"Role {number}"))
+        assert job is not None
+        jobs.score(job, score, "A reason.")
+    questions(jobs, tmp_path / "data")
+    jobs.decide([1], "picked")
+    later = jobs.add(_found(3, "Role 3"))
+    assert later is not None
+    jobs.score(later, 9, "A reason.")
+
+    again = questions(jobs, tmp_path / "data")
+
+    assert "New jobs (2), numbered anew:" in again
+    assert " 1.  9  Role 3" in again and " 2.  8  Role 2" in again
+
+
+@pytest.mark.parametrize("state", ["picked", "applying"])
+def test_an_approved_application_left_unfinished_waits(jobs: JobsList, tmp_path: Path, state: str) -> None:
+    job = jobs.add(_found(1), kind="company_site")
+    assert job is not None
+    jobs.score(job, 7, "A reason.")
+    jobs.move(job, "picked")
+    if state == "applying":
+        jobs.move(job, "resume_ready")
+        jobs.move(job, "applying")
+
+    assert anything_waiting(jobs, tmp_path / "data")
+    assert "Unfinished applications (1): run hunt apply" in questions(jobs, tmp_path / "data")
+
+
+def test_an_easy_apply_resume_waiting_for_the_linkedin_worker_does_not(jobs: JobsList, tmp_path: Path) -> None:
+    job = jobs.add(_found(1), kind="easy_apply")
+    assert job is not None
+    jobs.score(job, 7, "A reason.")
+    jobs.move(job, "picked")
+    jobs.move(job, "resume_ready")
+
+    assert not anything_waiting(jobs, tmp_path / "data")

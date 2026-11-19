@@ -4,9 +4,15 @@ The state is all in `data/`, so a fresh session knows everything by running it:
 
 1. a problem of the morning run, told once (`data/morning.log`, how much of it was told in
    `data/morning.told`);
-2. new jobs, numbered as `hunt list` numbers them, for `hunt pick` and `hunt skip`;
+2. new jobs, numbered as `hunt list` numbers them, for `hunt pick` and `hunt skip`. Asked again,
+   the jobs of the last list keep their numbers, so a reply to it still names the same jobs;
+   only a job scored since numbers the whole list anew;
 3. paused applications, each with what it needs and the command after it;
 4. recruiter messages and 5. requests to talk, once the jobs list keeps them.
+
+Before them comes work the person already approved and that stopped before its end (a picked
+job, one left `applying`): it asks nothing, the chat runs `hunt apply` for it. A company-site
+job whose resume is ready is that too; an Easy Apply one waits for the LinkedIn worker.
 """
 
 from __future__ import annotations
@@ -42,13 +48,23 @@ def _told(data: Path) -> tuple[bytes, int]:
     return log, told if told <= len(log) else 0
 
 
+def _lines(log: bytes) -> list[str]:
+    # A log cut by hand may start in the middle of a letter.
+    return log.decode(errors="replace").splitlines()
+
+
 def untold_failures(data: Path) -> list[str]:
     log, told = _told(data)
-    return log[told:].decode().splitlines()
+    return _lines(log[told:])
+
+
+def unfinished(jobs: JobsList) -> list[Job]:
+    return [job for job in jobs.in_states("picked", "resume_ready", "applying")
+            if not (job.state == "resume_ready" and job.kind == "easy_apply")]
 
 
 def anything_waiting(jobs: JobsList, data: Path) -> bool:
-    return bool(untold_failures(data) or jobs.waiting() or jobs.in_states("paused"))
+    return bool(untold_failures(data) or jobs.waiting() or jobs.in_states("paused") or unfinished(jobs))
 
 
 def where(job: Job) -> str:
@@ -86,13 +102,21 @@ def questions(jobs: JobsList, data: Path) -> str:
     """The questions as text. Showing them numbers the new jobs and marks the failures told."""
     parts: list[str] = []
     log, told = _told(data)
-    failures = log[told:].decode().splitlines()
+    failures = _lines(log[told:])
     if failures:
         parts.append("\n".join(["The morning run had a problem:", *map(_failure, failures)]))
-    new = jobs.show()
-    if new:
-        parts.append("\n".join([f"New jobs ({len(new)}):",
-                                *(job_line(number, job) for number, job in enumerate(new, start=1))]))
+    left = unfinished(jobs)
+    if left:
+        parts.append("\n".join([f"Unfinished applications ({len(left)}): run hunt apply", *(
+            f"  {job.id}. {job.title} at {job.company}" for job in left)]))
+    waiting = {job.id: job for job in jobs.waiting()}
+    kept = {number: waiting[job] for number, job in sorted(jobs.last_list().items()) if job in waiting}
+    if waiting and len(kept) == len(waiting):
+        parts.append("\n".join([f"New jobs ({len(kept)}):", *(job_line(number, job) for number, job in kept.items())]))
+    elif waiting:
+        new = jobs.show()
+        heading = f"New jobs ({len(new)}), numbered anew:" if kept else f"New jobs ({len(new)}):"
+        parts.append("\n".join([heading, *(job_line(number, job) for number, job in enumerate(new, start=1))]))
     paused = jobs.in_states("paused")
     if paused:
         parts.append("\n".join([f"Paused applications ({len(paused)}):", *(

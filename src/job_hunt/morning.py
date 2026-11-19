@@ -82,6 +82,8 @@ def tmux(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(command, capture_output=True, text=True, timeout=60)
     except FileNotFoundError as missing:
         raise RuntimeError("tmux is not installed or not on the PATH") from missing
+    except subprocess.TimeoutExpired as hung:
+        raise RuntimeError(f"tmux did not answer in 60 seconds: {' '.join(command[:2])}") from hung
 
 
 def session_command(root: Path) -> list[str]:
@@ -107,8 +109,11 @@ def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None]
         raise RuntimeError(f"tmux could not start the {SESSION} session: {said}")
     for _ in range(LINK_SECONDS):
         sleep(1)
-        pane = run(["tmux", "capture-pane", "-p", "-J", "-t", SESSION]).stdout
-        found = LINK.search(pane or "")
+        pane = run(["tmux", "capture-pane", "-p", "-J", "-t", SESSION])
+        if pane.returncode != 0:
+            # Its only window closed: claude stopped, or was not found on the PATH.
+            raise RuntimeError(f"the {SESSION} session ended as it started: is claude on the timer's PATH?")
+        found = LINK.search(pane.stdout or "")
         if found:
             (data / "session.json").write_text(json.dumps({"link": found.group()}) + "\n")
             return

@@ -451,14 +451,20 @@ def test_a_linkedin_reply_is_given_the_browser_the_settings_name_and_an_email_no
 # Reading LinkedIn
 
 
-def test_the_linkedin_reader_has_no_tool_that_types_or_clicks(tmp_path: Path) -> None:
+def test_the_linkedin_reader_clicks_only_through_its_guard_and_has_no_tool_that_fills_or_scripts(
+    tmp_path: Path,
+) -> None:
     # It reads strangers' messages with nobody watching: a message must not be able to make it send.
+    # It clicks, as the list of conversations has no links; the computer tool goes through the hook.
     command = read_command(datetime(2026, 11, 18, tzinfo=UTC), tmp_path / "out.json")
     tools = command[command.index("--allowedTools") + 1].split(",")
     assert "mcp__claude-in-chrome__navigate" in tools
     assert_only_named_tools(command)
-    assert "mcp__claude-in-chrome__get_page_text" in tools
-    assert not [tool for tool in tools if tool.endswith(("computer", "form_input", "file_upload"))]
+    assert {"mcp__claude-in-chrome__read_page", "mcp__claude-in-chrome__find", "mcp__claude-in-chrome__computer"} <= set(tools)
+    assert not [tool for tool in tools if tool.endswith(("form_input", "file_upload", "javascript_tool", "browser_batch"))]
+    hooks = json.loads(command[command.index("--settings") + 1])["hooks"]["PreToolUse"]
+    assert [hook["matcher"] for hook in hooks] == ["mcp__claude-in-chrome__computer"]
+    assert hooks[0]["hooks"][0]["command"].endswith(" -I -m job_hunt.click_guard")
 
 
 def test_linkedin_is_read_in_the_browser_the_settings_name(

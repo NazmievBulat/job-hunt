@@ -381,8 +381,9 @@ def _unsure(notes: Notes, note: int) -> Note:
 
 
 def decide(notes: Notes, decision: Literal["send", "skip"], numbers: list[int] | None) -> list[Note]:
-    """Approve or skip the notes asked about: all of them, or only those numbered, the others
-    asked about then taking the other decision. Return the notes approved or skipped as asked."""
+    """Approve or skip the notes asked about: all of them, or only those numbered. After "send 1 3"
+    the others asked about are skipped; after "skip 2" they wait to be asked again, since only
+    "send" approves a note. Return the notes approved or skipped as asked."""
     asked = {note.id: note for note in notes.in_states("drafted") if note.asked_at is not None}
     unsure = {note.id for note in notes.in_states("unsure")}
     if decision == "send" and numbers and set(numbers) <= unsure:
@@ -397,13 +398,12 @@ def decide(notes: Notes, decision: Literal["send", "skip"], numbers: list[int] |
     if unknown:
         raise NoteError(f"no note asked about has the number {', '.join(unknown)}; asked: "
                         f"{', '.join(map(str, asked))}")
-    other: State = "skipped" if decision == "send" else "approved"
     for number in asked:
         if number in chosen:
             notes.move(number, "approved" if decision == "send" else "skipped")
-        else:
-            # A note left out of "send 1 3" is not sent; one left out of "skip 2" is.
-            notes.move(number, other)
+        elif decision == "send":
+            # A note left out of "send 1 3" is not sent; one left out of "skip 2" is asked again.
+            notes.move(number, "skipped")
     return [notes.get(number) for number in chosen]
 
 

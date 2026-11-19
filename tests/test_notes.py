@@ -550,14 +550,30 @@ def test_a_note_that_may_have_gone_counts_against_the_daily_cap(
     assert [note.state for note in notes.all()] == ["unsure", "sent", "approved"]
 
 
-def test_skip_2_skips_only_that_note_and_approves_the_others(
+def test_skip_2_skips_only_that_note_and_sends_none(
         notes: Notes, threads: Threads, jobs: JobsList, project: Path) -> None:
     first, second, third = _drafted(notes, jobs, project, _poster(1), _poster(2), _poster(3))
     questions(jobs, project / "data", threads, notes)
 
     decide(notes, "skip", [second])
 
-    assert [notes.get(note).state for note in (first, second, third)] == ["approved", "skipped", "approved"]
+    # Only "send" is the person's word for a note: the others are asked about again.
+    assert [notes.get(note).state for note in (first, second, third)] == ["drafted", "skipped", "drafted"]
+    asked = questions(jobs, project / "data", threads, notes)
+    assert f"  {first}. " in asked and f"  {third}. " in asked and f"  {second}. " not in asked
+
+
+def test_with_the_daily_cap_0_no_note_is_drafted(
+        hunt: tuple[Path, FakeClaude], capsys: pytest.CaptureFixture[str]) -> None:
+    project, fake = hunt
+    settings = json.loads((project / "data" / "settings.json").read_text())
+    (project / "data" / "settings.json").write_text(json.dumps({**settings, "linkedin_notes_daily": 0}))
+    _applied(JobsList(project / "data" / "jobs.db"), project, 1, _poster(1))
+
+    assert cli.main(["draft-notes"]) == 0
+
+    assert "0 notes to hiring managers drafted" in capsys.readouterr().out
+    assert Notes(project / "data" / "jobs.db").all() == []
 
 
 def test_a_note_left_sending_by_a_run_that_died_is_unsure(
@@ -683,3 +699,42 @@ def test_the_morning_drafts_again_a_note_whose_drafting_failed(
 
     assert [note.state for note in notes.all()] == ["drafted"]
     assert started == [True]
+
+
+def test_the_morning_collects_a_poster_an_apply_stopped_before_drafting(
+        notes: Notes, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    from job_hunt.morning import morning
+
+    # The application went, but hunt apply stopped before its notes were drafted: no note yet.
+    _applied(jobs, project, 1, _poster(1))
+    started: list[bool] = []
+
+    def draft() -> int:
+        collect(notes, jobs, project)
+        return draft_notes(notes, jobs, project, run=Drafter())
+
+    morning(jobs, project / "data", find=lambda: None, score=lambda: None, start=lambda: started.append(True),
+            clock=clock, notes=notes, draft_notes=draft)
+
+    assert [note.state for note in notes.all()] == ["drafted"]
+    assert started == [True]
+
+
+def test_settings_that_cannot_be_read_send_no_note(
+        hunt: tuple[Path, FakeClaude], capsys: pytest.CaptureFixture[str]) -> None:
+    project, fake = hunt
+    jobs = JobsList(project / "data" / "jobs.db")
+    _applied(jobs, project, 1, _poster(1))
+    cli.main(["draft-notes"])
+    cli.main(["questions"])
+    settings = json.loads((project / "data" / "settings.json").read_text())
+    # Sending turned off, and a mistake elsewhere in the file.
+    (project / "data" / "settings.json").write_text(json.dumps({**settings, "linkedin_notes_daily": 0,
+                                                                "morning_hour": "seven"}))
+    capsys.readouterr()
+
+    assert cli.main(["send-notes", "all"]) == 1
+
+    assert fake.sent == []
+    assert "settings.json" in capsys.readouterr().err
+    assert "Approved notes" not in (cli.main(["questions"]), capsys.readouterr().out)[1]

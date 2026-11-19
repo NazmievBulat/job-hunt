@@ -33,7 +33,7 @@ from job_hunt.replies import (
 from job_hunt.resume import ContentError, write_pdf
 from job_hunt.scoring import SKILL as SCORE_SKILL, ScoreError, score
 from job_hunt.scoring import Summary as ScoreSummary
-from job_hunt.settings import NOTES_DAILY, SettingsError, read_settings
+from job_hunt.settings import SettingsError, read_settings
 from job_hunt.timer import TimerError, timer
 from job_hunt.watch import tell_session, watch
 
@@ -205,14 +205,18 @@ def run_note_send(command: list[str]) -> None:
 
 
 def notes_daily() -> int:
-    """The daily cap of the settings; with settings that cannot be read, the default."""
+    """The daily cap of the settings; with settings that cannot be read, 0: they may turn
+    sending off, so none goes until they are mended."""
     try:
         return read_settings(DATA / "settings.json").linkedin_notes_daily
     except SettingsError:
-        return NOTES_DAILY
+        return 0
 
 
 def draft_notes_step() -> int:
+    # With sending turned off (0 a day) no note could go, so none is drafted or asked about.
+    if notes_daily() == 0:
+        return 0
     notes, jobs = Notes(DATA / "jobs.db"), JobsList(DATA / "jobs.db")
     collect(notes, jobs, ROOT)
     return draft_notes(notes, jobs, ROOT, run=run_note_draft)
@@ -251,9 +255,15 @@ def _notes(args: argparse.Namespace) -> int:
         return 1
     if decision == "skip":
         return 0
+    try:
+        daily = read_settings(DATA / "settings.json").linkedin_notes_daily
+    except SettingsError as error:
+        print(f"hunt {args.command}: data/settings.json: {error}; no note is sent until it is mended",
+              file=sys.stderr)
+        return 1
     lock = LinkedInLock(DATA, pause=note_pause)
     print(send_notes(notes, Threads(DATA / "jobs.db"), JobsList(DATA / "jobs.db"), ROOT, run=run_note_send,
-                     lock=lock, sleep=time.sleep, daily=notes_daily()))
+                     lock=lock, sleep=time.sleep, daily=daily))
     return 0
 
 
@@ -567,7 +577,8 @@ def main(argv: list[str] | None = None) -> int:
     sending_notes.add_argument("numbers", nargs="*", help="the notes' numbers as hunt questions prints them, or all")
     sending_notes.set_defaults(run=_notes)
     skipping_notes = commands.add_parser(
-        "skip-notes", help="skip the notes asked about, all of them or those numbered (the others are approved)")
+        "skip-notes", help="skip the notes asked about, all of them or those numbered (the others wait to be asked "
+        "again)")
     skipping_notes.add_argument("numbers", nargs="*", help="the notes' numbers as hunt questions prints them")
     skipping_notes.set_defaults(run=_notes)
     note_went = commands.add_parser(

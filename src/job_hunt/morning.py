@@ -2,7 +2,8 @@
 
 It runs `hunt find`, then `hunt score` when any job is new (one a failed run left new too),
 and drafts a reply to each recruiter's message the find noted (`hunt draft-replies`) and a
-note to each hiring manager whose drafting failed before (`hunt draft-notes`).
+note to each hiring manager not drafted yet, a poster `hunt apply` stopped before or a failed
+drafting (`hunt draft-notes`).
 When anything waits for the person, notes to hiring managers included, (`questions.anything_waiting`) it ends yesterday's `job-hunt`
 session and starts a fresh interactive Claude Code session of that name with Remote Control,
 in a `tmux` session of the same name; its first message asks it to ask today's questions. With
@@ -91,8 +92,9 @@ def morning(
             draft()
         except Exception as error:
             log_failure(data, "hunt draft-replies", _said(error), clock)
-    if draft_notes is not None and notes is not None and notes.in_states("new"):
-        # A note whose drafting failed at the end of a hunt apply is tried again.
+    if draft_notes is not None:
+        # A poster a hunt apply stopped before drafting, and a note whose drafting failed, are
+        # drafted now: the step collects the posters first and drafts only the new notes.
         try:
             draft_notes()
         except Exception as error:

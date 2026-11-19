@@ -95,8 +95,9 @@ class LinkedInLock:
             self._next.write_text(not_before.isoformat())
         return not_before
 
-    def take(self, job: int) -> float | None:
-        """Hold the lock for this job's application and return None, or return how many
+    def take(self, job: int | str) -> float | None:
+        """Hold the lock for this job's application (or `"messages"`, LinkedIn's messages read or
+        sent) and return None, or return how many
         seconds to wait before trying again: another holds it, or the pause after the last
         application is not over."""
         with self._guarded():

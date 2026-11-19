@@ -10,7 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from job_hunt.timer import LABEL, UNIT, TimerError, launchd_plist, systemd_units, timer
+from job_hunt.timer import (
+    LABEL, UNIT, WATCH_LABEL, WATCH_UNIT, TimerError, launchd_plist, systemd_units, timer, watch_plist, watch_units,
+)
 
 
 class Runner:
@@ -237,3 +239,50 @@ def test_hunt_timer_off_needs_no_settings(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(cli, "run_command", Runner())
 
     assert cli.main(["timer", "off"]) == 0
+
+
+# The watch for recruiters' messages, every 20 minutes from the morning hour to the summary hour
+
+
+def test_the_watch_runs_every_20_minutes_from_the_morning_to_the_summary_hour(tmp_path: Path) -> None:
+    service, timer_unit = watch_units(tmp_path, 7, 18, "/usr/bin/uv", "/usr/bin")
+
+    assert f'ExecStart="/usr/bin/uv" run --project "{tmp_path}" hunt watch' in service
+    assert "KillMode=process" in service
+    # 07:00, 07:20, ... 17:40; at 18:00 the day's summary is due and the watch stops.
+    assert "OnCalendar=*-*-* 07..17:00/20:00" in timer_unit
+    assert f"Unit={WATCH_UNIT}.service" in timer_unit
+
+
+def test_the_watch_agent_runs_every_20_minutes_in_the_hours(tmp_path: Path) -> None:
+    agent = plistlib.loads(watch_plist(tmp_path, 7, 9, "uv", "/usr/bin").encode())
+
+    assert agent["Label"] == WATCH_LABEL
+    assert agent["ProgramArguments"][-2:] == ["hunt", "watch"]
+    assert agent["StartCalendarInterval"] == [{"Hour": hour, "Minute": minute}
+                                              for hour in (7, 8) for minute in (0, 20, 40)]
+
+
+def test_on_with_the_summary_hour_turns_the_watch_on_next_to_the_morning(tmp_path: Path) -> None:
+    home, root, runner = tmp_path / "home", tmp_path / "project", Runner()
+
+    said = timer("on", "Linux", home, root, 7, run=runner, uv="uv", path="/usr/bin", watch_until=18)
+
+    assert (home / ".config" / "systemd" / "user" / f"{WATCH_UNIT}.timer").exists()
+    assert ["systemctl", "--user", "enable", "--now", f"{WATCH_UNIT}.timer"] in runner.commands
+    assert "every 20 minutes" in said
+    runner = Runner()
+    timer("off", "Linux", home, root, 7, run=runner, uv="uv", path="/usr/bin")
+    assert ["systemctl", "--user", "disable", "--now", f"{WATCH_UNIT}.timer"] in runner.commands
+    assert not list((home / ".config" / "systemd" / "user").iterdir())
+
+
+def test_on_and_off_load_and_unload_the_macos_watch_agent(tmp_path: Path) -> None:
+    home, root, runner = tmp_path / "home", tmp_path / "project", Runner()
+    agent = home / "Library" / "LaunchAgents" / f"{WATCH_LABEL}.plist"
+
+    timer("on", "Darwin", home, root, 7, run=runner, uv="uv", path="/usr/bin", uid=501, watch_until=18)
+    assert agent.exists() and ["launchctl", "bootstrap", "gui/501", str(agent)] in runner.commands
+    timer("off", "Darwin", home, root, 7, run=runner, uv="uv", path="/usr/bin", uid=501)
+
+    assert not agent.exists()

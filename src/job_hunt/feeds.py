@@ -31,7 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Protocol
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, quote_plus, urlencode
 
 from job_hunt.finder import FIRST_RUN, html_text, title_matches
 from job_hunt.jobs import FoundJob, JobsList, Remote
@@ -60,6 +60,8 @@ USAJOBS_DAYS = 60
 ADZUNA = "https://api.adzuna.com/v1/api/jobs/us/search/"
 ADZUNA_PAGE = 50
 JOOBLE = "https://jooble.org/api/"
+# jooble.org is Jooble's US site.
+JOOBLE_COUNTRY = "USA"
 # A keyed feed's search is read page by page up to its total; this only stops one that pages for ever.
 KEYED_PAGES = 10
 # "NO REMOTE", "not remote", "Remote: no": a part of a first line that says the job is not remote.
@@ -243,7 +245,9 @@ def _usajobs_job(entry: dict[str, Any], settings: Settings) -> Found:
     places = [each.get("LocationName") or "" for each in job.get("PositionLocation") or []] or [display]
     remote = ("remote" if details.get("RemoteIndicator") is True or re.search(r"\bremote\b", display, re.IGNORECASE)
               else _remote(None, places))
-    duties = "\n".join(f"- {duty}" for duty in details.get("MajorDuties") or [] if isinstance(duty, str))
+    duties = details.get("MajorDuties") or []
+    # Documented as one text; the live answer gives a list.
+    duties = duties if isinstance(duties, str) else "\n".join(f"- {duty}" for duty in duties if isinstance(duty, str))
     # What the job needs, besides what it does: the scoring and the resume read it.
     parts = [details.get("JobSummary"), duties, job.get("QualificationSummary"), details.get("Requirements"),
              details.get("Education")]
@@ -309,7 +313,9 @@ def _jooble(settings: Settings, ask: Ask, since: datetime, now: datetime) -> Fee
     read = FeedRead()
     for title in settings.titles:
         for where, area in _searches(settings):
-            search = {"keywords": f"{title} remote"} if area is None else {"keywords": title, "location": where}
+            # Jooble requires a location: the remote search is the whole country's.
+            search = {"keywords": f"{title} remote", "location": JOOBLE_COUNTRY} if area is None else {
+                "keywords": title, "location": where}
             entries: list[Any] = []
             for page in range(1, KEYED_PAGES + 1):
                 try:
@@ -383,9 +389,25 @@ class Feeds:
             if isinstance(result, Exception):
                 failed.append(f"{name}: {result}")
                 continue
-            new = sum(save(job, description) for job, description in result.jobs)
+            new = 0
+            for job, description in result.jobs:
+                try:
+                    new += save(job, description)
+                except Exception as error:
+                    # One job that cannot be saved (a link that is no address) leaves the others.
+                    result.problems.append(f"left out {job.link}: {type(error).__name__}: {error}")
             lines[name] = f"{name}: {len(result.jobs)} found, {new} new"
             failed += [f"{name}: {problem}" for problem in result.problems]
             if not result.problems:
                 jobs.finished_run(started, name)
-        return [lines[name] for name in FEEDS if name in lines], failed
+        return [lines[name] for name in FEEDS if name in lines], [_unkeyed(line, settings) for line in failed]
+
+
+def _unkeyed(line: str, settings: Settings) -> str:
+    """What is told of a failure, with every key of the settings taken out of it, also as an error
+    or an address spells it."""
+    for key in settings.keys.values():
+        for value in key.values():
+            for spelled in {value, repr(value)[1:-1], quote(value), quote(value, safe=""), quote_plus(value)}:
+                line = line.replace(spelled, "…")
+    return line

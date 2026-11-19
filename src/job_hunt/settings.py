@@ -162,6 +162,10 @@ def _keys(data: dict[str, Any]) -> dict[str, dict[str, str]]:
                 or not all(isinstance(value, str) and value.strip() for value in key.values())):
             shape = ", ".join(f'"{each}": ...' for each in wanted)
             raise SettingsError(f"keys.{name} must be {{{shape}}}, all filled in, or left out")
+        for each, value in key.items():
+            # It is sent in a header or an address, where a space or a line break would fail and be repeated.
+            if any(letter.isspace() or not letter.isprintable() for letter in value.strip()):
+                raise SettingsError(f"keys.{name}.{each} has a space, a line break or a control letter in it")
     return {name: {each: value.strip() for each, value in key.items()} for name, key in keys.items()}
 
 

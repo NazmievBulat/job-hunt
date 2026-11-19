@@ -52,7 +52,7 @@
      "UserArea": {
       "Details": {
        "JobSummary": "Build the bureau's test tools.",
-       "MajorDuties": [],
+       "MajorDuties": "Keep the test tools running.",
        "RemoteIndicator": true
       }
      }

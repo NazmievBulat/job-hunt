@@ -23,7 +23,7 @@ from job_hunt.feeds import (
 )
 from job_hunt.finder import find
 from job_hunt.jobs import JobsList
-from job_hunt.search import Answer
+from job_hunt.search import Answer, SearchError
 from job_hunt.settings import Settings, SettingsError, read_settings
 from movable_clock import MovableClock
 
@@ -257,7 +257,8 @@ def test_usajobs_asks_with_the_key_in_its_headers_for_each_title_since_the_last_
     assert [description for _, description in read.jobs] == [
         "Test the agency's public systems.\n\n- Write automated tests\n- Review releases\n\n"
         "One year of test automation experience.\n\nUS citizenship.",
-        "Build the bureau's test tools.",
+        # The documented answer gives the duties as one text, the live one as a list.
+        "Build the bureau's test tools.\n\nKeep the test tools running.",
         None,
     ]
 
@@ -298,7 +299,7 @@ def test_jooble_posts_its_searches_with_the_key_in_the_address(settings: Setting
         body for title in settings.titles for body in (
             {"keywords": title, "location": "Raleigh, NC", "page": "1"},
             {"keywords": title, "location": "San Francisco, CA", "page": "1"},
-            {"keywords": f"{title} remote", "page": "1"})]
+            {"keywords": f"{title} remote", "location": "USA", "page": "1"})]
     assert {url for url, _, _ in sites.asked} == {JOOBLE}
     # Each search answered the same two jobs, once each, the remote search too, so both count as
     # remote. Durham is in an area; Chicago names another state than the Raleigh search's, so it
@@ -354,7 +355,7 @@ def test_with_remote_excluded_or_only_the_place_searches_follow(settings: Settin
         {"keywords": "SDET", "location": "San Francisco, CA", "page": "1"}]
     sites = _sites()
     _read("jooble", replace(settings, remote="only", titles=["SDET"]), sites)
-    assert [body for _, body, _ in sites.asked] == [{"keywords": "SDET remote", "page": "1"}]
+    assert [body for _, body, _ in sites.asked] == [{"keywords": "SDET remote", "location": "USA", "page": "1"}]
     # An area the table does not know is asked for by its own name.
     sites = _sites()
     _read("jooble", replace(settings, remote="exclude", titles=["SDET"], areas=["Lisbon"]), sites)
@@ -443,6 +444,36 @@ def test_a_failing_feed_is_named_and_the_others_are_saved(
     assert jobs.last_run("remotive") == clock.now
     # The keys never show in what is told.
     assert not any(key in " ".join(summary.failed + lines) for key in ("usa-key", "ad-key", "jo-key"))
+
+
+def test_a_job_that_cannot_be_saved_is_named_and_the_feeds_other_jobs_and_the_later_feeds_are_saved(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    answer = json.loads((HERE / "remotive.json").read_text())
+    answer["jobs"][0]["url"] = "https://["
+    summary, jobs = _find(tmp_path, settings, clock, _sites(remotive=Answer(200, json.dumps(answer))))
+    assert summary.failed == ["remotive: left out https://[: ValueError: Invalid IPv6 URL"]
+    assert [job.title for job in jobs.all() if job.source == "remotive"] == ["SDET & Test Lead"]
+    assert "remotive: 2 found, 1 new" in str(summary).splitlines()
+    assert {job.source for job in jobs.all()} == {"alert", *FEEDS}
+    # The feed reads from the same time next run; the later feeds from this run.
+    assert jobs.last_run("remotive") is None and jobs.last_run("jooble") == clock.now
+
+
+def test_a_key_in_an_error_is_never_told(tmp_path: Path, settings: Settings, clock: MovableClock) -> None:
+    sites = _sites()
+
+    def leaky(url: str, body: object = None, headers: dict[str, str] | None = None) -> Answer:
+        if url.startswith(USAJOBS):
+            raise ValueError(f"Invalid header value {(headers or {})['Authorization-Key']!r}")
+        if url.startswith(ADZUNA):
+            raise SearchError(f"could not reach {url}")
+        return sites(url, body, headers)
+
+    summary, _ = _find(tmp_path, settings, clock, leaky)  # type: ignore[arg-type]
+    told = " ".join(summary.failed)
+    assert "usajobs: " in told and "adzuna: " in told
+    assert not any(key in told for key in ("usa-key", "ad-id", "ad-key"))
 
 
 def test_feeds_that_break_are_named_and_the_alerts_still_get_their_postings(

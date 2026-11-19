@@ -8,13 +8,17 @@
      "summary_hour": 18,
      "working_hours": {"start": 9, "end": 17},
      "time_zone": "America/New_York",
+     "linkedin_notes_daily": 15,
      "pushover": {"token": "...", "user": "..."}}
 
 Areas are names as a person says them, never distances; the finder's skill says which of them
 a job is in. `remote` is `include` (remote jobs too), `exclude` (no remote jobs) or `only`.
 `lowest_salary` may be null. `summary_hour`, the end of the day for `hunt watch`, may be left
 out (18). `working_hours`, the hours a recruiter's call may be offered in, may be left out (9 to
-17), and so may `time_zone`, their IANA name (the computer's own zone). `pushover`, the keys `hunt notify` pushes the chat's questions
+17), and so may `time_zone`, their IANA name (the computer's own zone). `linkedin_notes_daily`,
+how many notes to hiring managers go out a day (`notes`), may be left out (15); 0 sends none,
+and more than 15 is refused, to keep the LinkedIn account safe. `pushover`, the keys `hunt
+notify` pushes the chat's questions
 with, may be left out; they are never printed.
 """
 
@@ -29,9 +33,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
-OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover")
+OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover", "linkedin_notes_daily")
 SUMMARY_HOUR = 18
 WORKING_HOURS = (9, 17)
+NOTES_DAILY = 15
 
 
 class SettingsError(ValueError):
@@ -55,6 +60,7 @@ class Settings:
     pushover: Pushover | None = None
     working_hours: tuple[int, int] = WORKING_HOURS
     time_zone: str | None = None
+    linkedin_notes_daily: int = NOTES_DAILY
 
 
 def _names(data: dict[str, Any], field: str) -> list[str]:
@@ -139,6 +145,8 @@ def read_settings(path: Path) -> Settings:
     summary_hour = _whole_number(data, "summary_hour", 1, 23) if "summary_hour" in data else SUMMARY_HOUR
     if summary_hour <= morning_hour:
         raise SettingsError(f"summary_hour ({summary_hour}) must be later than morning_hour ({morning_hour})")
+    notes_daily = (_whole_number(data, "linkedin_notes_daily", 0, NOTES_DAILY) if "linkedin_notes_daily" in data
+                   else NOTES_DAILY)
     return Settings(
         titles=titles,
         areas=areas,
@@ -149,4 +157,5 @@ def read_settings(path: Path) -> Settings:
         pushover=_pushover(data),
         working_hours=_working_hours(data),
         time_zone=_time_zone(data),
+        linkedin_notes_daily=notes_daily,
     )

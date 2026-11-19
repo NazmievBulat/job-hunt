@@ -36,6 +36,9 @@ reply goes out with the job's resume attached (an email goes without: the Gmail 
 attachment only as bytes the run would have to copy), and once it went, the first time offered is
 held in the calendar. The next message of that conversation is drafted with the times offered: when it names
 one of them, the held event is moved to it and confirmed.
+
+A note to a hiring manager after a LinkedIn application (`notes`) is saved as a thread already
+`sent`, linked to its job, so a message read later in its conversation is about that job.
 """
 
 from __future__ import annotations
@@ -273,6 +276,12 @@ def job_of(jobs: JobsList, message: Message) -> int | None:
     return None
 
 
+def conversation_link(link: str) -> str:
+    """A conversation's address without what may change between two reads: a query, a slash."""
+    parts = urlsplit(link)
+    return f"{parts.scheme}://{(parts.hostname or '').lower()}{parts.path.rstrip('/')}"
+
+
 OWED = "linkedin.owed"
 
 
@@ -310,9 +319,18 @@ class Threads:
     def _stamp(self) -> str:
         return self._clock().isoformat()
 
+    def _job_of_conversation(self, message: Message) -> int | None:
+        """The job of an earlier thread in the same conversation: a note after an application."""
+        same = conversation_link(message.conversation)
+        for row in self._db.execute("SELECT conversation, job FROM threads WHERE source = ? AND job IS NOT NULL"
+                                    " ORDER BY id DESC", (message.source,)):
+            if conversation_link(row["conversation"]) == same:
+                return row["job"]
+        return None
+
     def save(self, message: Message, jobs: JobsList) -> int | None:
         """Save a new message as a thread and return its id, or None when it is saved already."""
-        job = job_of(jobs, message)
+        job = job_of(jobs, message) or self._job_of_conversation(message)
         now = self._stamp()
         with self._db:
             # Written before read: the morning's find and a watch may save at once.
@@ -340,6 +358,18 @@ class Threads:
                  message.subject, message.text, message.sent_at, message.job_link, message.company, job,
                  int(message.asks_to_talk), "replaced" if older else "new", now, now))
         return cursor.lastrowid
+
+    def noted(self, conversation: str, sender: str, text: str, job: int) -> int | None:
+        """Save a note the person sent after applying as a thread answered already, so the answer
+        in its conversation is about its job; None when it is saved already."""
+        key = f"{conversation}#note-{hashlib.sha256(' '.join(text.split()).encode()).hexdigest()[:16]}"
+        now = self._stamp()
+        with self._db:
+            cursor = self._db.execute(
+                "INSERT OR IGNORE INTO threads (source, key, conversation, sender, subject, text, sent_at, job,"
+                " state, reply, found_at, updated_at) VALUES ('linkedin', ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?, ?)",
+                (key, conversation, sender, "Your note after applying", text, now, job, text, now, now))
+        return cursor.lastrowid if cursor.rowcount == 1 else None
 
     def get(self, thread: int) -> Thread:
         row = self._db.execute("SELECT * FROM threads WHERE id = ?", (thread,)).fetchone()

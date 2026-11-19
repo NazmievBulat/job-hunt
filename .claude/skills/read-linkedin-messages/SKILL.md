@@ -28,7 +28,8 @@ same time: work only in the tab you open.
    read its messages with get_page_text.
 3. Note the last message of a conversation when it is from someone else, not from the person,
    and it is a recruiter or a company writing about a role, the person's application, or a
-   talk or interview. Leave out ads, sponsored messages ("InMail" offers of services), people
+   talk or interview. An answer to a note the person sent a hiring manager after applying is
+   one of these. Leave out ads, sponsored messages ("InMail" offers of services), people
    selling something, and messages that are not about work.
 
 You have no tool that clicks or types, and need none. Never type into a message box, never press Send,

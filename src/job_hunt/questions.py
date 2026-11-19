@@ -7,14 +7,19 @@ The state is all in `data/`, so a fresh session knows everything by running it:
 2. new jobs, numbered as `hunt list` numbers them, for `hunt pick` and `hunt skip`. Asked again,
    the jobs of the last list keep their numbers, so a reply to it still names the same jobs;
    only a job scored since numbers the whole list anew;
-3. paused applications, each with what it needs and the command after it;
+3. paused applications, each with what it needs and the command after it. One that needs
+   hands in Chrome (a CAPTCHA, a sign-in) carries the Chrome Remote Desktop link when that is
+   set up, so it is done from the phone; without it, it waits until the person is at the
+   computer;
 4. recruiter messages, each with its drafted reply (`replies`), for `hunt send-reply`,
    `hunt edit-reply` and `hunt skip-reply`; one that asks to talk shows the times its reply
-   offers, the resume it goes out with on LinkedIn, and the time held in the calendar on yes.
+   offers, the resume it goes out with on LinkedIn, and the time held in the calendar on yes;
+5. notes to hiring managers after LinkedIn applications (`notes`), one question for all of them,
+   for `hunt send-notes` and `hunt skip-notes`.
 
 Before them comes work the person already approved and that stopped before its end (a picked
 job, one whose resume is ready, one left `applying`): it asks nothing, the chat runs
-`hunt apply` for it.
+`hunt apply` for it. So do approved notes that may go today: the chat runs `hunt send-notes`.
 """
 
 from __future__ import annotations
@@ -28,11 +33,13 @@ from job_hunt.apply import UNSURE
 from job_hunt.jobs import Job, JobsList
 
 if TYPE_CHECKING:
+    from job_hunt.notes import Notes
     from job_hunt.replies import Threads
 
 LOG = "morning.log"
 TOLD = "morning.told"
 KINDS = {"easy_apply": "Easy Apply", "company_site": "company site"}
+REMOTE_DESKTOP = "https://remotedesktop.google.com/access"
 
 
 def log_failure(data: Path, step: str, error: object, clock: Callable[[], datetime]) -> None:
@@ -68,7 +75,20 @@ def unfinished(jobs: JobsList) -> list[Job]:
     return jobs.in_states("picked", "resume_ready", "applying")
 
 
-def anything_waiting(jobs: JobsList, data: Path, threads: Threads | None = None) -> bool:
+def _notes_to_send(notes: Notes | None, data: Path, daily: int) -> int:
+    if notes is None:
+        return 0
+    # Imported here: `notes` uses this module's `log_failure`.
+    from job_hunt.notes import recover_sends, sendable
+
+    recover_sends(notes, data)
+    return len(sendable(notes, data, daily, notes.now()))
+
+
+def anything_waiting(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
+                     daily: int = 15) -> bool:
+    if notes is not None and (_notes_to_send(notes, data, daily) or notes.in_states("drafted", "unsure")):
+        return True
     if threads is not None:
         # Imported here: `replies` uses this module's `log_failure`.
         from job_hunt.replies import recover_sends
@@ -168,7 +188,8 @@ def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
     return "\n".join(lines)
 
 
-def questions(jobs: JobsList, data: Path, threads: Threads | None = None) -> str:
+def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
+              daily: int = 15, *, remote_desktop: bool = False) -> str:
     """The questions as text. Showing them numbers the new jobs and marks the failures told."""
     parts: list[str] = []
     log, told = _told(data)
@@ -179,6 +200,8 @@ def questions(jobs: JobsList, data: Path, threads: Threads | None = None) -> str
     if left:
         parts.append("\n".join([f"Unfinished applications ({len(left)}): run hunt apply", *(
             f"  {job.id}. {job.title} at {job.company}" for job in left)]))
+    if to_send := _notes_to_send(notes, data, daily):
+        parts.append(f"Approved notes to hiring managers not sent yet ({to_send}): run hunt send-notes")
     waiting = {job.id: job for job in jobs.waiting()}
     kept = {number: waiting[job] for number, job in sorted(jobs.last_list().items()) if job in waiting}
     if waiting and len(kept) == len(waiting):
@@ -192,8 +215,17 @@ def questions(jobs: JobsList, data: Path, threads: Threads | None = None) -> str
         parts.append("\n".join([f"Paused applications ({len(paused)}):", *(
             f"  {job.id}. {job.title} at {job.company}: needs {job.state_reason} (then: {then(job)})"
             for job in paused)]))
+        # An answer is typed from anywhere; the rest is done in this computer's Chrome.
+        if any(not (job.state_reason or "").startswith("an answer to ") for job in paused):
+            parts[-1] += ("\n  From your phone: open " + REMOTE_DESKTOP + " and do it in this computer's Chrome."
+                          if remote_desktop else "\n  This waits until you are at the computer; the other jobs go on.")
     if threads is not None and (recruiters := _recruiters(jobs, data, threads)):
         parts.append(recruiters)
+    if notes is not None:
+        from job_hunt.notes import ask
+
+        if (asked := ask(notes, jobs)) is not None:
+            parts.append(asked)
     if failures:
         # Up to what was read: a failure logged meanwhile is told next time.
         (data / TOLD).write_text(f"{len(log)}\n")

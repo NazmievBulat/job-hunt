@@ -72,6 +72,8 @@ def page_reads(transcript: Path, tab: int, pending: object = None) -> list[str]:
                 if (changes and in_tab and item.get("id") != pending) or name in BROWSER_CHOICE:
                     # Another browser has tabs and refs of its own.
                     reads.clear()
+                    # A read asked before it ran before it, though its result may be written after.
+                    calls = {key: call for key, call in calls.items() if call[0] not in PAGE_READERS}
             elif entry.get("type") == "user" and item.get("type") == "tool_result":
                 name, read_tab = calls.get(str(item.get("tool_use_id")), ("", None))
                 if name in PAGE_READERS and read_tab == tab:

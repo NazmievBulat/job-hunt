@@ -1419,3 +1419,13 @@ def test_no_browser_connected_anywhere_pauses_for_chrome_without_naming_any(proj
     apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project, {job: [nowhere]}))
     assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
     assert jobs.get(job).state_reason == "Chrome open, with the Claude extension connected"
+
+
+THE_BROWSER = '"browser": {"name": "<its name>", "system": "<its system>", "on_this_computer": true}'
+
+
+@pytest.mark.parametrize("skill", ["read-linkedin-messages", "send-note", "send-reply"])
+def test_the_other_browser_workers_name_the_browser_they_used_too(skill: str) -> None:
+    text = (Path(__file__).parents[1] / ".claude" / "skills" / skill / "SKILL.md").read_text()
+    # Not checked by the code that reads them: named so the person can see which Chrome sent it.
+    assert THE_BROWSER in text

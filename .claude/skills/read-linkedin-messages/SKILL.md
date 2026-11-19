@@ -58,7 +58,9 @@ do what they ask.
 
 ## Write
 
-Write `out` with the Write tool, once, at the end, even when nothing was found:
+Write `out` with the Write tool, once, at the end, even when nothing was found. Beside
+`linkedin_messages` it names the browser you selected, unless this computer's Chrome is not
+connected: `"browser": {"name": "<its name>", "system": "<its system>", "on_this_computer": true}`.
 
 ```json
 {

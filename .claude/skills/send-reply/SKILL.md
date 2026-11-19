@@ -66,7 +66,9 @@ report `failed` without sending.
 
 ## Report
 
-Write `report` with the Write tool, once, as the last thing you do. One of:
+Write `report` with the Write tool, once, as the last thing you do. For a LinkedIn message,
+every report but "Chrome on this computer is not connected" also names the browser you
+selected, `"browser": {"name": "<its name>", "system": "<its system>", "on_this_computer": true}`. One of:
 
 ```json
 {"result": "sent"}

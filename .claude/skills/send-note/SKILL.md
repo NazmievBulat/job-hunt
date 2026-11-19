@@ -62,7 +62,9 @@ asks to sign in. Never solve a CAPTCHA and never type a password.
 
 ## Report
 
-Write `report` with the Write tool, once, as the last thing you do. One of:
+Write `report` with the Write tool, once, as the last thing you do. Every report but
+"Chrome on this computer is not connected" also names the browser you selected,
+`"browser": {"name": "<its name>", "system": "<its system>", "on_this_computer": true}`. One of:
 
 ```json
 {"result": "sent", "conversation": "https://www.linkedin.com/messaging/thread/<its id>/"}

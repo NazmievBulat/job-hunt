@@ -138,6 +138,11 @@ def test_find_says_what_a_ref_is_too_and_the_latest_read_counts(tmp_path: Path) 
     later = ("read_page", 'button "Send" [ref_10]')
     assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST), later)))
     assert refusal(_click("ref_10", _transcript(tmp_path, later, ("read_page", LIST)))) is None
+    # A later read cut short inside a quote, naming the ref: the older read no longer counts.
+    cut = ("read_page", 'button "Send" [ref_10]\nparagraph "cut sho')
+    assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST), cut)))
+    # One that does not name it leaves the older read as it was.
+    assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST), ("read_page", 'paragraph "cut sho')))) is None
 
 
 @pytest.mark.parametrize("line", [

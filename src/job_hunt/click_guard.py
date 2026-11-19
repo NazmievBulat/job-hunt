@@ -94,7 +94,11 @@ def is_list_item(ref: str, reads: list[str]) -> bool:
         # quoted string, and a line inside it is not a line of the page.
         structure = QUOTED.sub('""', read)
         if '"' in structure.replace('""', ""):
-            continue  # Quotes that do not pair up: where its text ends cannot be told.
+            # Quotes that do not pair up (a read cut short): where its text ends cannot be told,
+            # so a ref it names may be anything now, whatever an older read said.
+            if ref in REF.findall(read):
+                return False
+            continue
         lines = [line for line in structure.splitlines() if REF.findall(line) == [ref]]
         if lines:
             return all(role(line) == "listitem" for line in lines)

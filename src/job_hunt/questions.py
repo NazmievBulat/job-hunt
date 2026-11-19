@@ -11,8 +11,8 @@ The state is all in `data/`, so a fresh session knows everything by running it:
 4. recruiter messages and 5. requests to talk, once the jobs list keeps them.
 
 Before them comes work the person already approved and that stopped before its end (a picked
-job, one left `applying`): it asks nothing, the chat runs `hunt apply` for it. A company-site
-job whose resume is ready is that too; an Easy Apply one waits for the LinkedIn worker.
+job, one whose resume is ready, one left `applying`): it asks nothing, the chat runs
+`hunt apply` for it.
 """
 
 from __future__ import annotations
@@ -59,8 +59,7 @@ def untold_failures(data: Path) -> list[str]:
 
 
 def unfinished(jobs: JobsList) -> list[Job]:
-    return [job for job in jobs.in_states("picked", "resume_ready", "applying")
-            if not (job.state == "resume_ready" and job.kind == "easy_apply")]
+    return jobs.in_states("picked", "resume_ready", "applying")
 
 
 def anything_waiting(jobs: JobsList, data: Path) -> bool:

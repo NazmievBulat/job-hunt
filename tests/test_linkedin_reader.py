@@ -153,7 +153,8 @@ def test_the_role_is_read_from_the_line_never_from_the_text_on_it(tmp_path: Path
 
 
 @pytest.mark.parametrize("line", ['  listitem "Ada Example" [ref_10]', '- [ref_10] listitem "Ada Example"',
-                                  'ref_10: listitem (Ada Example, Nov 19)'])
+                                  'ref_10: listitem (Ada Example, Nov 19)',
+                                  'listitem "Ada Example: about the job ref_123 [ref_7]" [ref_10]'])
 def test_a_list_item_is_one_however_the_read_lays_its_line_out(tmp_path: Path, line: str) -> None:
     assert refusal(_click("ref_10", _transcript(tmp_path, ("find", line)))) is None
 
@@ -171,6 +172,9 @@ def test_a_read_counts_only_in_its_own_tab_and_until_the_tab_navigates_or_clicks
     other = _transcript(tmp_path, ("read_page", LIST), ("navigate", "ok", {"tabId": 8, "url": "https://example.com"}),
                         ("computer", "clicked", {**click, "tabId": 8}), ("computer", "scrolled", {"tabId": 7, "action": "scroll"}))
     assert refusal(_click("ref_12", other)) is None
+    # Another browser chosen since: its tabs and refs are its own.
+    for choice in ("select_browser", "switch_browser"):
+        assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST), (choice, "ok", {"deviceId": "b"}))))
     # The click being judged, should the transcript hold it already, is not a click before it.
     pending = _transcript(tmp_path, ("read_page", LIST), ("computer", "", {**click, "ref": "ref_12"}))
     assert refusal({**_click("ref_12", pending), "tool_use_id": "toolu_1"}) is None

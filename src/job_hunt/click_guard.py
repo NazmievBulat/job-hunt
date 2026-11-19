@@ -32,6 +32,7 @@ READ_ACTIONS = ("left_click", "scroll", "scroll_to", "screenshot", "zoom", "wait
 # The tools whose results say what a ref is.
 PAGE_READERS = ("mcp__claude-in-chrome__read_page", "mcp__claude-in-chrome__find")
 NAVIGATE = "mcp__claude-in-chrome__navigate"
+BROWSER_CHOICE = ("mcp__claude-in-chrome__select_browser", "mcp__claude-in-chrome__switch_browser")
 REF = re.compile(r"\bref_\d+\b")
 QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"')
 
@@ -47,7 +48,8 @@ def _strings(content: Any) -> str:
 
 def page_reads(transcript: Path, tab: int, pending: object = None) -> list[str]:
     """The text of each read_page and find result of `tab` in the transcript, in order, since the
-    last navigate or click in that tab: a ref read before either may name another element now.
+    last navigate or click in that tab and the last choice of a browser: a ref read before any of
+    them may name another element now.
     `pending` is the id of the click being judged, should the transcript hold it already."""
     calls: dict[str, tuple[str, Any]] = {}
     reads: list[str] = []
@@ -65,7 +67,8 @@ def page_reads(transcript: Path, tab: int, pending: object = None) -> list[str]:
                 given = given if isinstance(given, dict) else {}
                 calls[str(item.get("id"))] = (name, given.get("tabId"))
                 changes = name == NAVIGATE or (name == COMPUTER and given.get("action") == "left_click")
-                if changes and given.get("tabId") == tab and item.get("id") != pending:
+                if (changes and given.get("tabId") == tab and item.get("id") != pending) or name in BROWSER_CHOICE:
+                    # Another browser has tabs and refs of its own.
                     reads.clear()
             elif entry.get("type") == "user" and item.get("type") == "tool_result":
                 name, read_tab = calls.get(str(item.get("tool_use_id")), ("", None))
@@ -82,12 +85,12 @@ def role(line: str) -> str | None:
 
 
 def is_list_item(ref: str, reads: list[str]) -> bool:
-    """Whether the latest read that showed `ref` showed it as a list item: each line that names
-    it, and no other ref, gives it the role `listitem`. A line naming two refs is an element whose
-    text names another, as a message could; it says nothing of what that ref is."""
-    own = re.compile(rf"\b{re.escape(ref)}\b")
+    """Whether the latest read that showed `ref` showed it as a list item: each line whose one ref,
+    outside its quoted text, is `ref` gives it the role `listitem`. A ref inside quoted text, or a
+    second ref on a line, is text that names another element, as a message could: it says
+    nothing of what that ref is."""
     for read in reversed(reads):
-        lines = [line for line in read.splitlines() if own.search(line) and len(REF.findall(line)) == 1]
+        lines = [line for line in read.splitlines() if REF.findall(QUOTED.sub(" ", line)) == [ref]]
         if lines:
             return all(role(line) == "listitem" for line in lines)
     return False

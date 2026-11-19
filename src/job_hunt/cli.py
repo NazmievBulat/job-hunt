@@ -25,8 +25,8 @@ from job_hunt.morning import morning, start_session
 from job_hunt.notify import NotifyError, notify, post_pushover
 from job_hunt.questions import job_line, log_failure, questions, then
 from job_hunt.replies import (
-    DRAFT_SKILL, READ_SKILL, SEND_SKILL, EmailMessages, ReplyError, Threads, draft_replies, edit_reply, read_linkedin,
-    send_reply, skip_reply,
+    DRAFT_SKILL, READ_SKILL, SEND_SKILL, EmailMessages, ReplyError, Threads, draft_replies, edit_reply, hold_times,
+    offer_times, read_linkedin, send_reply, skip_reply,
 )
 from job_hunt.resume import ContentError, write_pdf
 from job_hunt.scoring import SKILL as SCORE_SKILL, ScoreError, score
@@ -261,7 +261,9 @@ def run_check(command: list[str]) -> None:
 
 
 def run_draft(command: list[str]) -> None:
-    run_claude(command, ROOT, skill=DRAFT_SKILL, error=ReplyError)
+    # The drafting runs are draft-reply's, and offer-times' for a request to talk and its calendar.
+    skill = command[command.index("-p") + 1].split(" ", 1)[0].removeprefix("/") if "-p" in command else DRAFT_SKILL
+    run_claude(command, ROOT, skill=skill, error=ReplyError)
 
 
 def run_read(command: list[str]) -> None:
@@ -339,6 +341,8 @@ def _reply(args: argparse.Namespace) -> int:
     try:
         if args.command == "send-reply":
             thread = send_reply(threads, ROOT, args.thread, run=run_send, lock=LinkedInLock(DATA), sleep=time.sleep)
+        elif args.command == "offer-times":
+            thread = offer_times(threads, ROOT, args.thread, run=run_draft)
         elif args.command == "edit-reply":
             thread = edit_reply(threads, ROOT, args.thread, args.text)
         else:
@@ -348,6 +352,8 @@ def _reply(args: argparse.Namespace) -> int:
         return 1
     if thread.state == "sent":
         print(f"sent the reply to {thread.sender}")
+        for held in hold_times(threads, ROOT, run=run_draft):
+            print(f"held in Google Calendar: {held}")
     elif thread.state == "unsure":
         print(f"the reply to {thread.sender} may not have gone: needs {thread.state_reason}")
         return 1
@@ -487,6 +493,11 @@ def main(argv: list[str] | None = None) -> int:
         "LinkedIn message in Chrome under the LinkedIn lock (claude -p with the send-reply skill)")
     sending.add_argument("thread", type=int, help="the message's number, as hunt questions prints it")
     sending.set_defaults(run=_reply)
+    offering = commands.add_parser(
+        "offer-times", help="draft the reply again offering two or three free times of the next five working days "
+        "from Google Calendar (claude -p with the offer-times skill); on send-reply's yes the first is held there")
+    offering.add_argument("thread", type=int, help="the message's number, as hunt questions prints it")
+    offering.set_defaults(run=_reply)
     editing = commands.add_parser("edit-reply", help="change a drafted reply before it is sent")
     editing.add_argument("thread", type=int, help="the message's number, as hunt questions prints it")
     editing.add_argument("text")

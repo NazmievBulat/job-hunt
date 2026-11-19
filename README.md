@@ -6,6 +6,7 @@ your career, and sends you one numbered list. You reply with the ones you want (
 and it writes a resume for each and applies through your own Chrome. It pauses for what needs
 you: a CAPTCHA, a site sign-in, a question it cannot answer. Every 20 minutes during the day it
 looks for recruiters' messages, by email and on LinkedIn, and drafts a reply for you to send.
+When a recruiter asks to talk, the reply offers free times from your Google Calendar.
 
 There are no app screens. You use it from a Claude Code session, on your computer or from your
 phone through Remote Control.
@@ -17,14 +18,16 @@ morning timer and `/setup` are next. See [`docs/design.md`](docs/design.md).
 ## What it needs
 
 - Claude Code, signed in with a Claude subscription
-- The Claude in Chrome extension, and the Gmail connector on your Claude account
+- The Claude in Chrome extension, and the Gmail and Google Calendar connectors on your Claude
+  account
 - Python 3.14 and [`uv`](https://docs.astral.sh/uv/)
 - Linux or macOS, with your computer on during the day
 
 ## How it keeps you in charge
 
 - It applies only to the jobs you pick, and sends a reply to a recruiter, by email or on
-  LinkedIn, only after you approve that reply.
+  LinkedIn, only after you approve that reply. It adds a call to your calendar only when you
+  approve the reply offering it.
 - Your employers, job titles, dates, schools and certifications are printed from your own
   career file; the model writes only the summary, the skills and the bullets.
 - It never types a password and never solves a CAPTCHA. Sign in once in your browser, and it

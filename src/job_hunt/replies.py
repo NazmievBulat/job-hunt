@@ -29,10 +29,17 @@ is sent until `hunt send-reply <id>`: one `claude -p` with the `send-reply` skil
 the reply as the person approved it (an email through Gmail, a LinkedIn message in Chrome under
 the lock) and reports. A send with no report may have gone out: the thread is `unsure` and is
 never sent again on its own.
+
+A thread that asks to talk is drafted by `offer-times` instead, offering free times from the
+person's Google Calendar (see `times`); `hunt offer-times <id>` drafts it so again. Its reply goes
+out with the job's resume attached, and once it went, the first time offered is held in the
+calendar. The next message of that conversation is drafted with the times offered: when it names
+one of them, the held event is moved to it and confirmed.
 """
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import hashlib
 import json
@@ -50,6 +57,9 @@ from job_hunt.finder import PageError, page_text_and_kind
 from job_hunt.jobs import JobsList, clean_link
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.questions import log_failure
+from job_hunt.settings import SettingsError, read_settings
+from job_hunt.times import SKILL as TIMES_SKILL, Talks, TimesError, confirm, hold, offer_command, read_offer
+from job_hunt.times import working_days, zone
 
 DRAFT_SKILL = "draft-reply"
 READ_SKILL = "read-linkedin-messages"
@@ -63,6 +73,8 @@ TRIES = 2
 UNSURE = "a look whether it was sent"
 GMAIL_THREAD = "mcp__claude_ai_Gmail__get_thread"
 DRAFT_GMAIL_TOOLS = (GMAIL_THREAD, "mcp__claude_ai_Gmail__create_draft")
+# An offer made again replaces its earlier Gmail draft.
+OFFER_GMAIL_TOOLS = (*DRAFT_GMAIL_TOOLS, "mcp__claude_ai_Gmail__delete_draft")
 SEND_GMAIL_TOOLS = (GMAIL_THREAD, "mcp__claude_ai_Gmail__reply", "mcp__claude_ai_Gmail__delete_draft")
 # Reading LinkedIn types and clicks nothing: no computer (it types and clicks too), no form_input, no
 # file_upload. A stranger's message, read with nobody watching, cannot make it send.
@@ -361,6 +373,14 @@ class Threads:
     def edited(self, thread: int, reply: str) -> None:
         self._set(thread, reply=reply)
 
+    def redrafted(self, thread: int, reply: str, draft_id: str | None) -> bool:
+        """Replace the reply of a thread still waiting for the person's word."""
+        with self._db:
+            done = self._db.execute(
+                "UPDATE threads SET state = 'drafted', state_reason = NULL, reply = ?, draft_id = ?, updated_at = ?"
+                " WHERE id = ? AND state IN ('new', 'drafted')", (reply, draft_id, self._stamp(), thread)).rowcount
+        return done == 1
+
     def fail(self, thread: int, reason: str) -> State:
         """Count a failed draft: tried again at the next run, then `failed`."""
         failures = self.get(thread).failures + 1
@@ -464,19 +484,53 @@ def posting_path(thread: Thread, root: Path) -> Path | None:
 # Drafting
 
 
-def draft_command(thread: Thread, root: Path) -> list[str]:
+def _draft_arguments(thread: Thread, root: Path) -> dict[str, Any]:
     here = folder(root, thread.id)
     posting = posting_path(thread, root)
-    arguments = {"thread": thread.id, "source": thread.source, "message": str(here / "message.md"),
-                 "posting": str(posting) if posting else None, "career": str(_career(root)),
-                 "email_id": thread.email_id, "asks_to_talk": thread.asks_to_talk, "out": str(here / "reply.json")}
-    tools = [f"Read({_rule(here)}/**)", f"Read({_rule(_career(root))})", f"Edit({_rule(here)}/reply.json)"]
+    return {"thread": thread.id, "source": thread.source, "message": str(here / "message.md"),
+            "posting": str(posting) if posting else None, "career": str(_career(root)),
+            "email_id": thread.email_id, "asks_to_talk": thread.asks_to_talk, "out": str(here / "reply.json")}
+
+
+def _reads(thread: Thread, root: Path) -> list[str]:
+    tools = [f"Read({_rule(folder(root, thread.id))}/**)", f"Read({_rule(_career(root))})"]
     if thread.job is not None:
         tools.append(f"Read({_rule(root / 'jobs' / str(thread.job))}/**)")
+    return tools
+
+
+def draft_command(thread: Thread, root: Path, offered: list[datetime] | None = None) -> list[str]:
+    """The drafting run; `offered`, the times an earlier reply of the conversation offered."""
+    arguments = _draft_arguments(thread, root)
+    if offered is not None:
+        arguments["offered_times"] = [when.isoformat() for when in offered]
+    tools = [*_reads(thread, root), f"Edit({_rule(folder(root, thread.id))}/reply.json)"]
     if thread.source == "email":
         tools += DRAFT_GMAIL_TOOLS
     return ["claude", "-p", f"/{DRAFT_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
             "--model", DRAFT_MODEL, "--allowedTools", ",".join(tools)]
+
+
+def talk_title(thread: Thread, jobs: JobsList) -> str:
+    """The calendar event's name: the company and the role, or who wrote."""
+    if thread.job is not None:
+        job = jobs.get(thread.job)
+        return f"Call with {job.company} about {job.title}"
+    return f"Call with {thread.company}" if thread.company else f"Call with {thread.sender}"
+
+
+def times_command(thread: Thread, root: Path, clock: Callable[[], datetime] = _now) -> tuple[list[str], Callable]:
+    """The `offer-times` run for a thread, and how to read what it wrote."""
+    try:
+        settings = read_settings(root / "data" / "settings.json")
+    except SettingsError as error:
+        raise ReplyError(f"the working hours cannot be read: {error}") from error
+    where = zone(settings)
+    days = working_days(clock(), where, settings.working_hours)
+    arguments = {**_draft_arguments(thread, root), "old_draft_id": thread.draft_id}
+    gmail = OFFER_GMAIL_TOOLS if thread.source == "email" else ()
+    command = offer_command(arguments, days, where, _reads(thread, root), gmail)
+    return command, lambda path: read_offer(path, days, where)
 
 
 def _save_posting(thread: Thread, root: Path, fetch: Callable[[str], tuple[str, str]]) -> None:
@@ -492,7 +546,7 @@ def _save_posting(thread: Thread, root: Path, fetch: Callable[[str], tuple[str, 
     _write(folder(root, thread.id) / "posting.md", f"{thread.job_link}\n\n{text}\n")
 
 
-def _read_reply(path: Path) -> tuple[str, str | None]:
+def _read_reply(path: Path) -> tuple[str, str | None, str | None]:
     if not path.exists():
         raise ReplyError(f"the {DRAFT_SKILL} run wrote no reply")
     try:
@@ -502,8 +556,9 @@ def _read_reply(path: Path) -> tuple[str, str | None]:
     reply = data.get("reply") if isinstance(data, dict) else None
     if not isinstance(reply, str) or not reply.strip():
         raise ReplyError(f'the {DRAFT_SKILL} run wrote no "reply"')
-    draft = data.get("draft_id")
-    return reply.strip(), draft.strip() or None if isinstance(draft, str) else None
+    draft, chosen = data.get("draft_id"), data.get("time")
+    return (reply.strip(), draft.strip() or None if isinstance(draft, str) else None,
+            chosen.strip() or None if isinstance(chosen, str) else None)
 
 
 def draft_replies(threads: Threads, root: Path, *, run: Run,
@@ -511,28 +566,103 @@ def draft_replies(threads: Threads, root: Path, *, run: Run,
     """Draft a reply for each new thread; return how many were drafted."""
     # One drafting run at a time, the morning's and the watch's: a thread is drafted once.
     with _locked(root / "data" / "draft.lock"):
+        hold_times(threads, root, run=run, clock=clock)
         return _draft_replies(threads, root, run, fetch, clock)
 
 
 def _draft_replies(threads: Threads, root: Path, run: Run, fetch: Callable[[str], tuple[str, str]],
                    clock: Callable[[], datetime]) -> int:
     drafted = 0
+    talks = Talks(root / "data" / "jobs.db", clock=clock)
     for thread in threads.in_states("new"):
         here = folder(root, thread.id)
         _write(here / "message.md", _message_file(thread))
         _save_posting(thread, root, fetch)
         (here / "reply.json").unlink(missing_ok=True)
+        held = talks.held_in(thread.source, thread.conversation)
         try:
-            run(draft_command(threads.get(thread.id), root))
-            reply, draft = _read_reply(here / "reply.json")
-        except ReplyError as error:
+            if thread.asks_to_talk and held is None:
+                drafted += _offer(threads, talks, root, threads.get(thread.id), run, clock)
+                continue
+            run(draft_command(threads.get(thread.id), root, held.times() if held else None))
+            reply, draft, chosen = _read_reply(here / "reply.json")
+        except (ReplyError, TimesError) as error:
             if threads.fail(thread.id, str(error)) == "failed":
                 log_failure(root / "data", "hunt draft-replies", f"no reply to {thread.sender}: {error}", clock)
             continue
         if threads.drafted(thread.id, reply, draft):
             _write(here / "reply.md", reply + "\n")
             drafted += 1
+            if held is not None and chosen is not None:
+                _confirm(talks, held, chosen, root, run, clock)
     return drafted
+
+
+def _offer(threads: Threads, talks: Talks, root: Path, thread: Thread, run: Run,
+           clock: Callable[[], datetime]) -> int:
+    """Draft the reply offering free times; return 1 when it was saved."""
+    here = folder(root, thread.id)
+    (here / "reply.json").unlink(missing_ok=True)
+    command, read = times_command(thread, root, clock)
+    run(command)
+    offer = read(here / "reply.json")
+    if not threads.redrafted(thread.id, offer.reply, offer.draft_id):
+        return 0
+    talks.offered(thread.id, thread.source, thread.conversation,
+                  talk_title(thread, JobsList(root / "data" / "jobs.db")), offer.times)
+    _write(here / "reply.md", offer.reply + "\n")
+    return 1
+
+
+def _confirm(talks: Talks, held: Any, chosen: str, root: Path, run: Run, clock: Callable[[], datetime]) -> None:
+    """The recruiter's answer named a time: move the held event to it when it is one offered."""
+    try:
+        where = zone(read_settings(root / "data" / "settings.json"))
+        when = datetime.fromisoformat(chosen)
+        when = when if when.tzinfo is not None else when.replace(tzinfo=where)
+        confirm(talks, held, when, where, folder(root, held.thread) / "event.json", run)
+    except (SettingsError, ValueError, TimesError, ReplyError) as error:
+        log_failure(root / "data", "hunt draft-replies",
+                    f"the held event {held.title} was not confirmed at {chosen}: {error}", clock)
+
+
+def offer_times(threads: Threads, root: Path, thread: int, *, run: Run,
+                clock: Callable[[], datetime] = _now) -> Thread:
+    """Draft a thread's reply again, offering free times from the calendar; sends nothing."""
+    found = _waiting(threads, thread, "new", "drafted")
+    _write(folder(root, thread) / "message.md", _message_file(found))
+    with _locked(root / "data" / "draft.lock"):
+        try:
+            if not _offer(threads, Talks(root / "data" / "jobs.db", clock=clock), root, found, run, clock):
+                raise ReplyError(f"thread {thread} is no longer waiting for a reply")
+        except TimesError as error:
+            raise ReplyError(str(error)) from error
+    return threads.get(thread)
+
+
+def hold_times(threads: Threads, root: Path, *, run: Run, clock: Callable[[], datetime] = _now) -> list[str]:
+    """Hold in the calendar the first time of each offer whose reply went out; return the times held."""
+    talks = Talks(root / "data" / "jobs.db", clock=clock)
+    held: list[str] = []
+    for talk in talks.in_states("offered"):
+        if threads.get(talk.thread).state != "sent":
+            continue
+        try:
+            where = zone(read_settings(root / "data" / "settings.json"))
+            done = hold(talks, talk.thread, where, folder(root, talk.thread) / "event.json", run)
+        except SettingsError as error:
+            log_failure(root / "data", "hunt send-reply", f"{talk.title} was not held: {error}", clock)
+            return held
+        except TimesError as error:
+            # Reported failed, so nothing was added: tried again at the next run, then told.
+            if (now := talks.get(talk.thread)) is not None and now.state == "failed":
+                log_failure(root / "data", "hunt send-reply", f"{talk.title} was not held: {error}", clock)
+            continue
+        if done.state == "unsure":
+            log_failure(root / "data", "hunt send-reply", f"{talk.title} needs {done.state_reason}", clock)
+        elif done.start:
+            held.append(f"{done.title} at {done.start}")
+    return held
 
 
 # Asking: what the person decides
@@ -568,15 +698,32 @@ def skip_reply(threads: Threads, thread: int) -> Thread:
 # Sending
 
 
+def resume_of(thread: Thread, root: Path) -> Path | None:
+    """The resume a reply offering times goes out with: the one of its job, when it has one."""
+    if thread.job is None or Talks(root / "data" / "jobs.db").get(thread.id) is None:
+        return None
+    resume = root / "jobs" / str(thread.job) / "resume.pdf"
+    return resume if resume.exists() else None
+
+
 def send_command(thread: Thread, reply: str, root: Path) -> list[str]:
     here = folder(root, thread.id)
-    arguments = {"thread": thread.id, "source": thread.source, "reply": reply, "email_id": thread.email_id,
-                 "draft_id": thread.draft_id, "conversation": thread.conversation, "report": str(here / "sent.json")}
+    arguments: dict[str, Any] = {
+        "thread": thread.id, "source": thread.source, "reply": reply, "email_id": thread.email_id,
+        "draft_id": thread.draft_id, "conversation": thread.conversation, "report": str(here / "sent.json")}
+    tools = [f"Edit({_rule(here)}/sent.json)"]
+    if (resume := resume_of(thread, root)) is not None:
+        arguments["resume"] = str(resume)
+        if thread.source == "email":
+            # Gmail takes an attachment's bytes as base64; the run copies them from this file.
+            encoded = here / "resume.pdf.base64"
+            _write(encoded, base64.b64encode(resume.read_bytes()).decode())
+            arguments["resume_base64"] = str(encoded)
+            tools.append(f"Read({_rule(encoded)})")
     prompt = f"/{SEND_SKILL} {json.dumps(arguments, ensure_ascii=False)}"
-    write = f"Edit({_rule(here)}/sent.json)"
     if thread.source == "email":
-        return ["claude", "-p", prompt, "--model", MODEL, "--allowedTools", ",".join([*SEND_GMAIL_TOOLS, write])]
-    return ["claude", "--chrome", "-p", prompt, "--model", MODEL, "--allowedTools", ",".join([*CHROME_TOOLS, write])]
+        return ["claude", "-p", prompt, "--model", MODEL, "--allowedTools", ",".join([*SEND_GMAIL_TOOLS, *tools])]
+    return ["claude", "--chrome", "-p", prompt, "--model", MODEL, "--allowedTools", ",".join([*CHROME_TOOLS, *tools])]
 
 
 def _read_sent(path: Path) -> tuple[bool, str | None]:

@@ -105,6 +105,14 @@ without them.
    at once: the message, the job description, the reply, "Send?". The user says yes
    (`hunt send-reply`), changes it (`hunt edit-reply`) or says "skip" (`hunt skip-reply`). A
    send that does not report back may have gone out: it is never sent again on its own.
+   A message that asks to talk is drafted by `offer-times` instead: it reads the user's
+   Google Calendar for the next five working days, inside the working hours of the settings
+   (9 to 17 in the user's time zone when left out), and offers two or three free half hours;
+   `hunt` checks each against the calendar it read. The reply goes out with the job's resume
+   attached, and on that yes the first time is added to the calendar as "Held: Call with
+   <company> about <role>". When the recruiter's answer picks one of the times offered, the
+   next `hunt draft-replies` moves the event there and drops "Held". A time not offered moves
+   nothing; `hunt offer-times` drafts the offer again with fresh times.
 
 ## Pieces
 
@@ -112,10 +120,10 @@ Each piece has one job and talks to the others only through the jobs list and fi
 
 | Piece | Kind | What it does |
 |---|---|---|
-| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`, `watch`, `linkedin-messages`, `draft-replies`, `send-reply`, `edit-reply`, `skip-reply`. It is the coordinator. |
+| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`, `watch`, `linkedin-messages`, `draft-replies`, `offer-times`, `send-reply`, `edit-reply`, `skip-reply`. It is the coordinator. |
 | Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
-| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the morning hour, the summary hour (18 when left out). |
+| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the morning hour, the summary hour (18 when left out), the working hours a call is offered in (9 to 17) and the time zone (the computer's). |
 | Resume worker | `claude -p` with the `write-resume` skill | Gets the career and one job description and writes `resume-content.json`. |
 | Resume builder | Python (`resume_kit`) | Merges that content with the career, checks it against the resume contract, builds `resume.pdf`. |
 | LinkedIn worker | `claude -p --chrome` with the `apply-linkedin` skill | Opens the job's LinkedIn page, presses Easy Apply, uploads the PDF, answers from the career, submits. |
@@ -125,7 +133,7 @@ Each piece has one job and talks to the others only through the jobs list and fi
 | Watch | `hunt watch` on a timer | Every 20 minutes from the morning hour to the summary hour: the Haiku check for new messages, LinkedIn only when needed, drafting and asking. |
 | The chat | `CLAUDE.md` and `.claude/commands` | The `job-hunt` session: asks the questions, turns answers into `hunt` commands, starts and waits for workers. |
 | Notifier | `hunt notify` | Sends one question as a Pushover push, when the user set its keys. |
-| Scheduler | `claude -p` with the `offer-times` skill | Reads free times from Google Calendar, drafts the reply offering them, adds the held event on yes. |
+| Scheduler | `claude -p` with the `offer-times` skill | Reads free times from Google Calendar, drafts the reply offering them, adds the held event on yes and moves it to the time the recruiter picks. |
 | LinkedIn inbox | `claude -p --chrome` with the `read-linkedin-messages` skill | Reads new recruiter messages on LinkedIn, one worker at a time under the LinkedIn lock. |
 
 The coordinator is a script, not a Claude session. It reads the list, starts the workers,
@@ -212,4 +220,4 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 5. The chat: the morning session, its questions and Pushover.
 6. `/setup`, with the resume reader.
 7. Done: recruiter replies, by email and on LinkedIn, watched every 20 minutes.
-8. Offering times from Google Calendar.
+8. Done: offering times from Google Calendar.

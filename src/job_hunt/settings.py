@@ -6,12 +6,15 @@
      "lowest_salary": 120000,
      "morning_hour": 7,
      "summary_hour": 18,
+     "working_hours": {"start": 9, "end": 17},
+     "time_zone": "America/New_York",
      "pushover": {"token": "...", "user": "..."}}
 
 Areas are names as a person says them, never distances; the finder's skill says which of them
 a job is in. `remote` is `include` (remote jobs too), `exclude` (no remote jobs) or `only`.
 `lowest_salary` may be null. `summary_hour`, the end of the day for `hunt watch`, may be left
-out (18). `pushover`, the keys `hunt notify` pushes the chat's questions
+out (18). `working_hours`, the hours a recruiter's call may be offered in, may be left out (9 to
+17), and so may `time_zone`, their IANA name (the computer's own zone). `pushover`, the keys `hunt notify` pushes the chat's questions
 with, may be left out; they are never printed.
 """
 
@@ -21,12 +24,14 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
-OPTIONAL = ("summary_hour", "pushover")
+OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover")
 SUMMARY_HOUR = 18
+WORKING_HOURS = (9, 17)
 
 
 class SettingsError(ValueError):
@@ -48,6 +53,8 @@ class Settings:
     morning_hour: int
     summary_hour: int = SUMMARY_HOUR
     pushover: Pushover | None = None
+    working_hours: tuple[int, int] = WORKING_HOURS
+    time_zone: str | None = None
 
 
 def _names(data: dict[str, Any], field: str) -> list[str]:
@@ -75,6 +82,32 @@ def _pushover(data: dict[str, Any]) -> Pushover | None:
             or not all(isinstance(key, str) and key.strip() for key in keys.values())):
         raise SettingsError('pushover must be {"token": ..., "user": ...}, both filled in, or left out')
     return Pushover(token=keys["token"].strip(), user=keys["user"].strip())
+
+
+def _working_hours(data: dict[str, Any]) -> tuple[int, int]:
+    hours = data.get("working_hours")
+    if hours is None:
+        return WORKING_HOURS
+    if not isinstance(hours, dict) or set(hours) != {"start", "end"}:
+        raise SettingsError('working_hours must be {"start": 9, "end": 17}, or left out')
+    start = _whole_number(hours, "start", 0, 23)
+    end = _whole_number(hours, "end", 1, 24)
+    if end <= start:
+        raise SettingsError(f"working_hours end ({end}) must be later than its start ({start})")
+    return start, end
+
+
+def _time_zone(data: dict[str, Any]) -> str | None:
+    name = data.get("time_zone")
+    if name is None:
+        return None
+    try:
+        if isinstance(name, str) and name.strip():
+            ZoneInfo(name.strip())
+            return name.strip()
+    except (ZoneInfoNotFoundError, ValueError):
+        pass
+    raise SettingsError(f"time_zone must be a zone's name such as America/New_York, not {name!r}")
 
 
 def read_settings(path: Path) -> Settings:
@@ -114,4 +147,6 @@ def read_settings(path: Path) -> Settings:
         morning_hour=morning_hour,
         summary_hour=summary_hour,
         pushover=_pushover(data),
+        working_hours=_working_hours(data),
+        time_zone=_time_zone(data),
     )

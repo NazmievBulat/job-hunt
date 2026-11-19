@@ -191,7 +191,8 @@ def device_id(value: object) -> str | None:
     """A browser's deviceId as the settings hold it; None for none. SettingsError when it is not one."""
     if value is None:
         return None
-    if isinstance(value, str) and DEVICE_ID.fullmatch(value.strip()):
+    # "off" is what hunt chrome-browser takes to clear it, never a browser.
+    if isinstance(value, str) and DEVICE_ID.fullmatch(value.strip()) and value.strip().lower() != "off":
         return value.strip()
     raise SettingsError(f"chrome_browser must be a browser's deviceId as hunt doctor lists it, or null, not {value!r}")
 

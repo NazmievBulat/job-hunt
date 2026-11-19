@@ -296,7 +296,9 @@ PDF and the worker's report. A worker sees only its own folder and the career.
   when that deviceId is among the connected browsers; otherwise it lists them with their
   deviceIds and says what to do. Settings that cannot be read name no browser, so the workers
   fall back to this computer's Chrome, never to another. A paused application's CAPTCHA or
-  sign-in is then solved in that browser, on its computer.
+  sign-in is then solved in that browser, on its computer. A paused job goes on in its tab only
+  in the browser it paused in: after the setting changed, it starts again in a new tab of the
+  browser used now, as a new application under the day's limits.
 - Several `claude -p --chrome` workers can each drive a tab of their own in one Chrome at the
   same time (checked on 2026-11-18 with three).
 - Only one worker at a time may use LinkedIn: a lock file the LinkedIn worker holds for each

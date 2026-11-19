@@ -13,7 +13,9 @@ from pathlib import Path
 import pytest
 
 from job_hunt import cli
-from job_hunt.apply import SITE_SKILL, UNSURE, apply, linkedin_command, read_report, site_command
+from job_hunt.apply import (
+    SITE_SKILL, UNSURE, ApplyError, Report, apply, linkedin_command, read_report, resume_job, site_command,
+)
 from job_hunt.career import Career, write_career
 from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.plan import WAITS
@@ -27,6 +29,7 @@ SEARCH = {"titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_sala
 # The browser a worker says it selected: the one the settings name, on another computer.
 THE_NAMED = {"device_id": HOME_MAC, "name": "Browser 2", "system": "macOS", "on_this_computer": False}
 CONNECTED = "Browser 1 (macOS), Browser 2 (macOS)"
+THIS_CHROME = {"name": "Browser 3", "system": "Linux", "on_this_computer": True}
 
 
 def _settings(folder: Path, **more: object) -> Path:
@@ -101,7 +104,7 @@ def test_chrome_browser_is_left_out_by_default_and_keeps_a_device_id(tmp_path: P
     assert read_settings(_settings(tmp_path, chrome_browser=f" {HOME_MAC} ")).chrome_browser == HOME_MAC
 
 
-@pytest.mark.parametrize("value", ["", " ", 12, True, ["x"], {"deviceId": HOME_MAC}, "Browser 2", "a b",
+@pytest.mark.parametrize("value", ["", " ", 12, True, ["x"], {"deviceId": HOME_MAC}, "Browser 2", "a b", "off", " OFF ",
                                    "-starts-with-a-dash", "x" * 129, 'quote"in'])
 def test_chrome_browser_that_is_not_a_device_id_is_refused(tmp_path: Path, value: object) -> None:
     with pytest.raises(SettingsError, match="chrome_browser must be a browser's deviceId"):
@@ -151,9 +154,25 @@ def test_hunt_chrome_browser_refuses_what_is_not_a_device_id_and_keeps_the_setti
 
 
 def test_hunt_chrome_browser_needs_the_settings_first(hunt: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert cli.main(["chrome-browser", HOME_MAC]) == 1
-    assert "run /setup to make it" in capsys.readouterr().err
+    for argv in (["chrome-browser", HOME_MAC], ["chrome-browser"]):
+        assert cli.main(argv) == 1
+        assert "run /setup to make it" in capsys.readouterr().err
     assert not (hunt / "data" / "settings.json").exists()
+
+
+@pytest.mark.parametrize("text", ["not json", "[1, 2]"])
+def test_hunt_chrome_browser_leaves_settings_it_cannot_read_as_they_are(
+        hunt: Path, capsys: pytest.CaptureFixture[str], text: str) -> None:
+    (hunt / "data" / "settings.json").write_text(text)
+    assert cli.main(["chrome-browser", HOME_MAC]) == 1
+    assert "hunt chrome-browser: " in capsys.readouterr().err
+    assert (hunt / "data" / "settings.json").read_text() == text
+
+
+def test_hunt_chrome_browser_off_is_read_in_any_case(hunt: Path) -> None:
+    path = _settings(hunt / "data", chrome_browser=HOME_MAC)
+    assert cli.main(["chrome-browser", " OFF "]) == 0
+    assert read_settings(path).chrome_browser is None
 
 
 def test_hunt_settings_keeps_the_browser_named_and_null_clears_it(hunt: Path) -> None:
@@ -275,6 +294,85 @@ def test_the_named_browser_not_connected_pauses_for_chrome_at_no_cost_and_names_
                       f"(chrome_browser {HOME_MAC}{said})")
     # The day's plan still counts it as waiting for Chrome.
     assert next(what for what, start in WAITS if reason.startswith(start)) == "Chrome open"
+
+
+def test_a_job_left_applying_by_a_stopped_run_is_judged_by_the_browser_named(project: Path, jobs: JobsList) -> None:
+    named, here = _picked(jobs, 1), _picked(jobs, 2)
+    for job, browser in ((named, THE_NAMED), (here, THIS_CHROME)):
+        for state in ("resume_ready", "applying"):
+            jobs.move(job, state)
+        (project / "jobs" / str(job)).mkdir(parents=True, exist_ok=True)
+        (project / "jobs" / str(job) / "report.json").write_text(json.dumps({"result": "applied", "browser": browser}))
+
+    _apply(project, jobs, None)
+
+    assert jobs.get(named).state == "applied"
+    # From this computer's Chrome, not the one named: it may have gone, so the person looks.
+    assert (jobs.get(here).state, jobs.get(here).failures) == ("paused", 0)
+    assert jobs.get(here).state_reason == f"{UNSURE}: the last hunt apply stopped while applying"
+
+
+@pytest.mark.parametrize(("browser", "state"), [(THE_NAMED, "applied"), ({"name": "Browser 3", "system": "Linux",
+                                                                         "on_this_computer": True}, "paused")])
+def test_a_worker_that_wrote_its_report_then_stopped_is_judged_by_the_browser_named(
+        project: Path, jobs: JobsList, browser: dict, state: str) -> None:
+    job = _picked(jobs)
+
+    class Stops(Worker):
+        def __call__(self, command: list[str]) -> None:
+            super().__call__(command)
+            if "build" not in _arguments(command):
+                raise ApplyError("the apply-site run failed (1): no message")
+
+    worker = Stops(project, {"result": "applied", "browser": browser})
+    apply(jobs, project, run_resume=worker, run_site=worker, run_linkedin=no_linkedin, browser=HOME_MAC)
+
+    assert (jobs.get(job).state, jobs.get(job).failures) == (state, 0)
+
+
+def test_going_on_in_a_paused_tab_carries_the_browser_too(project: Path, jobs: JobsList) -> None:
+    site = jobs.get(_picked(jobs, 1))
+    easy = jobs.get(_picked(jobs, 2, kind="easy_apply"))
+    paused = Report("paused", needs="captcha", tab="Apply", tab_id=7, device_id=HOME_MAC)
+
+    for command in (site_command(site, project, paused, browser=HOME_MAC),
+                    linkedin_command(easy, project, paused, browser=HOME_MAC)):
+        arguments = _arguments(command)
+        assert (arguments["browser"], arguments["tab"], arguments["tab_id"]) == (HOME_MAC, "Apply", 7)
+
+
+def _paused_in(project: Path, jobs: JobsList, browser: dict) -> int:
+    """A job paused for a sign-in in a tab of `browser`, done since: "done" put it back."""
+    job = _picked(jobs)
+    folder = project / "jobs" / str(job)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "resume.pdf").write_bytes(b"%PDF-1.4 stand-in")
+    for state in ("resume_ready", "applying"):
+        jobs.move(job, state)
+    jobs.move(job, "paused", 'a sign-in or a new account, in the Chrome tab "Apply"')
+    (folder / "report.json").write_text(json.dumps(
+        {"result": "paused", "needs": "sign_in", "tab": "Apply", "tab_id": 7, "browser": browser}))
+    resume_job(jobs, job)
+    return job
+
+
+@pytest.mark.parametrize(("then", "goes_on"), [(HOME_MAC, True), (WORK_MAC, False), (None, False)])
+def test_a_paused_tab_is_gone_on_in_only_in_the_browser_used_now(
+        project: Path, jobs: JobsList, then: str | None, goes_on: bool) -> None:
+    job = _paused_in(project, jobs, THE_NAMED)
+
+    worker = _apply(project, jobs, {"result": "applied", "browser": {**THE_NAMED, "device_id": then}
+                                    if then else THIS_CHROME}, browser=then)
+
+    # After chrome_browser changed, the tab is another browser's: a new tab, as a new application.
+    assert ("tab_id" in worker.started[-1]) is goes_on
+    assert jobs.get(job).state == "applied"
+
+
+def test_without_the_setting_a_tab_of_this_computers_chrome_is_gone_on_in(project: Path, jobs: JobsList) -> None:
+    job = _paused_in(project, jobs, THIS_CHROME)
+    worker = _apply(project, jobs, {"result": "applied", "browser": THIS_CHROME}, browser=None)
+    assert worker.started[-1]["tab_id"] == 7 and jobs.get(job).state == "applied"
 
 
 def test_a_report_read_again_later_is_taken_as_it_is(project: Path, jobs: JobsList) -> None:

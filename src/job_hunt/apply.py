@@ -131,6 +131,20 @@ class Report:
     connected: str | None = None
     # The settings' chrome_browser the worker could not reach, when they name one.
     named_browser: str | None = None
+    # The browser the report says the worker used: its deviceId and whether it is this computer's.
+    # Both None for a report that names none (a Chrome pause, or one written before reports did).
+    device_id: str | None = None
+    on_this_computer: bool | None = None
+
+    def from_browser(self, browser: str | None) -> bool:
+        """Whether this report's tab is in the browser the workers use now: the settings'
+        chrome_browser, or else this computer's Chrome. A tab in another browser is never gone on in."""
+        if browser:
+            return self.device_id == browser
+        if self.on_this_computer is not None:
+            return self.on_this_computer
+        # A report from before reports named the browser: this computer's, the only one used then.
+        return self.device_id is None
 
     def pause_reason(self) -> str:
         if self.needs is None:
@@ -277,6 +291,10 @@ def read_report(path: Path, skill: str = SITE_SKILL, *, worker: bool = False, br
     if not isinstance(data, dict) or data.get("result") not in results:
         raise ApplyError(f'the {skill} run wrote a report whose "result" is not {", ".join(results[:-1])} or {results[-1]}')
     report = _report(data, skill)
+    if isinstance(used := data.get("browser"), dict):
+        report = replace(report, device_id=used.get("device_id") if isinstance(used.get("device_id"), str) else None,
+                         on_this_computer=used.get("on_this_computer") if isinstance(used.get("on_this_computer"), bool)
+                         else None)
     if worker and report.needs == "chrome" and browser:
         return replace(report, named_browser=browser)
     # Checked last: a report that cannot be read says first what is wrong with it.
@@ -471,12 +489,15 @@ def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
                 summary.failed += _failed(jobs, job, failure)
 
 
-def _paused(report: Path, skill: str) -> Report | None:
+def _paused(report: Path, skill: str, browser: str | None) -> Report | None:
+    """The job's pause to go on from, in its tab: only when that tab is in the browser the workers
+    use now (`browser`, the settings' chrome_browser). After the setting changed, the job starts
+    again in a new tab of the new browser, as a new application."""
     try:
         earlier = read_report(report, skill)
     except ApplyError:
         return None
-    return earlier if earlier.result == "paused" else None
+    return earlier if earlier.result == "paused" and earlier.from_browser(browser) else None
 
 
 def _unsure(error: ApplyError) -> Report:
@@ -517,7 +538,7 @@ def _midnight(now: datetime, days: int = 0) -> datetime:
 def _continues(this: _Run, job: int) -> bool:
     """Going on in the tab it paused in, after "done": the same application, and a solved CAPTCHA
     does not last a wait."""
-    paused = _paused(_folder(this.root, job) / "report.json", _skill(this.jobs.get(job)))
+    paused = _paused(_folder(this.root, job) / "report.json", _skill(this.jobs.get(job)), this.browser)
     return paused is not None and paused.tab is not None
 
 
@@ -616,7 +637,7 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         """Start the job's worker; False when the job was moved meanwhile (skipped from the chat)."""
         skill = _skill(jobs.get(job))
         report = _folder(root, job) / "report.json"
-        paused = _paused(report, skill)
+        paused = _paused(report, skill, this.browser)
         # Gone before the job is `applying`: a run stopped in between must not take an
         # earlier try's report for this one's.
         report.unlink(missing_ok=True)

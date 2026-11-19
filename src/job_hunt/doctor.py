@@ -146,8 +146,8 @@ def _chrome(machine: Machine) -> Line:
                     + (f" (connected: {others}; workers never use them)" if others else "")
                     + ": open Chrome on this computer, click the Claude extension and sign it in to the same "
                     "Claude account"
-                    + ("; or, to use one of those instead, hunt chrome-browser <its deviceId> ("
-                       + ", ".join(_named(browser, ids=True) for browser in browsers) + ")" if browsers else ""))
+                    + ("; or, to use one of those instead, hunt chrome-browser <its deviceId>"
+                       if any(browser.get("deviceId") for browser in browsers) else ""))
     if len(here) > 1:
         return Line("chrome", "missing", "more than one connected Chrome could be this computer's ("
                     + ", ".join(map(_named, here)) + "), so the workers use none: keep the Claude extension "
@@ -165,7 +165,7 @@ def _chrome_named(machine: Machine, named: str) -> Line:
         return Line("chrome", "missing", "Claude in Chrome did not say which browsers are connected: open Chrome "
                     f"with the browser {setting} names, click the Claude extension once, then run hunt doctor again")
     chosen = [browser for browser in browsers if browser.get("deviceId") == named]
-    others = ", ".join(_named(browser, ids=not chosen) for browser in browsers if browser not in chosen)
+    others = ", ".join(_named(browser) for browser in browsers if browser not in chosen)
     if not chosen:
         return Line("chrome", "missing", f"the browser {setting} names is not connected"
                     + (f" (connected: {others}; workers never use them)" if others else "")
@@ -190,10 +190,11 @@ def _connected_browsers(machine: Machine) -> list[dict] | None:
         return None
     if not isinstance(browsers, list) or not all(
             isinstance(browser, dict) and isinstance(browser.get("name"), str)
-            and isinstance(browser.get("system"), str)
-            and isinstance(browser.get("deviceId"), str | None) for browser in browsers):
+            and isinstance(browser.get("system"), str) for browser in browsers):
         return None
-    return browsers
+    # A deviceId that is not text is no deviceId: such a browser is never the one the settings name.
+    return [{**browser, "deviceId": browser.get("deviceId") if isinstance(browser.get("deviceId"), str) else None}
+            for browser in browsers]
 
 
 def _could_be_here(browser: dict, system: str) -> bool:
@@ -205,9 +206,9 @@ def _could_be_here(browser: dict, system: str) -> bool:
     return browser.get("isLocal") is True and any(name in browser["system"].lower() for name in names)
 
 
-def _named(browser: dict, *, ids: bool = False) -> str:
-    """Its name and system; with `ids`, its deviceId too, for hunt chrome-browser."""
-    if ids and browser.get("deviceId"):
+def _named(browser: dict) -> str:
+    """Its name and system, and its deviceId when the listing gave one: what hunt chrome-browser takes."""
+    if browser.get("deviceId"):
         return f"{browser['name']} ({browser['system']}, deviceId {browser['deviceId']})"
     return f"{browser['name']} ({browser['system']})"
 

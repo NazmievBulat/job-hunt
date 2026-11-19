@@ -708,7 +708,8 @@ def _read_alerts(
             done.failed.append(f"alert: batch {number} of {len(batches)} failed: {said}")
             if in_order:
                 # A second before it: the search's `after:` may leave out an email of that very second.
-                done.through = newest - timedelta(seconds=1) if newest else None
+                # Never past the run's start: an email that came while the search ran may be unlisted.
+                done.through = min(newest - timedelta(seconds=1), started) if newest else None
                 in_order = False
             if any(date is None for _, date in batch):
                 # An email without a date may be older than any the batches before read.

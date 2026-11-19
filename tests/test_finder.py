@@ -893,3 +893,24 @@ def test_alert_emails_are_ordered_by_their_time_whatever_its_offset(
     assert batches == [["no-offset", *(f"utc-{number}" for number in range(9))], ["utc-9", "eastern"]]
     # The newest of the first batch, 16:38 UTC, less a second: before both emails of the failed one.
     assert jobs.last_run() == datetime(2026, 11, 5, 16, 37, 59, tzinfo=UTC)
+
+
+def test_a_failed_batch_never_moves_the_last_run_past_the_runs_start(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    found = tmp_path / "found-jobs.json"
+    # Ten emails that came while the search ran, after the run started, and one more.
+    listed = [{"email_id": f"late-{number}", "email_date": (clock.now + timedelta(minutes=number + 1)).isoformat()}
+              for number in range(11)]
+
+    def run(command: list[str]) -> None:
+        args = arguments(command)
+        if "email_ids" not in args:
+            found.write_text(json.dumps({"alerts": listed}))
+        elif "late-10" not in args["email_ids"]:
+            Path(args["out"]).write_text(json.dumps({"emails": len(args["email_ids"]), "jobs": []}))
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    started = clock.now
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=run, fetch=_any_page, clock=clock)
+    assert len(summary.failed) == 1 and jobs.last_run() == started

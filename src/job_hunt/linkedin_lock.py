@@ -86,8 +86,12 @@ class LinkedInLock:
             not_before = _aware(self._next.read_text().strip())
         except (FileNotFoundError, ValueError):
             return None
-        # Never longer than the longest pause from now, whatever the clock said when written.
-        return min(not_before, now + PAUSE[1])
+        # Never longer than the longest pause from now, whatever the clock said when written; the
+        # shorter time is written back, so the next look does not start the six minutes again.
+        if not_before > now + PAUSE[1]:
+            not_before = now + PAUSE[1]
+            self._next.write_text(not_before.isoformat())
+        return not_before
 
     def take(self, job: int) -> float | None:
         """Hold the lock for this job's application and return None, or return how many

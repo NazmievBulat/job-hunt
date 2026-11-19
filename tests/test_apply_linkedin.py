@@ -300,8 +300,12 @@ def test_a_linkedin_failure_is_tried_once_more_by_the_linkedin_worker_after_the_
 
 def test_a_pause_written_far_ahead_waits_no_longer_than_the_longest_pause(project: Path) -> None:
     (project / "data" / "linkedin.next").write_text((START + timedelta(days=2)).isoformat())
-    wait = _lock(project, clock=MovableClock(START)).take(1)
-    assert wait == PAUSE[1].total_seconds()
+    clock = MovableClock(START)
+    assert _lock(project, clock=clock).take(1) == PAUSE[1].total_seconds()
+    clock.advance(seconds=PAUSE[1].total_seconds() / 2)
+    assert _lock(project, clock=clock).take(1) == PAUSE[1].total_seconds() / 2
+    clock.advance(seconds=PAUSE[1].total_seconds() / 2)
+    assert _lock(project, clock=clock).take(1) is None
 
 
 @pytest.mark.parametrize("name", ["linkedin.next", "linkedin.lock"])

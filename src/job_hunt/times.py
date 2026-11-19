@@ -23,6 +23,7 @@ created or moved otherwise.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, fields
@@ -75,9 +76,15 @@ class TimesError(RuntimeError):
 
 
 def zone(settings: Settings) -> tzinfo:
-    """The person's time zone: the one of the settings, else the computer's own."""
+    """The person's time zone: the one of the settings, else the computer's own (TZ first, as the
+    rest of `hunt` reads the local time)."""
     if settings.time_zone:
         return ZoneInfo(settings.time_zone)
+    if name := os.environ.get("TZ", "").removeprefix(":"):
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
     # /etc/localtime links to the zone's file: its name keeps summer time right across the days.
     local = Path("/etc/localtime").resolve()
     if "zoneinfo" in local.parts:

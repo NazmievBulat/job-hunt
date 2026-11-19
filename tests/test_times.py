@@ -188,6 +188,16 @@ def test_working_hours_and_time_zone_come_from_the_settings(project: Path) -> No
             read_settings(path)
 
 
+def test_with_no_time_zone_set_the_zone_of_tz_is_the_persons(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt.times import zone
+
+    path = project / "data" / "settings.json"
+    path.write_text(json.dumps({key: value for key, value in json.loads(path.read_text()).items() if key != "time_zone"}))
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+
+    assert zone(read_settings(path)) == ZoneInfo("America/Los_Angeles")
+
+
 # The offer
 
 
@@ -427,6 +437,29 @@ def test_a_time_the_recruiter_picks_moves_the_held_event_and_confirms_it(
     assert threads.get(answer).state == "drafted"
 
 
+def test_a_picked_time_is_confirmed_though_the_run_stopped_once_its_reply_was_saved(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    thread, calendar = _held(project, threads, jobs, clock)
+    answer, = _saved(threads, jobs, _email(2, text="Monday 2:30 works, talk then!"))
+    calendar.chosen = "2026-11-23T14:30:00-05:00"
+    saved = Threads.drafted
+
+    def drafted_then_stopped(self: Threads, *arguments: object) -> bool:
+        saved(self, *arguments)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Threads, "drafted", drafted_then_stopped)
+    with pytest.raises(KeyboardInterrupt):
+        draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+    monkeypatch.undo()
+    draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+
+    assert calendar.events == {"e1": {"title": "Call with Example Labs about QA Engineer", "start": "2026-11-23T14:30"}}
+    assert Talks(project / "data" / "jobs.db").get(thread).state == "confirmed"
+    assert threads.get(answer).state == "drafted" and calendar.tasks().count("confirm") == 1
+
+
 @pytest.mark.parametrize("chosen", [None, "2026-11-24T09:00:00-05:00"])
 def test_an_answer_with_no_time_offered_moves_nothing(
     project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, chosen: str | None
@@ -662,7 +695,36 @@ def test_a_reply_saved_without_its_times_holds_nothing_and_goes_without_the_resu
     cli.hold_times(threads, project, run=calendar, clock=clock)
 
     assert calendar.events == {} and "resume" not in calendar.sent[-1]
-    assert "was not held" in (project / "data" / "morning.log").read_text()
+    assert Talks(project / "data" / "jobs.db").get(thread) is None
+    # Told once: a later run has nothing left to hold.
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+    assert (project / "data" / "morning.log").read_text().count("was not held") == 1
+    assert calendar.events == {}
+
+
+def test_an_offer_made_again_in_new_words_is_held_at_its_new_times(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    (project / "jobs" / "1" / "resume.pdf").write_bytes(b"%PDF-1.4 Ada Example")
+    found, _ = read_messages({"linkedin_messages": [{
+        "conversation": "https://www.linkedin.com/messaging/thread/9/", "from": "Sam Recruiter",
+        "text": "Can we talk?", "date": "2026-11-18T06:40:00-05:00", "job_link": "https://jobs.example.com/1",
+        "company": "Example Labs", "asks_to_talk": True}]})
+    thread = threads.save(found[0], jobs)
+    draft_replies(threads, project, run=Calendar(offer=["2026-11-19T10:00:00-05:00", "2026-11-23T14:30:00-05:00"]),
+                  fetch=no_fetch, clock=clock)
+    calendar = Calendar(offer=["2026-11-24T11:00:00-05:00", "2026-11-25T15:00:00-05:00"])
+    calendar.reply = "Glad to talk. Tuesday 11:00 or Wednesday 15:00? Ada"
+
+    offer_times(threads, project, thread, run=calendar, clock=clock)
+
+    asked = questions(jobs, project / "data", threads)
+    assert "Times offered: Tue 24 Nov 11:00, Wed 25 Nov 15:00 (EST)" in asked and "Resume attached" in asked
+    _send(threads, project, thread, calendar)
+    assert calendar.sent[-1]["resume"] == str(project / "jobs" / "1" / "resume.pdf")
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+    assert calendar.events == {"e1": {"title": "Held: Call with Example Labs about QA Engineer",
+                                      "start": "2026-11-24T11:00"}}
 
 
 def test_a_second_offer_in_a_conversation_moves_its_held_event(

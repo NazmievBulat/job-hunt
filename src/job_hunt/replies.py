@@ -591,11 +591,13 @@ def _draft_replies(threads: Threads, root: Path, run: Run, fetch: Callable[[str]
             if threads.fail(thread.id, str(error)) == "failed":
                 log_failure(root / "data", "hunt draft-replies", f"no reply to {thread.sender}: {error}", clock)
             continue
+        # The recruiter's pick moves the event whatever the reply says: confirmed before the reply
+        # is saved, as a thread drafted is never drafted again and its pick would be lost.
+        if held is not None and chosen is not None:
+            _confirm(talks, held, chosen, root, run, clock)
         if threads.drafted(thread.id, reply, draft):
             _write(here / "reply.md", reply + "\n")
             drafted += 1
-            if held is not None and chosen is not None:
-                _confirm(talks, held, chosen, root, run, clock)
     return drafted
 
 

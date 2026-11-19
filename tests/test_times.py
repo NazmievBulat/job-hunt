@@ -460,6 +460,25 @@ def test_a_picked_time_is_confirmed_though_the_run_stopped_once_its_reply_was_sa
     assert threads.get(answer).state == "drafted" and calendar.tasks().count("confirm") == 1
 
 
+def test_a_pick_in_an_answer_a_newer_message_replaced_moves_nothing(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    thread, calendar = _held(project, threads, jobs, clock)
+    _saved(threads, jobs, _email(2, text="Monday 2:30 works, talk then!"))
+    calendar.chosen = "2026-11-23T14:30:00-05:00"
+
+    def newer_while_drafting(command: list[str]) -> None:
+        # The watch reads a correction while this answer is being drafted.
+        if _arguments(command)[0] == DRAFT_SKILL and len(threads.in_states("new")) == 1:
+            _saved(threads, jobs, _email(3, text="Sorry, Thursday 10:00 after all"))
+        calendar(command)
+
+    draft_replies(threads, project, run=newer_while_drafting, fetch=no_fetch, clock=clock)
+
+    assert Talks(project / "data" / "jobs.db").get(thread).state == "held"
+    assert calendar.tasks().count("confirm") == 0
+
+
 @pytest.mark.parametrize("chosen", [None, "2026-11-24T09:00:00-05:00"])
 def test_an_answer_with_no_time_offered_moves_nothing(
     project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, chosen: str | None

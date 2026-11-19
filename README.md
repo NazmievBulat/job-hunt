@@ -10,9 +10,9 @@ you to send.
 There are no app screens. You use it from a Claude Code session, on your computer or from your
 phone through Remote Control.
 
-**Status:** being built. The resume builder, the finder (`hunt find`), scoring (`hunt score`) and
-the list with picking (`/jobs`, `hunt list`, `hunt pick`, `hunt skip`) work; applying, the
-morning timer and `/setup` are next. See [`docs/design.md`](docs/design.md).
+**Status:** being built. Setup (`/setup`, `hunt doctor`), the resume builder, the finder, scoring,
+the list with picking, applying and the morning run work; recruiter replies and offering times
+are next. See [`docs/design.md`](docs/design.md).
 
 ## What it needs
 
@@ -20,6 +20,22 @@ morning timer and `/setup` are next. See [`docs/design.md`](docs/design.md).
 - The Claude in Chrome extension, and the Gmail connector on your Claude account
 - Python 3.14 and [`uv`](https://docs.astral.sh/uv/)
 - Linux or macOS, with your computer on in the morning
+- Optionally Chrome Remote Desktop on the computer and your phone, to solve a CAPTCHA or a site
+  sign-in from the phone; without it, that one application waits until you are at the computer
+
+## Start
+
+```sh
+git clone https://github.com/NazmievBulat/job-hunt.git
+cd job-hunt
+uv sync
+claude
+```
+
+Then type `/setup` in Claude Code. It checks what is missing and says how to add it, reads your
+resume, asks what to look for and your standing form answers, and switches on the morning run,
+in about ten minutes. Run it again to change one thing (`/setup search`). `uv run hunt doctor`
+prints what the hunt still needs at any time.
 
 ## How it keeps you in charge
 
@@ -30,10 +46,9 @@ morning timer and `/setup` are next. See [`docs/design.md`](docs/design.md).
   uses that browser.
 - Your career, jobs and resumes stay on your computer, in `data/` and `jobs/`.
 
-## Try the resume builder
+## Run the tests
 
 ```sh
-uv sync
 uv run pytest -q
 ```
 

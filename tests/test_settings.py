@@ -101,3 +101,40 @@ def test_pushover_keys_need_both_a_token_and_a_user(tmp_path: Path, pushover: ob
         read_settings(_write(tmp_path, {**GOOD, "pushover": pushover}))
     # The keys are never repeated in an error.
     assert "aExampleAppToken" not in str(refused.value)
+
+
+def test_hunt_settings_saves_settings_it_can_read_and_keeps_the_pushover_keys(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({
+        "titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6,
+        "pushover": {"token": "t0ken", "user": "us3r"}}))
+    given = {"titles": ["QA Engineer"], "areas": ["New York City"], "remote": "include", "lowest_salary": 120000,
+             "morning_hour": 7}
+
+    assert cli.main(["settings", json.dumps(given)]) == 0
+
+    saved = read_settings(tmp_path / "settings.json")
+    assert (saved.titles, saved.areas, saved.lowest_salary, saved.morning_hour) == (
+        ["QA Engineer"], ["New York City"], 120000, 7)
+    assert saved.pushover is not None and saved.pushover.token == "t0ken"
+    printed = capsys.readouterr().out
+    assert "QA Engineer" in printed and "t0ken" not in printed
+
+
+def test_hunt_settings_refuses_settings_it_cannot_read_and_keeps_the_old_ones(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    before = json.dumps({"titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6})
+    (tmp_path / "settings.json").write_text(before)
+
+    assert cli.main(["settings", json.dumps({"titles": [], "areas": [], "remote": "only", "lowest_salary": None,
+                                             "morning_hour": 7})]) == 1
+
+    assert "titles must name at least one job title" in capsys.readouterr().err
+    assert (tmp_path / "settings.json").read_text() == before
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["settings.json"]

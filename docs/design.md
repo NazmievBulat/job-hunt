@@ -57,9 +57,9 @@ without them.
 
 `/setup` is a Claude Code command any user runs once, in about ten minutes:
 
-1. It checks what the hunt needs: Claude Code signed in, the Claude in Chrome extension
-   connected, the Gmail connector on, Python and `uv` installed. It says exactly what is
-   missing and how to add it.
+1. It checks what the hunt needs with `hunt doctor`: Claude Code signed in, the Claude in Chrome
+   extension connected, the Gmail connector on, Python and `uv` installed. It says exactly what
+   is missing and how to add it. The doctor calls no model, so it can be run at any time.
 2. It reads the user's resume (PDF, Word or pasted text) into `data/career.json` and shows what
    it read for the user to correct. An export in the career shape `hunt career` reads works too.
 3. It asks what to look for: job titles, the areas by name ("Raleigh-Durham-Chapel Hill",
@@ -70,6 +70,12 @@ without them.
 5. It asks the standing form answers once: work authorization, sponsorship, notice period,
    salary wish, willingness to relocate. These go in the career file's form answers.
 6. It switches on the morning timer.
+
+A step already done is said and skipped; `/setup <step>` changes one thing. Two optional steps:
+Pushover keys, and Chrome Remote Desktop on the computer and the phone. A paused application
+(a CAPTCHA, a site sign-in) is solved by the user in the computer's own Chrome, never by Claude;
+with Chrome Remote Desktop the pause question carries its link, so it is done from the phone.
+Without it the job waits until the user is at the computer, and the other jobs go on.
 
 ## How a day goes
 
@@ -103,7 +109,7 @@ Each piece has one job and talks to the others only through the jobs list and fi
 
 | Piece | Kind | What it does |
 |---|---|---|
-| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`. It is the coordinator. |
+| `hunt` | Python command | Every mechanical step: `doctor`, `career`, `career-from-resume`, `settings`, `form-answers`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`. It is the coordinator. |
 | Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
 | Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the timer's hour. |
@@ -198,6 +204,6 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 3. Scoring, the `job-hunt` session and picking.
 4. The company-site worker, then the LinkedIn worker.
 5. The chat: the morning session, its questions and Pushover.
-6. `/setup`, with the resume reader.
+6. Done: `/setup`, with the resume reader and `hunt doctor`.
 7. Recruiter replies, by email and on LinkedIn.
 8. Offering times from Google Calendar.

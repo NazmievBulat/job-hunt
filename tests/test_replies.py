@@ -414,6 +414,17 @@ def test_the_sender_gets_only_the_tools_of_its_channel(project: Path, threads: T
     assert "Gmail" not in linkedin_tools[linkedin_tools.index("--allowedTools") + 1]
 
 
+def test_a_linkedin_reply_without_a_resume_cannot_upload_a_file(project: Path, threads: Threads, jobs: JobsList) -> None:
+    # It types into a stranger's conversation with nobody watching: only a reply that goes out
+    # with the resume may upload, and test_times pins that one.
+    (linkedin,) = _saved(threads, jobs, _linkedin(2))
+    command = send_command(threads.get(linkedin), "Hi", project)
+    tools = command[command.index("--allowedTools") + 1].split(",")
+
+    assert "mcp__claude-in-chrome__computer" in tools and "mcp__claude-in-chrome__form_input" in tools
+    assert "mcp__claude-in-chrome__file_upload" not in tools
+
+
 # Reading LinkedIn
 
 

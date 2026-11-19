@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import threading
 from datetime import UTC, datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -732,7 +733,9 @@ def test_hunt_watch_drafts_and_asks_and_send_reply_says_how_it_went(
     sent: dict | None, code: int, state: str
 ) -> None:
     threads = Threads(hunt / "data" / "jobs.db")
-    threads.finished_read("linkedin", datetime.now().astimezone())
+    # The watch's own clock, not the machine's: from the summary hour (23 here) it does nothing.
+    monkeypatch.setattr(cli, "watch", partial(watch, clock=lambda: MORNING))
+    threads.finished_read("linkedin", MORNING)
     monkeypatch.setattr(cli, "run_claude", FakeClaude({"emails": 0, "jobs": [], "recruiter_emails": [_email(1)],
                                                        "linkedin_notifications": 0}, sent))
 

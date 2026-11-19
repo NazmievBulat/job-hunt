@@ -135,7 +135,7 @@ def test_arbeitnow_reads_its_escaped_descriptions_and_pages_only_while_they_are_
 
 def test_arbeitnow_stops_at_its_last_page_and_at_most_three_pages(settings: Settings) -> None:
     sites = _sites()
-    sites.answers = {f"{ARBEITNOW}?page=2": _ok("arbeitnow-last.json"), **sites.answers}
+    sites.answers[f"{ARBEITNOW}?page=2"] = _ok("arbeitnow-last.json")
     read = _read("arbeitnow", settings, sites, since=datetime.fromtimestamp(1794900000, UTC))
     # The last page has no next one; the jobs read so far are kept.
     assert sites.urls(ARBEITNOW) == [ARBEITNOW, f"{ARBEITNOW}?page=2"] and len(read.jobs) == 4
@@ -583,5 +583,5 @@ def test_a_job_two_searches_found_keeps_the_area_one_gave_and_an_unknown_area_it
     # An area the table does not know keeps its search's area whatever state the place names.
     lisbon = replace(settings, areas=["Lisbon"])
     job = _job("jooble", lisbon, link="https://jooble.org/desc/2", title="SDET", company="Example Labs",
-               places=["Lisboa, PT"], remote="on_site", area="Lisbon")
+               places=["Example Street, OR"], remote="on_site", area="Lisbon")
     assert job.area == "Lisbon"

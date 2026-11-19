@@ -22,6 +22,8 @@ from job_hunt.finder import Summary as FindSummary
 from job_hunt.jobs import Job, JobsList, PickError
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.morning import morning, start_session
+from job_hunt.notes import DRAFT_SKILL as NOTE_DRAFT_SKILL, SEND_SKILL as NOTE_SEND_SKILL, NoteError, Notes, collect
+from job_hunt.notes import decide as decide_notes, draft_notes, note_pause, send_notes, stopped_today, went
 from job_hunt.notify import NotifyError, notify, post_pushover
 from job_hunt.questions import job_line, log_failure, questions, then
 from job_hunt.replies import (
@@ -184,6 +186,84 @@ def _apply(args: argparse.Namespace) -> int:
         print(f"hunt apply: {error}", file=sys.stderr)
         return 1
     print(summary)
+    # The notes to the posters of today's LinkedIn applications, for the chat to ask about.
+    try:
+        if drafted := draft_notes_step():
+            print(f"{drafted} notes to hiring managers drafted")
+    except (NoteError, OSError) as error:
+        log_failure(DATA, "hunt draft-notes", error, lambda: datetime.now(UTC))
+        print(f"hunt draft-notes: {error}", file=sys.stderr)
+    return 0
+
+
+def run_note_draft(command: list[str]) -> None:
+    run_claude(command, ROOT, skill=NOTE_DRAFT_SKILL, error=NoteError)
+
+
+def run_note_send(command: list[str]) -> None:
+    run_claude(command, ROOT, skill=NOTE_SEND_SKILL, error=NoteError)
+
+
+def notes_daily() -> int:
+    """The daily cap of the settings; with settings that cannot be read, 0: they may turn
+    sending off, so none goes until they are mended."""
+    try:
+        return read_settings(DATA / "settings.json").linkedin_notes_daily
+    except SettingsError:
+        return 0
+
+
+def draft_notes_step() -> int:
+    # With sending turned off (0 a day) no note could go, so none is drafted or asked about.
+    if notes_daily() == 0:
+        return 0
+    notes, jobs = Notes(DATA / "jobs.db"), JobsList(DATA / "jobs.db")
+    collect(notes, jobs, ROOT)
+    return draft_notes(notes, jobs, ROOT, run=run_note_draft)
+
+
+def _draft_notes(args: argparse.Namespace) -> int:
+    print(f"{draft_notes_step()} notes to hiring managers drafted")
+    return 0
+
+
+def _note_went(args: argparse.Namespace) -> int:
+    try:
+        note = went(Notes(DATA / "jobs.db"), args.note)
+    except NoteError as error:
+        print(f"hunt note-went: {error}", file=sys.stderr)
+        return 1
+    print(f"the note to {note.name} is sent")
+    return 0
+
+
+def _notes(args: argparse.Namespace) -> int:
+    notes = Notes(DATA / "jobs.db")
+    decision = "send" if args.command == "send-notes" else "skip"
+    chosen = args.numbers
+    try:
+        if chosen == ["all"]:
+            chosen = []
+        elif any(not number.isdigit() for number in chosen):
+            raise NoteError("give the notes' numbers, or all")
+        if chosen or args.command == "skip-notes" or args.numbers == ["all"]:
+            decided = decide_notes(notes, decision, [int(number) for number in chosen] or None)
+            for note in decided:
+                print(f"{'approved' if decision == 'send' else 'skipped'} {note.id}: the note to {note.name}")
+    except NoteError as error:
+        print(f"hunt {args.command}: {error}", file=sys.stderr)
+        return 1
+    if decision == "skip":
+        return 0
+    try:
+        daily = read_settings(DATA / "settings.json").linkedin_notes_daily
+    except SettingsError as error:
+        print(f"hunt {args.command}: data/settings.json: {error}; no note is sent until it is mended",
+              file=sys.stderr)
+        return 1
+    lock = LinkedInLock(DATA, pause=note_pause)
+    print(send_notes(notes, Threads(DATA / "jobs.db"), JobsList(DATA / "jobs.db"), ROOT, run=run_note_send,
+                     lock=lock, sleep=time.sleep, daily=daily))
     return 0
 
 
@@ -221,6 +301,27 @@ def _waits_for(job: Job) -> str:
     return "resume ready; the way to apply is not known"
 
 
+def _notes_status(notes: Notes) -> list[str]:
+    lines = []
+    sent = notes.in_states("sent")
+    if sent:
+        lines.append(f"Notes to hiring managers sent ({len(sent)}):")
+        lines += [f"  {note.id}. {note.name} (job {note.job})" for note in sent]
+    waiting = notes.in_states("drafted", "approved", "unsure")
+    if waiting:
+        lines.append(f"Notes to hiring managers waiting ({len(waiting)}):")
+        lines += [f"  {note.id}. {note.name} (job {note.job}): "
+                  + {"drafted": "for your answer", "approved": "approved, for the next sending"}.get(
+                      note.state, f"needs {note.state_reason}") for note in waiting]
+    failed = notes.in_states("failed")
+    if failed:
+        lines.append(f"Notes to hiring managers failed ({len(failed)}):")
+        lines += [f"  {note.id}. {note.name} (job {note.job}): {note.state_reason}" for note in failed]
+    if (why := stopped_today(DATA, notes.now())) is not None:
+        lines.append(f"Sending notes stopped for today: {why}")
+    return lines
+
+
 def _status(args: argparse.Namespace) -> int:
     jobs = JobsList(DATA / "jobs.db")
     groups = [
@@ -236,13 +337,16 @@ def _status(args: argparse.Namespace) -> int:
             print(f"{name} ({len(listed)}):")
         for job in listed:
             print(f"  {job.id}. {_named(job)}{why(job)}")
+    for line in _notes_status(Notes(DATA / "jobs.db")):
+        print(line)
     return 0
 
 
 def _morning(args: argparse.Namespace) -> int:
     try:
         print(morning(JobsList(DATA / "jobs.db"), DATA, find=_find_and_tell, score=_score_every_job,
-                      start=lambda: start_session(ROOT), threads=Threads(DATA / "jobs.db"), draft=draft_step))
+                      start=lambda: start_session(ROOT), threads=Threads(DATA / "jobs.db"), draft=draft_step,
+                      notes=Notes(DATA / "jobs.db"), notes_daily=notes_daily(), draft_notes=draft_notes_step))
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         # Today's session did not start, so the next morning's questions tell it.
         log_failure(DATA, "hunt morning", error, lambda: datetime.now(UTC))
@@ -252,7 +356,8 @@ def _morning(args: argparse.Namespace) -> int:
 
 
 def _questions(args: argparse.Namespace) -> int:
-    print(questions(JobsList(DATA / "jobs.db"), DATA, Threads(DATA / "jobs.db")), end="")
+    print(questions(JobsList(DATA / "jobs.db"), DATA, Threads(DATA / "jobs.db"), Notes(DATA / "jobs.db"),
+                    notes_daily()), end="")
     return 0
 
 
@@ -459,6 +564,27 @@ def main(argv: list[str] | None = None) -> int:
         "questions", help="print what waits for the user, in the order to ask: a morning failure, new jobs "
         "(numbered for hunt pick), paused applications")
     asking.set_defaults(run=_questions)
+    noting = commands.add_parser(
+        "draft-notes", help="draft a note of at most 300 characters to the poster of each LinkedIn job applied to "
+        "whom a free Message reaches (claude -p with the draft-note skill); sends nothing. hunt apply runs it at "
+        "its end")
+    noting.set_defaults(run=_draft_notes)
+    sending_notes = commands.add_parser(
+        "send-notes", help="on the person's answer to the notes question: approve all the notes asked about, or "
+        "those numbered (the others are skipped), then send the approved ones by the free Message button, one at "
+        "a time under the LinkedIn lock, one to three minutes apart, at most linkedin_notes_daily a day "
+        "(claude --chrome -p with the send-note skill); without numbers, send those approved already")
+    sending_notes.add_argument("numbers", nargs="*", help="the notes' numbers as hunt questions prints them, or all")
+    sending_notes.set_defaults(run=_notes)
+    skipping_notes = commands.add_parser(
+        "skip-notes", help="skip the notes asked about, all of them or those numbered (the others wait to be asked "
+        "again)")
+    skipping_notes.add_argument("numbers", nargs="*", help="the notes' numbers as hunt questions prints them")
+    skipping_notes.set_defaults(run=_notes)
+    note_went = commands.add_parser(
+        "note-went", help="end a note that may have gone as sent, once LinkedIn shows it in the conversation")
+    note_went.add_argument("note", type=int, help="the note's number, as hunt questions prints it")
+    note_went.set_defaults(run=_note_went)
     pushing = commands.add_parser(
         "notify", help="push one question with Pushover, linking to the day's session, when data/settings.json "
         "has pushover keys")

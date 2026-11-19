@@ -27,8 +27,13 @@ without them.
   password manager fills them in. Claude never sees or types a password.
 - One LinkedIn worker handles every Easy Apply job, one at a time. Other workers handle jobs
   on company sites, up to three at once.
-- Nothing is sent without the user's word: applications go out for the jobs they picked, and an
-  email reply only after they approve its draft.
+- Nothing is sent without the user's word: applications go out for the jobs they picked, an
+  email reply only after they approve its draft, and a note to a hiring manager only on their
+  "send" to the day's notes question.
+- Notes to hiring managers use only LinkedIn's free `Message`: never an InMail credit, never a
+  connection request (a free account may add a note to only a few invitations a month, and
+  invitations have a weekly cap; checked 2026-11-18). At most 15 a day, one person written to
+  once, and a LinkedIn warning ends the day's sending.
 
 ## The chat
 
@@ -44,6 +49,9 @@ without them.
     answer, with the Chrome tab: "done" or the answer.
   - **A recruiter's message**, by email or on LinkedIn. The message, the job description when
     there is one, and a drafted reply: "Send?"
+  - **Notes to hiring managers.** One question for all the notes drafted after the day's
+    LinkedIn applications, each with who it is for and its words: "send all", "send 1 3" or
+    "skip".
   - **A request to talk.** Free times from the user's Google Calendar and the reply offering
     one, with the resume for that job: "Send?" On yes it sends and adds the time to the
     calendar as held; when the recruiter confirms, the event is confirmed.
@@ -105,6 +113,14 @@ without them.
    at once: the message, the job description, the reply, "Send?". The user says yes
    (`hunt send-reply`), changes it (`hunt edit-reply`) or says "skip" (`hunt skip-reply`). A
    send that does not report back may have gone out: it is never sent again on its own.
+10. **Notes to hiring managers.** When an Easy Apply form has a cover letter or "message to the
+    hiring team" field, the LinkedIn worker fills it with a note of two or three sentences, sent
+    with the application. After applying it saves who posted the job and whether a free
+    `Message` reaches them. At the end of `hunt apply`, `hunt draft-notes` drafts a note of at
+    most 300 characters for each one it does (`draft-note`); the chat asks once for all of them.
+    `hunt send-notes` sends the approved ones by the free `Message` (`send-note`), each under the
+    LinkedIn lock, one to three minutes apart, at most `linkedin_notes_daily` a day. A sent note
+    is a thread of the recruiter replies, so the answer is drafted and asked like any other.
 
 ## Pieces
 
@@ -112,10 +128,10 @@ Each piece has one job and talks to the others only through the jobs list and fi
 
 | Piece | Kind | What it does |
 |---|---|---|
-| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`, `watch`, `linkedin-messages`, `draft-replies`, `send-reply`, `edit-reply`, `skip-reply`. It is the coordinator. |
+| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`, `watch`, `linkedin-messages`, `draft-replies`, `send-reply`, `edit-reply`, `skip-reply`, `draft-notes`, `send-notes`, `skip-notes`, `note-went`. It is the coordinator. |
 | Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
-| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the morning hour, the summary hour (18 when left out). |
+| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the morning hour, the summary hour (18 when left out), the notes to hiring managers a day (`linkedin_notes_daily`, 15 when left out, at most 15). |
 | Resume worker | `claude -p` with the `write-resume` skill | Gets the career and one job description and writes `resume-content.json`. |
 | Resume builder | Python (`resume_kit`) | Merges that content with the career, checks it against the resume contract, builds `resume.pdf`. |
 | LinkedIn worker | `claude -p --chrome` with the `apply-linkedin` skill | Opens the job's LinkedIn page, presses Easy Apply, uploads the PDF, answers from the career, submits. |
@@ -126,6 +142,8 @@ Each piece has one job and talks to the others only through the jobs list and fi
 | The chat | `CLAUDE.md` and `.claude/commands` | The `job-hunt` session: asks the questions, turns answers into `hunt` commands, starts and waits for workers. |
 | Notifier | `hunt notify` | Sends one question as a Pushover push, when the user set its keys. |
 | Scheduler | `claude -p` with the `offer-times` skill | Reads free times from Google Calendar, drafts the reply offering them, adds the held event on yes. |
+| Note drafter | `claude -p` with the `draft-note` skill | Drafts a note of at most 300 characters to the poster of a job applied to on LinkedIn. |
+| Note sender | `claude -p --chrome` with the `send-note` skill | Sends one approved note by the poster's free `Message` button, under the LinkedIn lock; never InMail, never Connect. |
 | LinkedIn inbox | `claude -p --chrome` with the `read-linkedin-messages` skill | Reads new recruiter messages on LinkedIn, one worker at a time under the LinkedIn lock. |
 
 The coordinator is a script, not a Claude session. It reads the list, starts the workers,

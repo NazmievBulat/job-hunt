@@ -215,6 +215,12 @@ def linkedin_command(job: Job, root: Path, paused: Report | None = None, *, brow
     return _chrome_command(LINKEDIN_SKILL, job, _linkedin_page(job) or job.link, root, paused, browser)
 
 
+def browser_now(browser: str | None | Callable[[], str | None]) -> str | None:
+    """The settings' chrome_browser, given as it is or as what reads it: read when the worker
+    starts, after any wait, so a browser named off meanwhile is never used."""
+    return browser() if callable(browser) else browser
+
+
 def browser_argument(browser: str | None) -> dict[str, str]:
     """The settings' chrome_browser as a browser worker's arguments carry it: nothing without one."""
     return {"browser": browser} if browser else {}

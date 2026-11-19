@@ -1088,3 +1088,38 @@ def test_two_runs_saving_at_once_keep_the_newest_message_open(project: Path, job
     assert errors == []
     states = {thread.email_id: thread.state for thread in Threads(path).in_states("new", "replaced")}
     assert states == {"m1": "replaced", "m2": "new"}
+
+
+@pytest.mark.parametrize("step", ["send-reply", "linkedin-messages"])
+def test_the_browser_is_read_once_the_linkedin_lock_is_held(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, step: str
+) -> None:
+    _, linkedin = _saved(threads, jobs, _email(1), _linkedin(2))
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
+    lock = LinkedInLock(project / "data", pause=lambda: timedelta(0))
+    applying = LinkedInLock(project / "data")
+    assert applying.take(12) is None
+    setting: list[str | None] = ["0b6c9a52-2"]
+    seen: list[object] = []
+
+    def sleep(seconds: float) -> None:
+        # `hunt chrome-browser off` while an application holds the lock.
+        setting[0] = None
+        applying.release()
+        (project / "data" / "linkedin.next").unlink()
+
+    def worker(command: list[str]) -> None:
+        skill = SEND_SKILL if step == "send-reply" else READ_SKILL
+        arguments = _prompt(command, skill)
+        seen.append(arguments.get("browser"))
+        if step == "send-reply":
+            Path(arguments["report"]).write_text(json.dumps({"result": "sent"}))
+        else:
+            Path(arguments["out"]).write_text(json.dumps({"linkedin_messages": []}))
+
+    if step == "send-reply":
+        send_reply(threads, project, linkedin, run=worker, lock=lock, sleep=sleep, browser=lambda: setting[0])
+    else:
+        read_linkedin(threads, jobs, project, run=worker, lock=lock, sleep=sleep, clock=clock,
+                      browser=lambda: setting[0])
+    assert seen == [None]

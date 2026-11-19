@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from job_hunt.apply import CHROME_TOOLS, browser_argument
+from job_hunt.apply import CHROME_TOOLS, browser_argument, browser_now
 from job_hunt.finder import ONLY_NAMED_TOOLS, PageError, page_text_and_kind
 from job_hunt.jobs import JobsList
 from job_hunt.linkedin_lock import LinkedInLock
@@ -830,15 +830,16 @@ def recover_sends(threads: Threads, data: Path) -> None:
 
 
 def send_reply(threads: Threads, root: Path, thread: int, *, run: Run, lock: LinkedInLock,
-               sleep: Callable[[float], None], browser: str | None = None) -> Thread:
-    """Send the reply as the person approved it, once. `browser` is the settings' chrome_browser."""
+               sleep: Callable[[float], None], browser: str | None | Callable[[], str | None] = None) -> Thread:
+    """Send the reply as the person approved it, once. `browser` is the settings' chrome_browser,
+    or what reads it once the LinkedIn lock is held."""
     # Held while sending, so a thread `sending` with the lock free is a dead run's.
     with _locked(root / "data" / "send.lock"):
         return _send_reply(threads, root, thread, run, lock, sleep, browser)
 
 
 def _send_reply(threads: Threads, root: Path, thread: int, run: Run, lock: LinkedInLock,
-                sleep: Callable[[float], None], browser: str | None) -> Thread:
+                sleep: Callable[[float], None], browser: str | None | Callable[[], str | None]) -> Thread:
     found = _waiting(threads, thread, "drafted", "unsure")
     report = folder(root, thread) / "sent.json"
     report.unlink(missing_ok=True)
@@ -848,7 +849,8 @@ def _send_reply(threads: Threads, root: Path, thread: int, run: Run, lock: Linke
     def send() -> None:
         nonlocal failure
         try:
-            run(send_command(found, found.reply or "", root, browser=browser))
+            # Read here, under the lock and after the wait for it.
+            run(send_command(found, found.reply or "", root, browser=browser_now(browser)))
         except ReplyError as error:
             failure = str(error)
 
@@ -884,9 +886,9 @@ def read_command(after: datetime, out: Path, *, browser: str | None = None) -> l
 
 def read_linkedin(threads: Threads, jobs: JobsList, root: Path, *, run: Run, lock: LinkedInLock,
                   sleep: Callable[[float], None], clock: Callable[[], datetime] = _now,
-                  browser: str | None = None) -> int:
+                  browser: str | None | Callable[[], str | None] = None) -> int:
     """Read the new LinkedIn messages under the lock; return how many threads are new. `browser`
-    is the settings' chrome_browser."""
+    is the settings' chrome_browser, or what reads it once the lock is held."""
     out = root / "data" / "linkedin-messages.json"
     found: dict[str, Any] = {}
 
@@ -895,7 +897,7 @@ def read_linkedin(threads: Threads, jobs: JobsList, root: Path, *, run: Run, loc
         found["started"] = clock()
         found["after"] = threads.last_read("linkedin") or found["started"] - FIRST_READ
         out.unlink(missing_ok=True)
-        run(read_command(found["after"], out, browser=browser))
+        run(read_command(found["after"], out, browser=browser_now(browser)))
         try:
             found["data"] = json.loads(out.read_text())
         except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as error:

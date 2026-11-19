@@ -628,7 +628,7 @@ def draft_step() -> int:
 
 def linkedin_step() -> int:
     return read_linkedin(Threads(DATA / "jobs.db"), JobsList(DATA / "jobs.db"), ROOT, run=run_read,
-                         lock=LinkedInLock(DATA), sleep=time.sleep, browser=chrome_browser())
+                         lock=LinkedInLock(DATA), sleep=time.sleep, browser=chrome_browser)
 
 
 def _told_once(step: str, error: object) -> None:
@@ -711,7 +711,7 @@ def _reply(args: argparse.Namespace) -> int:
     try:
         if args.command == "send-reply":
             thread = send_reply(threads, ROOT, args.thread, run=run_send, lock=LinkedInLock(DATA), sleep=time.sleep,
-                                browser=chrome_browser())
+                                browser=chrome_browser)
         elif args.command == "offer-times":
             thread = offer_times(threads, ROOT, args.thread, run=run_draft)
         elif args.command == "edit-reply":

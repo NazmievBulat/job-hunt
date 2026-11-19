@@ -261,6 +261,14 @@ def job_link(link: str) -> str:
     return clean_link(link)
 
 
+def _page_of(found: FoundJob, page_link: str | None) -> str | None:
+    """The address a job's page ended at, cleaned, or None when it cleans to the link a tracking
+    address is not known by: a tracker that answers itself ends where it began, and its cleaned
+    link would stand for every job of its board."""
+    page = clean_link(page_link) if page_link else None
+    return None if page == clean_link(found.link) != found.known_by else page
+
+
 def _untracked(query: str) -> str:
     return urlencode([(name, value) for name, value in parse_qsl(query) if not TRACKING.match(name)])
 
@@ -361,7 +369,8 @@ class JobsList:
         company board's link becomes where a LinkedIn job without Easy Apply not started yet is
         applied to."""
         first = self.get(job)
-        links = {found.known_by, *([clean_link(page_link)] if page_link else [])} - {first.link}
+        page = _page_of(found, page_link)
+        links = {found.known_by, *([page] if page else [])} - {first.link}
         with self._db:
             self._db.executemany("INSERT OR IGNORE INTO other_links (link, job) VALUES (?, ?)",
                                  [(link, job) for link in sorted(links)])
@@ -386,7 +395,7 @@ class JobsList:
         if found.source not in SOURCES:
             raise ValueError(f"source must be one of {', '.join(SOURCES)}, not {found.source!r}")
         link = found.known_by
-        page = clean_link(page_link) if page_link else None
+        page = _page_of(found, page_link)
         page = None if page == link else page
         if self.has(link):
             return None

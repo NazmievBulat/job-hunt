@@ -950,6 +950,23 @@ def test_two_tracking_links_that_differ_only_in_their_tracking_parameters_are_tw
         (first, "https://jobs.example.com/careers/1"), (second, "https://jobs.example.com/careers/2")]
 
 
+def test_two_tracking_links_whose_tracker_answers_itself_are_two_jobs(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    links = ("https://click.example.com/redirect?ref=job123", "https://click.example.com/redirect?ref=job456")
+    followed: list[str] = []
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json",
+                   run=AlertSkill({"emails": 1, "jobs": [_tracked(links[0], "QA Automation Engineer")]}),
+                   fetch=_postings({link: link for link in links}, followed), clock=clock)
+    clock.advance(days=1)
+    later = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json",
+                 run=AlertSkill({"emails": 1, "jobs": [_tracked(links[1], "Lead QA Automation Engineer")]}),
+                 fetch=_postings({link: link for link in links}, followed), clock=clock)
+    assert (summary.new, later.new, followed) == (1, 1, list(links))
+    assert [(each.link, each.page_link) for each in jobs.all()] == [(links[0], None), (links[1], None)]
+
+
 def test_a_later_run_saves_a_new_posting_behind_another_tracking_link_of_the_same_board(
     tmp_path: Path, settings: Settings, clock: MovableClock
 ) -> None:

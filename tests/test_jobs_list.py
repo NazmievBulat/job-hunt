@@ -117,6 +117,19 @@ def test_a_tracking_address_finds_its_own_job_and_no_other_of_its_board(jobs: Jo
     assert jobs.add(_found("https://click.example.com/redirect?ref=job456")) not in (None, job)
 
 
+def test_a_tracking_address_that_answered_itself_saves_no_cleaned_page_link(jobs: JobsList) -> None:
+    # A tracker that answers 200 itself and sends the browser on by a script ends where it began.
+    first = "https://click.example.com/redirect?ref=job123"
+    job = jobs.add(_found(first), page_link=first)
+    assert job is not None and jobs.get(job).page_link is None
+    second = jobs.add(_found("https://click.example.com/redirect?ref=job456", title="SDET II"))
+    assert second not in (None, job)
+    # Nor is it kept as another link of a job it is the same as.
+    jobs.also_link(job, _found("https://click.example.com/redirect?ref=job789"),
+                   "https://click.example.com/redirect?ref=job789")
+    assert not jobs.has("https://click.example.com/redirect?ref=job000")
+
+
 def test_a_job_is_also_known_by_the_address_its_page_ended_at(jobs: JobsList) -> None:
     job = jobs.add(_found("https://click.example.com/t/aaa"), page_link="https://jobs.example.com/careers/1234?utm_source=x",
                    description="We test robots.", kind="company_site")

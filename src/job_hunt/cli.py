@@ -604,13 +604,15 @@ def _watch_linkedin() -> int | None:
 
 def _watch_jobs(jobs: JobsList, settings: Settings) -> None:
     """The watch's part for the jobs, apart from the messages': one failing does not stop the other."""
-    if not in_hours(datetime.now(zone(settings)), settings):
+    # The computer's own clock, as the timer's runs and the messages' part (`watch`) read it.
+    now = datetime.now().astimezone()
+    if not in_hours(now, settings):
         return
     try:
         if settings.captcha == "skip":
             skip_captchas(jobs)
         said = watch_jobs(jobs, DATA, verdict=verdict, tell=lambda text: tell_session(ROOT, text=text),
-                          ends=day_ends(datetime.now(zone(settings)), settings))
+                          ends=day_ends(now, settings))
     except (ReplyError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         _told_once("hunt watch jobs", error)
         return

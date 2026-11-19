@@ -427,3 +427,14 @@ def test_the_last_watch_tells_no_summary_when_the_person_is_free_for_the_captcha
                       ends=day_ends(clock.now, SETTINGS))
     assert tell.texts == [TELL_JOBS]
     assert said == "told the chat: 1 CAPTCHA waits and you are at the computer"
+
+
+def test_hunt_watch_reads_its_hours_on_the_computer_s_clock_as_its_timer_runs(
+        hunt: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = []
+    monkeypatch.setattr(cli, "watch", lambda *args, **kwargs: "")
+    monkeypatch.setattr(cli, "hold_times", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "in_hours", lambda now, settings: seen.append(now.utcoffset()) or False)
+    assert cli.main(["watch"]) == 0
+    # The settings' zone is New York; the timer fires on this computer's own time.
+    assert seen == [datetime.now().astimezone().utcoffset()]

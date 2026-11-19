@@ -608,6 +608,42 @@ def test_a_paused_application_of_the_title_holds_and_a_failed_one_does_not(jobs:
     assert applied_lately(jobs, jobs.get(same_as_failed), now) is None
 
 
+def test_a_paused_application_answered_before_a_better_pick_of_its_title_goes_on_and_the_pick_is_left_out(
+        jobs: JobsList, project: Path) -> None:
+    paused = _picked(jobs, 1)
+    _apply(jobs, project, Plan(), site=Sites(project, {
+        paused: [{"result": "paused", "needs": "question", "question": "Visa?", "tab": "Acme"}]}))
+    # Picked by hand the same day, better scored, so first in the plan's order.
+    same = _scored(jobs, 9, 10, title="QA Engineer 1", company="Example Co 1")
+    jobs.move(same, "picked")
+    # `hunt answer`, from the chat, before the next `hunt apply`; with no day's plan to space the
+    # starts, the better pick is started first.
+    jobs.move(paused, "resume_ready")
+    sites = Sites(project)
+    summary = _apply(jobs, project, None, site=sites)  # type: ignore[arg-type]
+    assert sites.ran == [paused]
+    assert (jobs.get(paused).state, jobs.get(same).state) == ("applied", "skipped")
+    assert summary.left_out == 1
+
+
+def test_a_skip_as_a_resume_fails_leaves_the_run_going(jobs: JobsList, project: Path) -> None:
+    one, two = _picked(jobs, 1), _picked(jobs, 2)
+    resumes = Resumes(project)
+
+    def write(command: list[str]) -> None:
+        if _job_of(command, RESUME_SKILL) != one:
+            resumes(command)
+
+    # `hunt skip`, from the chat, after the run read the job as still picked and before it
+    # records the failed resume.
+    _between_read_and_move(jobs, "", lambda job: JobsList(project / "data" / "jobs.db").move(job, "skipped"),
+                           where="fail")
+    sites = Sites(project)
+    _apply(jobs, project, Plan(), resumes=write, site=sites)
+    assert (jobs.get(one).state, jobs.get(two).state) == ("skipped", "applied")
+    assert sites.ran == [two]
+
+
 def test_two_scored_jobs_of_one_title_at_one_company_are_picked_once(jobs: JobsList) -> None:
     one = _scored(jobs, 1, 9)
     two = jobs.add(_found(1, link="https://jobs.example.com/same"), kind="company_site")

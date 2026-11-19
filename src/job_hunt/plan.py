@@ -22,6 +22,7 @@ the failures and why, and how long an application took on average.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 
@@ -82,13 +83,17 @@ def _same(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
-def applied_lately(jobs: JobsList, job: Job, now: datetime, *, picks: bool = False) -> Job | None:
+def applied_lately(jobs: JobsList, job: Job, now: datetime, *, picks: bool = False,
+                   going_on: Collection[int] = ()) -> Job | None:
     """Another job of the same title at the same company being applied to, waiting for the
     person, or applied to in the last `SAME_TITLE_DAYS`; with `picks`, also one picked and not
-    started yet. A failed one was maybe never sent, and does not count."""
-    states = ("applying", "paused", "applied", *(("picked", "resume_ready") if picks else ()))
+    started yet; and those of `going_on`, ready to go on in the tab they paused in. A failed one
+    was maybe never sent, and does not count."""
+    states = ("applying", "paused", "applied", *(("picked", "resume_ready") if picks or going_on else ()))
     for other in jobs.in_states(*states):
         if other.id == job.id or (_same(other.company), _same(other.title)) != (_same(job.company), _same(job.title)):
+            continue
+        if not picks and other.state in ("picked", "resume_ready") and other.id not in going_on:
             continue
         if other.state != "applied" or datetime.fromisoformat(other.updated_at) >= now - SAME_TITLE_DAYS:
             return other

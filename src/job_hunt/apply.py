@@ -295,7 +295,9 @@ def apply(
                 break
             except BlockingIOError as error:
                 if tries == 1:
-                    raise ApplyError("another hunt apply is already running") from error
+                    # Said to the person after "done" or an answer: the run going on takes it.
+                    raise ApplyError("another hunt apply is already running;"
+                                     " it takes the jobs put back within a minute") from error
                 time.sleep(0.05)
         summary = Summary()
         this = _Run(jobs, root, summary, captcha, jobs.now, plan)
@@ -363,6 +365,15 @@ def _moved(jobs: JobsList, job: int, state: State) -> bool:
     return True
 
 
+def _failed(jobs: JobsList, job: int, failure: str) -> bool:
+    """Count a failed resume against the job: whether it failed for good. Skipped meanwhile, it
+    is left as it is."""
+    try:
+        return jobs.fail(job, failure) == "failed"
+    except MoveError:
+        return False
+
+
 def _later(jobs: JobsList, job: int, not_before: datetime) -> bool:
     """Leave the job for `not_before`, unless another command moved it meanwhile."""
     try:
@@ -392,8 +403,8 @@ def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
                 continue
             if failure is None:
                 summary.resumes += _moved(jobs, job, "resume_ready")
-            elif jobs.fail(job, failure) == "failed":
-                summary.failed += 1
+            else:
+                summary.failed += _failed(jobs, job, failure)
 
 
 def _paused(report: Path, skill: str) -> Report | None:
@@ -455,7 +466,9 @@ def _held(this: _Run, job: int, skill: str) -> bool:
         return True
     if _continues(this, job):
         return False
-    if applied_lately(jobs, found, now) is not None:
+    # One answered or put back after its CAPTCHA, before this starts, is still that application.
+    going_on = [other.id for other in jobs.in_states("resume_ready") if other.id != job and _continues(this, other.id)]
+    if applied_lately(jobs, found, now, going_on=going_on) is not None:
         this.summary.left_out += _moved(jobs, job, "skipped")
         return True
     if plan is None:

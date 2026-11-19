@@ -712,7 +712,8 @@ def test_hunt_apply_while_another_runs_says_so(hunt: JobsList, project: Path,
     with (project / "jobs" / "apply.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         assert cli.main(["apply"]) == 1
-    assert capsys.readouterr().err == "hunt apply: another hunt apply is already running\n"
+    assert capsys.readouterr().err == ("hunt apply: another hunt apply is already running;"
+                                         " it takes the jobs put back within a minute\n")
 
 
 def test_hunt_applied_ends_a_job_the_user_saw_was_sent(hunt: JobsList, project: Path,

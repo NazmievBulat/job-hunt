@@ -24,7 +24,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from typing import Any, Protocol, TypeVar
@@ -164,7 +164,15 @@ def _states_named(place: str, words: list[str]) -> set[str]:
 
 
 def area_of(place: str, areas: list[str]) -> str | None:
-    """The first of the settings' areas the place is in, as the settings spell it, or None."""
+    """The first of the settings' areas the place is in, as the settings spell it, or None. A
+    location naming several places ("San Francisco; New York") is matched place by place."""
+    for each in re.split(r"\s*(?:[;|/]|\bor\b)\s*", place):
+        if (area := _area_of_one(each, areas)) is not None:
+            return area
+    return None
+
+
+def _area_of_one(place: str, areas: list[str]) -> str | None:
     words = _words(place)
     if not words or any(_holds(words, country) for country in ABROAD):
         return None
@@ -304,10 +312,13 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
                 break
             cards = linkedin_cards(answer.text)
             for card in cards:
-                found.setdefault(card.link, FoundJob(
+                job = found.setdefault(card.link, FoundJob(
                     link=card.link, title=card.title, company=card.company, place=card.place,
                     remote="on_site" if area else "remote", board="linkedin", email_id=None, email_date=None,
                     area=area_of(card.place, settings.areas) or area, source="linkedin_search"))
+                # An area's search does not say a job is remote; the remote search does.
+                if area is None and job.remote != "remote":
+                    found[card.link] = replace(job, remote="remote")
             # A short page is the last one.
             if len(cards) < LINKEDIN_PAGE_SIZE:
                 break
@@ -634,9 +645,11 @@ class Search:
         new = sum(save(job, None) for job in linkedin.jobs)
         lines.append(f"linkedin_search: {len(linkedin.jobs)} found, {new} new")
         failed += [f"linkedin_search: {problem}" for problem in linkedin.problems]
-        if linkedin.stopped:
-            failed.append(f"linkedin_search: {linkedin.stopped}")
-        if not linkedin.stopped and not linkedin.problems:
+        # LinkedIn may say stop to the searches, or later to a job page the saving read.
+        stopped = linkedin.stopped or self.pace.stopped
+        if stopped:
+            failed.append(f"linkedin_search: {stopped}")
+        if not stopped and not linkedin.problems:
             jobs.finished_run(started, "linkedin_search")
 
         full = self.companies.full_due()

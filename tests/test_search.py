@@ -815,18 +815,25 @@ def test_after_linkedin_said_stop_no_linkedin_page_is_read_and_its_jobs_are_stil
         (None, "not read: LinkedIn answered 429, so it is not searched again this run")}
 
 
+@pytest.mark.parametrize("status", [429, 999])
 def test_a_linkedin_page_that_answers_429_ends_the_reading_of_linkedin_pages(
-    tmp_path: Path, settings: Settings, clock: MovableClock
+    tmp_path: Path, settings: Settings, clock: MovableClock, monkeypatch: pytest.MonkeyPatch, status: int
 ) -> None:
-    from job_hunt.finder import PageError
+    from urllib.error import HTTPError
+
+    from job_hunt import finder
 
     read: list[str] = []
 
+    def answer(request: object, timeout: float) -> object:
+        raise HTTPError(read[-1], status, "Too Many", {}, None)  # type: ignore[arg-type]
+
+    # The page is fetched by the real fetch_page, so its own words for the status are the ones read.
+    monkeypatch.setattr(finder, "urlopen", answer)
+
     def fetch(link: str) -> tuple[str, str]:
         read.append(link)
-        if "linkedin.com" in link:
-            raise PageError("HTTP 429")
-        return _fetch(link)
+        return finder.fetch_page(link) if "linkedin.com" in link else _fetch(link)
 
     sites = Sites({f"{LINKEDIN}?keywords=QA+Automation+Engineer&location=Raleigh": _ok("linkedin-short-page.html"),
                    LINKEDIN: Answer(200, "")})
@@ -835,7 +842,10 @@ def test_a_linkedin_page_that_answers_429_ends_the_reading_of_linkedin_pages(
     companies.indexed()
     found = tmp_path / "found-jobs.json"
     search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
-    find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock, search=search)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock, search=search)
+    assert f"linkedin_search: LinkedIn answered {status}, so it is not searched again this run" in summary.failed
+    # LinkedIn is searched from the same time next run.
+    assert jobs.last_run("linkedin_search") is None
     # The alerts' first LinkedIn page answered 429: no other LinkedIn page or search is asked for.
     assert len([link for link in read if "linkedin.com" in link]) == 1 and sites.urls(LINKEDIN) == []
     assert len([job for job in jobs.all() if "linkedin.com" in job.link]) == 2
@@ -847,3 +857,41 @@ def test_with_remote_excluded_the_area_searches_ask_for_on_site_and_hybrid_jobs(
     sites = _linkedin_sites([""])
     linkedin_search(replace(settings, remote="exclude"), clock.now - timedelta(days=1), clock.now, sites, _no_pause())
     assert {parse_qs(urlsplit(url).query)["f_WT"][0] for url in sites.urls(LINKEDIN)} == {"1,3"}
+
+
+# What the second review found
+
+
+@pytest.mark.parametrize("place", ["San Francisco; New York", "London, UK; San Francisco, CA", "New York, NY | Oakland, CA",
+                                   "Austin, TX or San Jose, CA"])
+def test_each_place_of_a_combined_location_is_matched_on_its_own(place: str) -> None:
+    assert area_of(place, ["San Francisco Bay Area"]) == "San Francisco Bay Area"
+
+
+def test_a_job_the_remote_search_finds_again_is_remote(settings: Settings, clock: MovableClock) -> None:
+    sites = Sites({f"{LINKEDIN}?keywords=QA+Automation+Engineer": _ok("linkedin-short-page.html"), LINKEDIN: Answer(200, "")})
+    result = linkedin_search(settings, clock.now - timedelta(days=1), clock.now, sites, _no_pause())
+    # Found first by the area's search, then by the remote one: remote, and still in the area.
+    assert {(job.remote, job.area) for job in result.jobs} == {("remote", "Raleigh-Durham-Chapel Hill")}
+
+
+def test_a_linkedin_page_stop_after_the_searches_is_named_and_keeps_linkedins_window(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    from job_hunt.finder import PageError
+
+    def fetch(link: str) -> tuple[str, str]:
+        if "41000001" in link:
+            raise PageError("HTTP 429")
+        return _fetch(link)
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    found = tmp_path / "found-jobs.json"
+    sites = Sites({f"{LINKEDIN}?keywords=QA+Automation+Engineer&location=Raleigh": _ok("linkedin-short-page.html"),
+                   LINKEDIN: Answer(200, "")})
+    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock, search=search)
+    assert "linkedin_search: LinkedIn answered 429, so it is not searched again this run" in summary.failed
+    assert jobs.last_run("linkedin_search") is None

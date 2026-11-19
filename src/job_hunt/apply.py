@@ -136,7 +136,7 @@ def site_command(job: Job, root: Path, paused: Report | None = None) -> list[str
 
 def linkedin_command(job: Job, root: Path, paused: Report | None = None) -> list[str]:
     """As `site_command`, on the job's LinkedIn page."""
-    return _chrome_command(LINKEDIN_SKILL, job, job.link, root, paused)
+    return _chrome_command(LINKEDIN_SKILL, job, _linkedin_page(job) or job.link, root, paused)
 
 
 def _chrome_command(skill: str, job: Job, link: str, root: Path, paused: Report | None) -> list[str]:
@@ -166,10 +166,18 @@ def _on_linkedin(link: str) -> bool:
     return host == "linkedin.com" or host.endswith(".linkedin.com")
 
 
+def _linkedin_page(job: Job) -> str | None:
+    """The job's LinkedIn page, the one its link ended at first: a click-tracking link may lead
+    there. None once LinkedIn sent the job on to the company's site."""
+    if job.apply_link is not None:
+        return None
+    return next((link for link in (job.page_link, job.link) if link and _on_linkedin(link)), None)
+
+
 def _skill(job: Job) -> str:
     """Which worker applies to the job: a company-site worker never uses LinkedIn, as it would
     apply beside the LinkedIn worker."""
-    if job.kind == "easy_apply" or (job.kind == "company_site" and _on_linkedin(job.apply_link or job.link)):
+    if job.kind == "easy_apply" or (job.kind == "company_site" and _linkedin_page(job)):
         return LINKEDIN_SKILL
     return SITE_SKILL
 
@@ -193,7 +201,9 @@ def read_report(path: Path, skill: str = SITE_SKILL) -> Report:
         try:
             parts = urlsplit(link := link.strip()) if isinstance(link, str) else None
             address = parts is not None and parts.scheme in ("http", "https") and bool(parts.hostname)
-        # A broken address, such as "https://[broken".
+            # Read only to raise on a port that is not a number.
+            _ = parts is not None and parts.port
+        # A broken address, such as "https://[broken" or "https://example.com:abc".
         except ValueError:
             address = False
         if not address:

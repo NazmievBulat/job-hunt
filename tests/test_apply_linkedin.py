@@ -17,6 +17,7 @@ import pytest
 
 from job_hunt import cli
 from job_hunt.apply import LINKEDIN_SKILL, SITE_SKILL, ApplyError, apply, linkedin_command, read_report, site_command
+from job_hunt.finder import SKILL_MINUTES
 from job_hunt.jobs import JobsList, MoveError
 from job_hunt.linkedin_lock import PAUSE, STALE, LinkedInLock, random_pause
 from movable_clock import MovableClock
@@ -158,7 +159,8 @@ def test_a_fresh_lock_is_respected_and_a_stale_one_taken_back(project: Path) -> 
     assert living.take(8) is not None
     assert json.loads((project / "data" / "linkedin.lock").read_text())["job"] == 7
     clock.advance(seconds=60)
-    assert STALE == timedelta(minutes=30)
+    # Only a dead run's lock: a living worker is stopped before its lock is this old.
+    assert STALE > timedelta(minutes=SKILL_MINUTES)
     assert living.take(8) is None
     assert json.loads((project / "data" / "linkedin.lock").read_text())["job"] == 8
     # The dead run's release, if it came back, leaves the new holder's lock alone.
@@ -217,6 +219,7 @@ def test_a_job_whose_easy_apply_sends_to_the_company_site_becomes_a_company_site
     ("careers.example.com/apply", "without its web address"),
     ("https://[broken", "without its web address"),
     ("https:///apply", "without its web address"),
+    ("https://careers.example.com:abc/apply", "without its web address"),
     ("https://www.linkedin.com/jobs/view/123", "with a LinkedIn address"),
 ])
 def test_a_company_site_report_needs_the_sites_own_address(tmp_path: Path, link: str | None, error: str) -> None:
@@ -258,6 +261,29 @@ def test_a_company_site_job_still_at_its_linkedin_page_goes_through_the_linkedin
     assert [ran for ran, _, _ in linkedin.ran] == [job]
     assert sites.ran == [job]
     assert (jobs.get(job).apply_link, jobs.get(job).state) == ("https://careers.example.com/apply/1", "applied")
+
+
+def test_a_company_site_job_whose_tracking_link_ended_at_linkedin_goes_through_the_linkedin_worker(
+    project: Path, jobs: JobsList
+) -> None:
+    # The email's click-tracking link led to LinkedIn's page, whose "Apply" leads off-site.
+    job = jobs.add(_found(1, link="https://click.example.com/t/1"),
+                   page_link="https://www.linkedin.com/jobs/view/4000000001", kind="company_site")
+    assert job is not None
+    jobs.score(job, 8, "Good match.")
+    jobs.move(job, "picked")
+    linkedin = LinkedIn(project, {job: {"result": "company_site", "link": "https://careers.example.com/apply/1"}})
+    commands: list[list[str]] = []
+    sites = Sites(project)
+    apply(jobs, project, run_resume=Resumes(project), run_linkedin=lambda command: (commands.append(command),
+          linkedin(command)), run_site=sites, linkedin=_lock(project))
+    assert [ran for ran, _, _ in linkedin.ran] == [job]
+    assert linkedin.unlocked == []
+    # LinkedIn's page itself, not the tracking link, which may have expired since the email.
+    assert json.loads(commands[0][3].removeprefix(f"/{LINKEDIN_SKILL} "))["link"] == (
+        "https://www.linkedin.com/jobs/view/4000000001")
+    assert sites.ran == [job]
+    assert jobs.get(job).state == "applied"
 
 
 def test_the_linkedin_pause_does_not_hold_up_the_site_workers(project: Path, jobs: JobsList) -> None:

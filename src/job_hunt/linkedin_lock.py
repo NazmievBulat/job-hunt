@@ -17,8 +17,10 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from job_hunt.finder import SKILL_MINUTES
+
 # Longer than a worker may run (`SKILL_MINUTES`), so only a dead run's lock is ever this old.
-STALE = timedelta(minutes=30)
+STALE = timedelta(minutes=SKILL_MINUTES + 5)
 PAUSE = (timedelta(minutes=3), timedelta(minutes=6))
 # How often a lock held by another is looked at again.
 POLL_SECONDS = 30.0

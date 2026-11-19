@@ -103,6 +103,91 @@ def test_pushover_keys_need_both_a_token_and_a_user(tmp_path: Path, pushover: ob
     assert "aExampleAppToken" not in str(refused.value)
 
 
+def test_hunt_settings_saves_settings_it_can_read_and_keeps_the_pushover_keys(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({
+        "titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6,
+        "pushover": {"token": "t0ken", "user": "us3r"}}))
+    given = {"titles": ["QA Engineer"], "areas": ["New York City"], "remote": "include", "lowest_salary": 120000,
+             "morning_hour": 7}
+
+    assert cli.main(["settings", json.dumps(given)]) == 0
+
+    saved = read_settings(tmp_path / "settings.json")
+    assert (saved.titles, saved.areas, saved.lowest_salary, saved.morning_hour) == (
+        ["QA Engineer"], ["New York City"], 120000, 7)
+    assert saved.pushover is not None and saved.pushover.token == "t0ken"
+    printed = capsys.readouterr().out
+    assert "QA Engineer" in printed and "t0ken" not in printed
+
+
+def test_hunt_settings_keeps_the_working_hours_and_the_time_zone_it_was_not_given(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({
+        "titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6,
+        "working_hours": {"start": 10, "end": 16}, "time_zone": "Europe/Berlin"}))
+    given = {"titles": ["QA Engineer"], "areas": [], "remote": "include", "lowest_salary": None, "morning_hour": 7}
+
+    assert cli.main(["settings", json.dumps(given)]) == 0
+
+    saved = read_settings(tmp_path / "settings.json")
+    assert (saved.titles, saved.working_hours, saved.time_zone) == (["QA Engineer"], (10, 16), "Europe/Berlin")
+    assert cli.main(["settings", json.dumps({**given, "working_hours": {"start": 8, "end": 12}})]) == 0
+    assert read_settings(tmp_path / "settings.json").working_hours == (8, 12)
+
+
+def test_hunt_settings_keeps_the_companies_added_by_hand(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({
+        "titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6,
+        "companies": ["https://jobs.lever.co/example"]}))
+    given = {"titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 7}
+
+    assert cli.main(["settings", json.dumps(given)]) == 0
+    assert read_settings(tmp_path / "settings.json").companies == ["https://jobs.lever.co/example"]
+    # Given anew, they are what was given.
+    assert cli.main(["settings", json.dumps({**given, "companies": []})]) == 0
+    assert read_settings(tmp_path / "settings.json").companies == []
+
+
+def test_hunt_settings_refuses_settings_it_cannot_read_and_keeps_the_old_ones(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    before = json.dumps({"titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6})
+    (tmp_path / "settings.json").write_text(before)
+
+    assert cli.main(["settings", json.dumps({"titles": [], "areas": [], "remote": "only", "lowest_salary": None,
+                                             "morning_hour": 7})]) == 1
+
+    assert "titles must name at least one job title" in capsys.readouterr().err
+    assert (tmp_path / "settings.json").read_text() == before
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["settings.json"]
+
+
+def test_hunt_settings_replaces_a_settings_file_that_cannot_be_read(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    for broken in ("{", "[1, 2]"):
+        (tmp_path / "settings.json").write_text(broken)
+
+        assert cli.main(["settings", json.dumps(GOOD)]) == 0
+
+        assert read_settings(tmp_path / "settings.json").titles == GOOD["titles"]
+
+
 def test_the_summary_hour_is_18_unless_the_settings_give_another(tmp_path: Path) -> None:
     assert read_settings(_write(tmp_path, GOOD)).summary_hour == 18
     assert read_settings(_write(tmp_path, {**GOOD, "summary_hour": 20})).summary_hour == 20
@@ -112,3 +197,74 @@ def test_the_summary_hour_is_18_unless_the_settings_give_another(tmp_path: Path)
 def test_a_summary_hour_not_after_the_morning_hour_is_refused(tmp_path: Path, summary_hour: object) -> None:
     with pytest.raises(SettingsError, match="summary_hour"):
         read_settings(_write(tmp_path, {**GOOD, "summary_hour": summary_hour}))
+
+
+def test_captcha_is_ask_or_skip_and_ask_when_left_out(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).captcha == "ask"
+    assert read_settings(_write(tmp_path, {**GOOD, "captcha": "skip"})).captcha == "skip"
+    with pytest.raises(SettingsError, match="captcha must be one of ask, skip"):
+        read_settings(_write(tmp_path, {**GOOD, "captcha": "solve"}))
+
+
+def test_the_days_plan_has_its_defaults_when_left_out(tmp_path: Path) -> None:
+    settings = read_settings(_write(tmp_path, GOOD))
+    assert (settings.daily_applications, settings.auto_apply_from, settings.site_workers,
+            settings.linkedin_daily) == (20, None, 3, 25)
+    given = {**GOOD, "daily_applications": 100, "auto_apply_from": 7, "site_workers": 5, "linkedin_daily": 30}
+    settings = read_settings(_write(tmp_path, given))
+    assert (settings.daily_applications, settings.auto_apply_from, settings.site_workers,
+            settings.linkedin_daily) == (100, 7, 5, 30)
+    assert read_settings(_write(tmp_path, {**GOOD, "auto_apply_from": None})).auto_apply_from is None
+
+
+@pytest.mark.parametrize("field, value", [
+    ("daily_applications", 0), ("daily_applications", 101), ("daily_applications", "20"),
+    ("auto_apply_from", 0), ("auto_apply_from", 11), ("auto_apply_from", True),
+    ("site_workers", 0), ("site_workers", 6), ("linkedin_daily", -1), ("linkedin_daily", 31),
+])
+def test_the_days_plan_is_refused_past_its_limits(tmp_path: Path, field: str, value: object) -> None:
+    with pytest.raises(SettingsError, match=field):
+        read_settings(_write(tmp_path, {**GOOD, field: value}))
+
+
+def test_feed_keys_are_optional_and_never_printed(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).keys == {}
+    keys = {"usajobs": {"email": " ada@example.com ", "key": "uExampleKey"}, "jooble": {"key": "jExampleKey"}}
+
+    settings = read_settings(_write(tmp_path, {**GOOD, "keys": keys}))
+
+    assert settings.keys == {"usajobs": {"email": "ada@example.com", "key": "uExampleKey"},
+                             "jooble": {"key": "jExampleKey"}}
+    assert "ExampleKey" not in repr(settings)
+
+
+@pytest.mark.parametrize(("keys", "said"), [
+    ("uExampleKey", "keys must be an object"),
+    ({"indeed": {"key": "uExampleKey"}}, "keys has 'indeed', which is not one of usajobs, adzuna, jooble"),
+    ({"usajobs": {"key": "uExampleKey"}}, 'keys.usajobs must be {"email": ..., "key": ...}'),
+    ({"adzuna": {"app_id": "uExampleKey", "app_key": " "}}, 'keys.adzuna must be {"app_id": ..., "app_key": ...}'),
+    ({"jooble": "uExampleKey"}, 'keys.jooble must be {"key": ...}'),
+    # A key is sent in a header or an address: a space or a line break in it would end up in an error.
+    ({"usajobs": {"email": "ada@example.com", "key": "uExampleKey\nmore"}}, "keys.usajobs.key has a space"),
+    ({"jooble": {"key": "uExample Key"}}, "keys.jooble.key has a space"),
+])
+def test_feed_keys_must_have_the_fields_of_their_feed(tmp_path: Path, keys: object, said: str) -> None:
+    with pytest.raises(SettingsError) as refused:
+        read_settings(_write(tmp_path, {**GOOD, "keys": keys}))
+    assert said in str(refused.value)
+    # The keys are never repeated in an error.
+    assert "uExample" not in str(refused.value)
+
+
+def test_hunt_settings_keeps_the_feed_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                          capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    keys = {"jooble": {"key": "jExampleKey"}}
+    (tmp_path / "settings.json").write_text(json.dumps({**GOOD, "keys": keys}))
+
+    assert cli.main(["settings", json.dumps({**GOOD, "titles": ["SDET"]})]) == 0
+
+    assert read_settings(tmp_path / "settings.json").keys == keys
+    assert "jExampleKey" not in capsys.readouterr().out

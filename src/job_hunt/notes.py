@@ -38,6 +38,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from job_hunt.apply import CHROME_TOOLS
+from job_hunt.finder import ONLY_NAMED_TOOLS
 from job_hunt.jobs import Job, JobsList
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.questions import log_failure
@@ -292,7 +293,7 @@ def draft_command(note: Note, job: Job, root: Path) -> list[str]:
                  "limit": LIMIT, "out": str(folder / "note.json")}
     tools = [f"Read({_rule(folder)}/**)", f"Read({_rule(career)})", f"Edit({_rule(folder)}/note.json)"]
     return ["claude", "-p", f"/{DRAFT_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
-            "--model", DRAFT_MODEL, "--allowedTools", ",".join(tools)]
+            "--model", DRAFT_MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join(tools)]
 
 
 def _read_note(path: Path) -> str:
@@ -433,7 +434,7 @@ def send_command(note: Note, root: Path) -> list[str]:
     arguments = {"id": note.id, "name": note.name, "title": note.title, "profile": note.profile,
                  "text": note.note, "report": str(report)}
     return ["claude", "--chrome", "-p", f"/{SEND_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
-            "--model", MODEL, "--allowedTools", ",".join([*SEND_TOOLS, f"Edit({_rule(report)})"])]
+            "--model", MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join([*SEND_TOOLS, f"Edit({_rule(report)})"])]
 
 
 @dataclass

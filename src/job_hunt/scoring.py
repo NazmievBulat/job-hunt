@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from job_hunt.finder import ONLY_NAMED_TOOLS
 from job_hunt.jobs import Job, JobsList
 
 MODEL = "claude-haiku-5-5"
@@ -51,7 +52,7 @@ def skill_command(jobs: list[dict[str, Any]], root: Path) -> list[str]:
     # writes a file, the Write tool among them.
     return [
         "claude", "-p", f"/{SKILL} {json.dumps(arguments, ensure_ascii=False)}",
-        "--model", MODEL,
+        "--model", MODEL, *ONLY_NAMED_TOOLS,
         "--allowedTools", ",".join([f"Read(/{folders}/**)", f"Read(/{career})", f"Edit(/{out})"]),
     ]
 

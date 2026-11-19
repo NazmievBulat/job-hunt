@@ -6,17 +6,24 @@ The state is all in `data/`, so a fresh session knows everything by running it:
    `data/morning.told`);
 2. new jobs, numbered as `hunt list` numbers them, for `hunt pick` and `hunt skip`. Asked again,
    the jobs of the last list keep their numbers, so a reply to it still names the same jobs;
-   only a job scored since numbers the whole list anew;
-3. paused applications, each with what it needs and the command after it;
-4. recruiter messages, each with its drafted reply (`replies`), for `hunt send-reply`,
-   `hunt edit-reply` and `hunt skip-reply`; one that asks to talk says so (offering times is a
-   later step);
-5. notes to hiring managers after LinkedIn applications (`notes`), one question for all of them,
+   only a job scored since numbers the whole list anew. With the settings' `auto_apply_from`,
+   the jobs picked by their score instead, numbered for `hunt skip`, told once (`data/picks.told`)
+   and asking nothing: silence is yes;
+3. applications on a CAPTCHA after their try again on their own, all in one question, and only
+   when the person is free right now (`available`); while they are not, the jobs are held and
+   nothing is said. Each question a job is in is counted (`JobsList.asked`);
+4. paused applications, each with what it needs and the command after it. One that needs
+   hands in Chrome (a sign-in) carries the Chrome Remote Desktop link when that is set up, so
+   it is done from the phone; without it, it waits until the person is at the computer;
+5. recruiter messages, each with its drafted reply (`replies`), for `hunt send-reply`,
+   `hunt edit-reply` and `hunt skip-reply`; one that asks to talk shows the times its reply
+   offers, the resume it goes out with on LinkedIn, and the time held in the calendar on yes;
+6. notes to hiring managers after LinkedIn applications (`notes`), one question for all of them,
    for `hunt send-notes` and `hunt skip-notes`.
 
 Before them comes work the person already approved and that stopped before its end (a picked
-job, one whose resume is ready, one left `applying`): it asks nothing, the chat runs
-`hunt apply` for it. So do approved notes that may go today: the chat runs `hunt send-notes`.
+job, one whose resume is ready, one left `applying`; not one left for a later time): it asks
+nothing, the chat runs `hunt apply` for it. So do approved notes that may go today: the chat runs `hunt send-notes`.
 """
 
 from __future__ import annotations
@@ -26,16 +33,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from job_hunt.apply import UNSURE
+from job_hunt.apply import NEEDS, UNSURE, apply_running
 from job_hunt.jobs import Job, JobsList
 
 if TYPE_CHECKING:
+    from job_hunt.available import Verdict
     from job_hunt.notes import Notes
     from job_hunt.replies import Threads
 
 LOG = "morning.log"
 TOLD = "morning.told"
+PICKS_TOLD = "picks.told"
 KINDS = {"easy_apply": "Easy Apply", "company_site": "company site"}
+REMOTE_DESKTOP = "https://remotedesktop.google.com/access"
 
 
 def log_failure(data: Path, step: str, error: object, clock: Callable[[], datetime]) -> None:
@@ -68,7 +78,12 @@ def untold_failures(data: Path) -> list[str]:
 
 
 def unfinished(jobs: JobsList) -> list[Job]:
-    return jobs.in_states("picked", "resume_ready", "applying")
+    return [job for job in jobs.in_states("picked", "resume_ready", "applying") if jobs.due(job)]
+
+
+def on_captcha(jobs: JobsList) -> list[Job]:
+    """The paused jobs that wait for the person to solve a CAPTCHA in Chrome."""
+    return [job for job in jobs.in_states("paused") if (job.state_reason or "").startswith(NEEDS["captcha"])]
 
 
 def _notes_to_send(notes: Notes | None, data: Path, daily: int) -> int:
@@ -82,7 +97,8 @@ def _notes_to_send(notes: Notes | None, data: Path, daily: int) -> int:
 
 
 def anything_waiting(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
-                     daily: int = 15) -> bool:
+                     daily: int = 15, *, auto_from: int | None = None) -> bool:
+    """With `auto_from`, the scored jobs not picked wait for the next day's number, not for the person."""
     if notes is not None and (_notes_to_send(notes, data, daily) or notes.in_states("drafted", "unsure")):
         return True
     if threads is not None:
@@ -91,7 +107,10 @@ def anything_waiting(jobs: JobsList, data: Path, threads: Threads | None = None,
 
         # A send a dead run left is asked about, so it starts the session too.
         recover_sends(threads, data)
-    return bool(untold_failures(data) or jobs.waiting() or jobs.in_states("paused") or unfinished(jobs)
+    # A CAPTCHA waits for the person to be free: `hunt watch` tells the chat then.
+    captchas = {job.id for job in on_captcha(jobs)}
+    paused = [job for job in jobs.in_states("paused") if job.id not in captchas]
+    return bool(untold_failures(data) or (auto_from is None and jobs.waiting()) or paused or unfinished(jobs)
                 or (threads is not None and threads.in_states("drafted", "unsure")))
 
 
@@ -136,7 +155,9 @@ DESCRIPTION_CHARACTERS = 600
 
 def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
     # Imported here: `replies` uses this module's `log_failure`.
-    from job_hunt.replies import posting_path, recover_sends
+    from job_hunt.replies import posting_path, recover_sends, resume_of
+    from job_hunt.settings import SettingsError, read_settings
+    from job_hunt.times import Talks, zone
 
     recover_sends(threads, data)
     waiting = threads.in_states("drafted", "unsure")
@@ -160,6 +181,17 @@ def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
             cut = text if len(text) <= DESCRIPTION_CHARACTERS else text[:DESCRIPTION_CHARACTERS].rstrip() + " …"
             lines += _indented(cut, f"Job description ({posting}): ")
         lines += _indented(thread.reply or "", "Reply: ")
+        if (talk := Talks(data / "jobs.db").of_reply(thread.id, thread.reply)) is not None and talk.state == "offered":
+            try:
+                where = zone(read_settings(data / "settings.json"))
+            except SettingsError:
+                where = talk.times()[0].tzinfo
+            times = [when.astimezone(where) for when in talk.times()]
+            offered = [when.strftime("%a %d %b %H:%M") for when in times]
+            lines.append(f"     Times offered: {', '.join(offered)} ({times[0].tzname()})")
+            if (resume := resume_of(thread, data.parent)) is not None:
+                lines.append(f"     Resume attached: {resume}")
+            lines.append(f'     On yes, "Held: {talk.title}" is added to Google Calendar at {offered[0]}')
         if thread.state == "unsure":
             lines.append(f"     Needs {thread.state_reason} (then: hunt skip-reply {thread.id} if it went, "
                          f"hunt send-reply {thread.id} to send it again)")
@@ -167,25 +199,80 @@ def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
             if thread.state_reason:
                 lines.append(f"     The last send did not go out: {thread.state_reason}")
             lines.append(f'     (then: hunt send-reply {thread.id}, hunt edit-reply {thread.id} "<the reply>", '
-                         f"hunt skip-reply {thread.id})")
+                         f"hunt offer-times {thread.id}, hunt skip-reply {thread.id})")
     return "\n".join(lines)
 
 
+def _tab(job: Job) -> str:
+    _, _, tab = (job.state_reason or "").partition(", in the Chrome tab ")
+    return f" ({tab} tab)" if tab else ""
+
+
+def _captchas(jobs: JobsList, waiting: list[Job], verdict: Verdict, remote_desktop: bool) -> str:
+    count = f"{len(waiting)} applications wait" if len(waiting) > 1 else "1 application waits"
+    lines = [f"CAPTCHAs ({len(waiting)}): {count} for a CAPTCHA in Chrome: "
+             + ", ".join(f"{job.company}{_tab(job)}" for job in waiting) + ". Reply done when solved.",
+             f"  (then: hunt resume-job {' '.join(str(job.id) for job in waiting)})"]
+    if verdict.from_afar:
+        lines.append("  From your phone: open " + REMOTE_DESKTOP + " and do it in this computer's Chrome."
+                     if remote_desktop else "  They are in this computer's Chrome.")
+    for job in waiting:
+        jobs.asked(job.id)
+    return "\n".join(lines)
+
+
+def show_picks(jobs: JobsList, auto_from: int) -> str | None:
+    """The jobs picked that wait to start today, numbered for `hunt skip` from now on; None when
+    there are none."""
+    from job_hunt.plan import order
+
+    picks = order([job for job in jobs.in_states("picked", "resume_ready") if jobs.due(job)])
+    if not picks:
+        return None
+    jobs.show(picks)
+    count = f"{len(picks)} jobs" if len(picks) > 1 else "1 job"
+    return "\n".join([f"Applying to {count} today (score {auto_from} and up). Reply skip 3 12 to leave some out.",
+                      *(job_line(number, job) for number, job in enumerate(picks, start=1))])
+
+
+def _picks(jobs: JobsList, data: Path, auto_from: int) -> str | None:
+    """`show_picks`, only when one of them was not told yet."""
+    from job_hunt.plan import order
+
+    picks = order([job for job in jobs.in_states("picked", "resume_ready") if jobs.due(job)])
+    told = data / PICKS_TOLD
+    try:
+        before = {int(each) for each in told.read_text().split()}
+    except (FileNotFoundError, ValueError):
+        before = set()
+    if not picks or {job.id for job in picks} <= before:
+        return None
+    told.write_text(" ".join(str(job.id) for job in picks) + "\n")
+    return show_picks(jobs, auto_from)
+
+
 def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
-              daily: int = 15) -> str:
-    """The questions as text. Showing them numbers the new jobs and marks the failures told."""
+              daily: int = 15, *, remote_desktop: bool = False,
+              available: Callable[[], Verdict] | None = None, auto_from: int | None = None) -> str:
+    """The questions as text. Showing them numbers the new jobs and marks the failures told.
+    `available` says whether the person is free for a CAPTCHA now; without it they are not known
+    to be, and the CAPTCHAs are held."""
     parts: list[str] = []
     log, told = _told(data)
     failures = _lines(log[told:])
     if failures:
         parts.append("\n".join(["The morning run had a problem:", *map(_failure, failures)]))
-    left = unfinished(jobs)
+    # A `hunt apply` running, all day when spread, takes them itself: nothing to start.
+    left = unfinished(jobs) if not apply_running(data.parent) else []
     if left:
         parts.append("\n".join([f"Unfinished applications ({len(left)}): run hunt apply", *(
             f"  {job.id}. {job.title} at {job.company}" for job in left)]))
     if to_send := _notes_to_send(notes, data, daily):
         parts.append(f"Approved notes to hiring managers not sent yet ({to_send}): run hunt send-notes")
-    waiting = {job.id: job for job in jobs.waiting()}
+    # Picked by their score, the scored jobs left wait for the next day's number, not for a pick.
+    waiting = {job.id: job for job in jobs.waiting()} if auto_from is None else {}
+    if auto_from is not None and (picks := _picks(jobs, data, auto_from)):
+        parts.append(picks)
     kept = {number: waiting[job] for number, job in sorted(jobs.last_list().items()) if job in waiting}
     if waiting and len(kept) == len(waiting):
         parts.append("\n".join([f"New jobs ({len(kept)}):", *(job_line(number, job) for number, job in kept.items())]))
@@ -193,11 +280,18 @@ def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes:
         new = jobs.show()
         heading = f"New jobs ({len(new)}), numbered anew:" if kept else f"New jobs ({len(new)}):"
         parts.append("\n".join([heading, *(job_line(number, job) for number, job in enumerate(new, start=1))]))
-    paused = jobs.in_states("paused")
+    captchas = on_captcha(jobs)
+    if captchas and available is not None and (verdict := available()).ask:
+        parts.append(_captchas(jobs, captchas, verdict, remote_desktop))
+    paused = [job for job in jobs.in_states("paused") if job.id not in {each.id for each in captchas}]
     if paused:
         parts.append("\n".join([f"Paused applications ({len(paused)}):", *(
             f"  {job.id}. {job.title} at {job.company}: needs {job.state_reason} (then: {then(job)})"
             for job in paused)]))
+        # An answer is typed from anywhere; the rest is done in this computer's Chrome.
+        if any(not (job.state_reason or "").startswith("an answer to ") for job in paused):
+            parts[-1] += ("\n  From your phone: open " + REMOTE_DESKTOP + " and do it in this computer's Chrome."
+                          if remote_desktop else "\n  This waits until you are at the computer; the other jobs go on.")
     if threads is not None and (recruiters := _recruiters(jobs, data, threads)):
         parts.append(recruiters)
     if notes is not None:

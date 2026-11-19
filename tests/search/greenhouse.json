@@ -1,0 +1,67 @@
+{
+  "jobs": [
+    {
+      "absolute_url": "https://boards.greenhouse.io/examplelabs/jobs/7001?gh_src=abc",
+      "id": 7001,
+      "title": "QA Automation Engineer",
+      "company_name": "Example Labs",
+      "location": {
+        "name": "Durham, NC"
+      },
+      "updated_at": "2026-11-17T10:00:00-05:00",
+      "first_published": "2026-11-16T09:00:00-05:00",
+      "content": "&lt;div class=&quot;content-intro&quot;&gt;&lt;p&gt;Example Labs builds lab software.&lt;/p&gt;&lt;/div&gt;&lt;h2&gt;What you will do&lt;/h2&gt;&lt;ul&gt;&lt;li&gt;Write end-to-end tests with Playwright.&lt;/li&gt;&lt;li&gt;Keep the test suite fast.&lt;/li&gt;&lt;/ul&gt;",
+      "metadata": [],
+      "departments": [],
+      "offices": []
+    },
+    {
+      "absolute_url": "https://boards.greenhouse.io/examplelabs/jobs/7002",
+      "id": 7002,
+      "title": "SDET, Remote",
+      "company_name": "Example Labs",
+      "location": {
+        "name": "Remote - US"
+      },
+      "updated_at": "2026-11-10T10:00:00-05:00",
+      "first_published": "2026-11-10T09:00:00-05:00",
+      "content": "&lt;p&gt;Test our API from anywhere.&lt;/p&gt;",
+      "metadata": [],
+      "departments": [],
+      "offices": []
+    },
+    {
+      "absolute_url": "https://boards.greenhouse.io/examplelabs/jobs/7003",
+      "id": 7003,
+      "title": "Account Executive",
+      "company_name": "Example Labs",
+      "location": {
+        "name": "Durham, NC"
+      },
+      "updated_at": "2026-11-17T10:00:00-05:00",
+      "first_published": "2026-11-17T09:00:00-05:00",
+      "content": "&lt;p&gt;Sell lab software.&lt;/p&gt;",
+      "metadata": [],
+      "departments": [],
+      "offices": []
+    },
+    {
+      "absolute_url": "https://boards.greenhouse.io/examplelabs/jobs/7004",
+      "id": 7004,
+      "title": "QA Automation Engineer",
+      "company_name": "Example Labs",
+      "location": {
+        "name": "Austin, TX"
+      },
+      "updated_at": "2026-11-17T10:00:00-05:00",
+      "first_published": "2026-11-17T09:00:00-05:00",
+      "content": "&lt;p&gt;Austin office.&lt;/p&gt;",
+      "metadata": [],
+      "departments": [],
+      "offices": []
+    }
+  ],
+  "meta": {
+    "total": 4
+  }
+}

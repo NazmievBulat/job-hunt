@@ -23,6 +23,7 @@ from job_hunt.questions import anything_waiting, questions
 from job_hunt.replies import Threads, read_messages
 from job_hunt.settings import read_settings
 from movable_clock import MovableClock
+from only_named_tools import assert_only_named_tools
 
 LOCAL = timezone(timedelta(hours=-5))
 NOON = datetime(2026, 11, 18, 12, 0, tzinfo=LOCAL)
@@ -222,6 +223,7 @@ def test_the_drafter_is_given_the_job_the_poster_and_the_limit_and_may_read_only
     tools = command[command.index("--allowedTools") + 1].split(",")
     assert sorted(tools) == sorted([f"Read(/{project}/jobs/{job}/**)", f"Read(/{project}/data/career.json)",
                                     f"Edit(/{project}/jobs/{job}/note.json)"])
+    assert_only_named_tools(command)
     assert "--chrome" not in command
 
 
@@ -429,6 +431,7 @@ def test_the_sender_may_only_use_chrome_and_write_its_report(notes: Notes, jobs:
     # A note is text: a page read on LinkedIn cannot make the sender upload a file.
     assert "mcp__claude-in-chrome__file_upload" not in tools
     assert tools[-1] == f"Edit(/{project}/jobs/{notes.get(note).job}/note-sent.json)"
+    assert_only_named_tools(command)
 
 
 # Settings
@@ -697,6 +700,7 @@ def test_the_morning_drafts_again_a_note_whose_drafting_failed(
     started: list[bool] = []
 
     morning(jobs, project / "data", find=lambda: None, score=lambda: None, start=lambda: started.append(True),
+            running=lambda: False,
             clock=clock, notes=notes, draft_notes=lambda: draft_notes(notes, jobs, project, run=Drafter()))
 
     assert [note.state for note in notes.all()] == ["drafted"]
@@ -716,6 +720,7 @@ def test_the_morning_collects_a_poster_an_apply_stopped_before_drafting(
         return draft_notes(notes, jobs, project, run=Drafter())
 
     morning(jobs, project / "data", find=lambda: None, score=lambda: None, start=lambda: started.append(True),
+            running=lambda: False,
             clock=clock, notes=notes, draft_notes=draft)
 
     assert [note.state for note in notes.all()] == ["drafted"]

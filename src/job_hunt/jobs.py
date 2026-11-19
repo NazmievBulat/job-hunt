@@ -7,6 +7,19 @@ the title and company are the same too. A job moves through the day's states onl
 along `MOVES`; a pause or a failure carries its reason. A worker that fails counts against its
 job (`fail`): the first time the job is tried again, the second time it is `failed`.
 
+Each job keeps its source (`SOURCES`): an alert email, LinkedIn's search, one of the job-board
+systems or one of the public job feeds; each finder run of a source is kept, so the next run of that source reads from when it
+started.
+
+A job paused for a CAPTCHA or a sign-in is tried again once on its own (`retry`): back to
+`resume_ready` with a time before which no `hunt apply` takes it (`not_before`, which any later
+move clears). A job still on a CAPTCHA after that is asked about in one question with the others
+(`asked`), at most `CAPTCHA_ASKS` times. Each start of a worker is kept with the site's host
+(`started_on`), `linkedin.com` for the LinkedIn worker's, for the spacing and the daily limits of
+`apply`. A pick keeps its time (`picked_at`): a job picked on an earlier day goes first.
+
+A picked job not started yet may still be skipped: a resume written for it is never used.
+
 The list the user picks from is numbered when it is shown (`show`), and the numbers are kept
 in the file, so "pick 2" names the second job of the last list shown, also after more jobs
 were scored.
@@ -31,8 +44,9 @@ MOVES: dict[State, tuple[State, ...]] = {
     "scored": ("picked", "skipped"),
     # The user changes their mind about a job they skipped.
     "skipped": ("picked",),
-    "picked": ("resume_ready", "failed"),
-    "resume_ready": ("applying", "failed"),
+    # To skipped: the user leaves out a job picked for them before it starts.
+    "picked": ("resume_ready", "failed", "skipped"),
+    "resume_ready": ("applying", "failed", "skipped"),
     # Back to resume_ready: a worker failed for the first time, and is tried again, or an Easy
     # Apply job turned out to apply on the company's site (`to_company_site`).
     "applying": ("applied", "paused", "failed", "resume_ready"),
@@ -45,7 +59,11 @@ MOVES: dict[State, tuple[State, ...]] = {
 WITH_REASON: tuple[State, ...] = ("paused", "failed")
 # A job whose workers failed this many times is `failed`.
 TRIES = 2
+# A job still on a CAPTCHA after this many questions is `failed`.
+CAPTCHA_ASKS = 2
 KINDS = ("easy_apply", "company_site")
+SOURCES = ("alert", "linkedin_search", "greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable",
+           "remotive", "remoteok", "arbeitnow", "hn_hiring", "usajobs", "adzuna", "jooble")
 Remote = Literal["remote", "hybrid", "on_site"]
 
 # Query parameters that only say where a click came from. Named one by one: a parameter such
@@ -65,7 +83,7 @@ class PickError(ValueError):
 
 @dataclass(frozen=True)
 class FoundJob:
-    """One job as the finder's skill read it from an alert email."""
+    """One job as the finder's skill read it from an alert email, or as a search found it."""
 
     link: str
     title: str
@@ -73,10 +91,12 @@ class FoundJob:
     place: str
     remote: Remote
     board: str
-    email_id: str
-    email_date: str
+    # The alert email the job came in; None for a job a search found.
+    email_id: str | None
+    email_date: str | None
     # Which of the settings' areas the place is in, or None.
     area: str | None
+    source: str = "alert"
 
 
 @dataclass(frozen=True)
@@ -104,8 +124,18 @@ class Job:
     state: State
     state_reason: str | None
     failures: int
+    # The tries again of a CAPTCHA or sign-in pause spent (`retry`), and the time before which
+    # no `hunt apply` takes the job.
+    retries: int
+    not_before: str | None
+    # The questions a CAPTCHA pause of the job was in, and whether its pause now was in one.
+    asks: int
+    asked: int
+    source: str
     found_at: str
     updated_at: str
+    # When the job was last picked; None for one picked before picks kept their time.
+    picked_at: str | None = None
 
 
 SCHEMA = """
@@ -132,12 +162,19 @@ CREATE TABLE IF NOT EXISTS jobs (
         'applying', 'paused', 'applied', 'failed')),
     state_reason TEXT,
     failures INTEGER NOT NULL DEFAULT 0,
+    retries INTEGER NOT NULL DEFAULT 0,
+    not_before TEXT,
+    asks INTEGER NOT NULL DEFAULT 0,
+    asked INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'alert',
     found_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    picked_at TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_page_link ON jobs (page_link);
 CREATE TABLE IF NOT EXISTS runs (
-    started_at TEXT NOT NULL
+    started_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'alert'
 );
 CREATE TABLE IF NOT EXISTS shown (
     number INTEGER PRIMARY KEY,
@@ -145,6 +182,11 @@ CREATE TABLE IF NOT EXISTS shown (
 );
 CREATE TABLE IF NOT EXISTS lists (
     shown_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS site_starts (
+    host TEXT NOT NULL,
+    job INTEGER NOT NULL,
+    started_at TEXT NOT NULL
 );
 """
 
@@ -187,13 +229,27 @@ class JobsList:
         if new:
             path.chmod(0o600)
         self._db.executescript(SCHEMA)
-        # A file made before failures were counted, or before apply links, gains the column.
+        # A file made before failures were counted, before apply links or before sources, gains
+        # the column; its jobs and runs were the alerts'.
         columns = {row["name"] for row in self._db.execute("PRAGMA table_info(jobs)")}
+        runs = {row["name"] for row in self._db.execute("PRAGMA table_info(runs)")}
         with self._db:
             if "failures" not in columns:
                 self._db.execute("ALTER TABLE jobs ADD COLUMN failures INTEGER NOT NULL DEFAULT 0")
             if "apply_link" not in columns:
                 self._db.execute("ALTER TABLE jobs ADD COLUMN apply_link TEXT")
+            if "source" not in columns:
+                self._db.execute("ALTER TABLE jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'alert'")
+            for column, kind in (("retries", "INTEGER NOT NULL DEFAULT 0"), ("not_before", "TEXT"),
+                                 ("asks", "INTEGER NOT NULL DEFAULT 0"), ("asked", "INTEGER NOT NULL DEFAULT 0"),
+                                 ("picked_at", "TEXT")):
+                if column not in columns:
+                    self._db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
+            if "source" not in runs:
+                self._db.execute("ALTER TABLE runs ADD COLUMN source TEXT NOT NULL DEFAULT 'alert'")
+
+    def now(self) -> datetime:
+        return self._clock()
 
     def _stamp(self) -> str:
         return self._clock().isoformat()
@@ -201,6 +257,11 @@ class JobsList:
     def has(self, link: str) -> bool:
         link = clean_link(link)
         return self._db.execute("SELECT 1 FROM jobs WHERE ? IN (link, page_link)", (link,)).fetchone() is not None
+
+    def known_links(self) -> set[str]:
+        """Every link and page link of the list, for the searches that run beside this connection."""
+        rows = self._db.execute("SELECT link FROM jobs UNION SELECT page_link FROM jobs WHERE page_link IS NOT NULL")
+        return {row[0] for row in rows}
 
     def add(
         self,
@@ -215,6 +276,8 @@ class JobsList:
         already has it by either link."""
         if kind is not None and kind not in KINDS:
             raise ValueError(f"kind must be one of {', '.join(KINDS)}, not {kind!r}")
+        if found.source not in SOURCES:
+            raise ValueError(f"source must be one of {', '.join(SOURCES)}, not {found.source!r}")
         link = clean_link(found.link)
         page = clean_link(page_link) if page_link else None
         page = None if page == link else page
@@ -232,10 +295,10 @@ class JobsList:
         with self._db:
             cursor = self._db.execute(
                 "INSERT INTO jobs (link, page_link, title, company, place, remote, board, email_id, email_date,"
-                " area, description, kind, page_problem, state, found_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)",
+                " area, description, kind, page_problem, source, state, found_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)",
                 (link, page, found.title, found.company, found.place, found.remote, found.board, found.email_id,
-                 found.email_date, found.area, description, kind, problem, now, now),
+                 found.email_date, found.area, description, kind, problem, found.source, now, now),
             )
         return cursor.lastrowid
 
@@ -268,10 +331,19 @@ class JobsList:
                 f"moving to {state} needs a reason" if state in WITH_REASON else f"moving to {state} takes no reason"
             )
         decision = ", decision = ?" if state in ("picked", "skipped") else ""
-        self._db.execute(
-            f"UPDATE jobs SET state = ?, state_reason = ?, updated_at = ?{decision} WHERE id = ?",
-            (state, reason, self._stamp(), *((state,) if decision else ()), job),
+        # Bound, not `picked_at = updated_at`, which reads the row as it was before this update.
+        decision += ", picked_at = ?" if state == "picked" else ""
+        now = self._stamp()
+        # Only from the state read: another connection (`hunt skip` from the chat, a run starting
+        # the job) may have moved it between that read and this write.
+        moved = self._db.execute(
+            f"UPDATE jobs SET state = ?, state_reason = ?, updated_at = ?, not_before = NULL, asked = 0{decision}"
+            " WHERE id = ? AND state = ?",
+            (state, reason, now, *((state,) if state in ("picked", "skipped") else ()),
+             *((now,) if state == "picked" else ()), job, start),
         )
+        if moved.rowcount != 1:
+            raise MoveError(f"job {job} moved meanwhile from {start}, to {self.get(job).state}")
 
     def fail(self, job: int, reason: str) -> State:
         """Count a worker's failure against the job and return its state now: `failed` with the
@@ -287,6 +359,51 @@ class JobsList:
             elif start != "picked":
                 raise MoveError(f"job {job} is {start}: no worker of it can fail")
         return self.get(job).state
+
+    def retry(self, job: int, not_before: datetime) -> None:
+        """Try a job paused by a CAPTCHA or a sign-in again on its own, once, from `not_before` on."""
+        with self._db:
+            if self.get(job).retries:
+                raise MoveError(f"job {job} was tried again on its own already")
+            self._move(job, "resume_ready", None)
+            self._db.execute("UPDATE jobs SET retries = retries + 1, not_before = ? WHERE id = ?",
+                             (not_before.isoformat(), job))
+
+    def later(self, job: int, not_before: datetime) -> None:
+        """Leave a job ready to apply to for a `hunt apply` from `not_before` on."""
+        with self._db:
+            # Only while ready: a skip from the chat may land between a read and this write.
+            if self.get(job).state != "resume_ready" or self._db.execute(
+                    "UPDATE jobs SET not_before = ? WHERE id = ? AND state = 'resume_ready'",
+                    (not_before.isoformat(), job)).rowcount != 1:
+                raise MoveError(f"job {job} is not ready to apply to")
+
+    def due(self, job: Job) -> bool:
+        """Whether a `hunt apply` may take the job now: its `not_before`, if any, has come."""
+        return job.not_before is None or datetime.fromisoformat(job.not_before) <= self.now()
+
+    def asked(self, job: int) -> None:
+        """Count the question a CAPTCHA pause of the job is shown in, once a pause."""
+        with self._db:
+            self._db.execute("UPDATE jobs SET asks = asks + 1, asked = 1 WHERE id = ? AND asked = 0", (job,))
+
+    def started_on(self, host: str, job: int) -> None:
+        """Keep that a company-site worker started on this job, on this host, now."""
+        with self._db:
+            self._db.execute("INSERT INTO site_starts (host, job, started_at) VALUES (?, ?, ?)",
+                             (host, job, self._stamp()))
+
+    def starts_on(self, host: str, since: datetime, but: int) -> dict[int, datetime]:
+        """The other jobs started on this host since a time, each with its latest start: a job's
+        own try again is the same application."""
+        rows = self._db.execute("SELECT job, max(started_at) FROM site_starts WHERE host = ? AND job != ? GROUP BY job",
+                                (host, but))
+        return {row[0]: when for row in rows if (when := datetime.fromisoformat(row[1])) >= since}
+
+    def started_since(self, since: datetime) -> dict[int, datetime]:
+        """Every job a worker started on since a time, on any host, each with its latest start."""
+        rows = self._db.execute("SELECT job, max(started_at) FROM site_starts GROUP BY job")
+        return {row[0]: when for row in rows if (when := datetime.fromisoformat(row[1])) >= since}
 
     def to_company_site(self, job: int, link: str) -> None:
         """A job whose LinkedIn page sends to the company's site: from now on a company-site job
@@ -308,9 +425,9 @@ class JobsList:
         rows = self._db.execute("SELECT id FROM jobs WHERE state = 'scored' ORDER BY score DESC, id")
         return [self.get(row["id"]) for row in rows]
 
-    def show(self) -> list[Job]:
-        """The jobs waiting for a pick, numbered from 1 in this order from now on."""
-        waiting = self.waiting()
+    def show(self, listed: list[Job] | None = None) -> list[Job]:
+        """The jobs waiting for a pick, or the jobs given, numbered from 1 in this order from now on."""
+        waiting = self.waiting() if listed is None else listed
         with self._db:
             self._db.execute("DELETE FROM shown")
             self._db.executemany("INSERT INTO shown (number, job) VALUES (?, ?)",
@@ -361,8 +478,10 @@ class JobsList:
             if number not in shown:
                 raise PickError(f"there is no {number} on the last list; it has 1 to {len(shown)}")
             job = self.get(shown[number])
-            # A skipped job may still be picked; a pick, however far it went, stays a pick.
-            if job.state != "scored" and not (job.state == "skipped" and decision == "picked"):
+            # A skipped job may still be picked, and a pick not started yet skipped; a pick that
+            # started, however far it went, stays a pick.
+            if job.state != "scored" and not (job.state == "skipped" and decision == "picked") and not (
+                    job.state in ("picked", "resume_ready") and decision == "skipped"):
                 raise PickError(f"{number} ({job.title} at {job.company}) is already {job.decision or job.state}")
             if number not in chosen:
                 chosen.append(number)
@@ -370,11 +489,12 @@ class JobsList:
             self._move(shown[number], decision, None)
         return [(number, self.get(shown[number])) for number in chosen]
 
-    def last_run(self) -> datetime | None:
-        row = self._db.execute("SELECT max(started_at) FROM runs").fetchone()
+    def last_run(self, source: str = "alert") -> datetime | None:
+        row = self._db.execute("SELECT max(started_at) FROM runs WHERE source = ?", (source,)).fetchone()
         return datetime.fromisoformat(row[0]) if row[0] else None
 
-    def finished_run(self, started: datetime) -> None:
-        """Remember when a finder run that finished started: the next run reads mail from then."""
+    def finished_run(self, started: datetime, source: str = "alert") -> None:
+        """Remember when a finder run of a source that finished started: the next run of that
+        source reads from then."""
         with self._db:
-            self._db.execute("INSERT INTO runs (started_at) VALUES (?)", (started.isoformat(),))
+            self._db.execute("INSERT INTO runs (started_at, source) VALUES (?, ?)", (started.isoformat(), source))

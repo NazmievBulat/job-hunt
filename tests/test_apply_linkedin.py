@@ -23,6 +23,7 @@ from job_hunt.linkedin_lock import PAUSE, STALE, LinkedInLock, random_pause
 from movable_clock import MovableClock
 # The fixtures `project` and `jobs` too: a made-up person's project folder and its jobs list.
 from test_apply import Resumes, Sites, _found, _job_of, _picked, hunt, jobs, no_linkedin, project  # noqa: F401
+from only_named_tools import assert_only_named_tools
 
 START = datetime(2026, 11, 18, 7, 0, tzinfo=UTC)
 
@@ -74,6 +75,7 @@ def test_a_linkedin_worker_opens_the_jobs_linkedin_page_with_the_site_workers_na
     # The same tools as a company-site worker: its folder, the career, its report and Chrome.
     tools = command[command.index("--allowedTools") + 1]
     assert tools == site_command(job, project)[command.index("--allowedTools") + 1]
+    assert_only_named_tools(command)
 
 
 def test_one_linkedin_application_at_a_time_each_under_the_lock_beside_the_site_workers(
@@ -415,10 +417,11 @@ def test_a_run_that_stops_while_the_linkedin_worker_applies_still_releases_the_l
 
 def test_a_paused_easy_apply_job_goes_on_in_its_tab_through_the_linkedin_worker(project: Path, jobs: JobsList) -> None:
     job = _picked(jobs, 1, kind="easy_apply")
-    linkedin = LinkedIn(project, {job: {"result": "paused", "needs": "sign_in", "tab": "LinkedIn", "tab_id": 4}})
+    linkedin = LinkedIn(project, {job: {"result": "paused", "needs": "question", "question": "Notice period?",
+                                        "tab": "LinkedIn", "tab_id": 4}})
     apply(jobs, project, run_resume=Resumes(project), run_site=no_linkedin, run_linkedin=linkedin,
           linkedin=_lock(project))
-    assert jobs.get(job).state_reason == 'a sign-in or a new account, in the Chrome tab "LinkedIn"'
+    assert jobs.get(job).state_reason == 'an answer to "Notice period?", in the Chrome tab "LinkedIn"'
     jobs.move(job, "resume_ready")
     commands: list[list[str]] = []
     apply(jobs, project, run_resume=Resumes(project), run_site=no_linkedin,

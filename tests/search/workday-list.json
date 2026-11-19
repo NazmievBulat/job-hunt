@@ -1,0 +1,25 @@
+{
+  "total": 2,
+  "userAuthenticated": false,
+  "facets": [],
+  "jobPostings": [
+    {
+      "title": "QA Automation Engineer",
+      "externalPath": "/job/Durham-NC/QA-Automation-Engineer_R100",
+      "locationsText": "2 Locations",
+      "postedOn": "Posted 3 Days Ago",
+      "bulletFields": [
+        "R100"
+      ]
+    },
+    {
+      "title": "Payroll Specialist",
+      "externalPath": "/job/Durham-NC/Payroll-Specialist_R101",
+      "locationsText": "Durham, NC",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "R101"
+      ]
+    }
+  ]
+}

@@ -283,14 +283,15 @@ def test_a_posting_the_message_links_to_is_saved_as_the_jobs_description(
 def test_a_drafted_reply_is_a_question_with_the_message_and_the_reply(
     project: Path, threads: Threads, jobs: JobsList
 ) -> None:
-    thread, = _saved(threads, jobs, _email(1, asks_to_talk=True))
+    # One that asks to talk is drafted with the calendar's times: see test_times.
+    thread, = _saved(threads, jobs, _email(1))
     draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
 
     asked = questions(jobs, project / "data", threads)
 
     assert "Recruiter messages (1):" in asked
     assert "are you open to a QA role?" in asked and "Thanks, I'd like to hear more." in asked
-    assert f"hunt send-reply {thread}" in asked and "asks to talk" in asked
+    assert f"hunt send-reply {thread}" in asked
     assert anything_waiting(jobs, project / "data", threads)
 
 

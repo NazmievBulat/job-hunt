@@ -1,0 +1,58 @@
+{
+  "name": "Hooli Example",
+  "description": "<p>Hooli Example.</p>",
+  "jobs": [
+    {
+      "title": "SDET",
+      "shortcode": "AB12CD34EF",
+      "code": "",
+      "employment_type": "Full-time",
+      "telecommuting": false,
+      "department": "Engineering",
+      "url": "https://apply.workable.com/j/AB12CD34EF",
+      "shortlink": "https://apply.workable.com/j/AB12CD34EF",
+      "application_url": "https://apply.workable.com/j/AB12CD34EF/apply",
+      "published_on": "2026-11-12",
+      "created_at": "2026-11-12",
+      "country": "United States",
+      "city": "Oakland",
+      "state": "California",
+      "locations": [
+        {
+          "country": "United States",
+          "countryCode": "US",
+          "city": "Oakland",
+          "region": "California",
+          "hidden": false
+        }
+      ],
+      "description": "<p>Hooli Example tests search.</p>"
+    },
+    {
+      "title": "SDET",
+      "shortcode": "ZZ99YY88XX",
+      "code": "",
+      "employment_type": "Full-time",
+      "telecommuting": true,
+      "department": "Engineering",
+      "url": "https://apply.workable.com/j/ZZ99YY88XX",
+      "shortlink": "https://apply.workable.com/j/ZZ99YY88XX",
+      "application_url": "https://apply.workable.com/j/ZZ99YY88XX/apply",
+      "published_on": "2026-11-12",
+      "created_at": "2026-11-12",
+      "country": "Germany",
+      "city": "Berlin",
+      "state": "Berlin",
+      "locations": [
+        {
+          "country": "Germany",
+          "countryCode": "DE",
+          "city": "Berlin",
+          "region": "Berlin",
+          "hidden": false
+        }
+      ],
+      "description": "<p>Remote from Germany.</p>"
+    }
+  ]
+}

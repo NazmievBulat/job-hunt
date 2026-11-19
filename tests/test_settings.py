@@ -82,3 +82,118 @@ def test_a_file_that_is_not_json_is_refused(tmp_path: Path) -> None:
 def test_only_remote_jobs_needs_no_area_and_the_salary_floor_may_be_left_empty(tmp_path: Path) -> None:
     settings = read_settings(_write(tmp_path, {**GOOD, "areas": [], "remote": "only", "lowest_salary": None}))
     assert (settings.areas, settings.remote, settings.lowest_salary) == ([], "only", None)
+
+
+def test_pushover_keys_are_optional(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).pushover is None
+    keys = {"token": "aExampleAppToken", "user": "uExampleUserKey"}
+
+    settings = read_settings(_write(tmp_path, {**GOOD, "pushover": keys}))
+
+    assert settings.pushover is not None
+    assert (settings.pushover.token, settings.pushover.user) == ("aExampleAppToken", "uExampleUserKey")
+
+
+@pytest.mark.parametrize("pushover", [{"token": "aExampleAppToken"}, {"token": "", "user": "u"}, "keys",
+                                      {"token": "a", "user": "u", "device": "phone"}])
+def test_pushover_keys_need_both_a_token_and_a_user(tmp_path: Path, pushover: object) -> None:
+    with pytest.raises(SettingsError, match="pushover") as refused:
+        read_settings(_write(tmp_path, {**GOOD, "pushover": pushover}))
+    # The keys are never repeated in an error.
+    assert "aExampleAppToken" not in str(refused.value)
+
+
+def test_hunt_settings_saves_settings_it_can_read_and_keeps_the_pushover_keys(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({
+        "titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6,
+        "pushover": {"token": "t0ken", "user": "us3r"}}))
+    given = {"titles": ["QA Engineer"], "areas": ["New York City"], "remote": "include", "lowest_salary": 120000,
+             "morning_hour": 7}
+
+    assert cli.main(["settings", json.dumps(given)]) == 0
+
+    saved = read_settings(tmp_path / "settings.json")
+    assert (saved.titles, saved.areas, saved.lowest_salary, saved.morning_hour) == (
+        ["QA Engineer"], ["New York City"], 120000, 7)
+    assert saved.pushover is not None and saved.pushover.token == "t0ken"
+    printed = capsys.readouterr().out
+    assert "QA Engineer" in printed and "t0ken" not in printed
+
+
+def test_hunt_settings_keeps_the_working_hours_and_the_time_zone_it_was_not_given(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({
+        "titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6,
+        "working_hours": {"start": 10, "end": 16}, "time_zone": "Europe/Berlin"}))
+    given = {"titles": ["QA Engineer"], "areas": [], "remote": "include", "lowest_salary": None, "morning_hour": 7}
+
+    assert cli.main(["settings", json.dumps(given)]) == 0
+
+    saved = read_settings(tmp_path / "settings.json")
+    assert (saved.titles, saved.working_hours, saved.time_zone) == (["QA Engineer"], (10, 16), "Europe/Berlin")
+    assert cli.main(["settings", json.dumps({**given, "working_hours": {"start": 8, "end": 12}})]) == 0
+    assert read_settings(tmp_path / "settings.json").working_hours == (8, 12)
+
+
+def test_hunt_settings_keeps_the_companies_added_by_hand(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({
+        "titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6,
+        "companies": ["https://jobs.lever.co/example"]}))
+    given = {"titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 7}
+
+    assert cli.main(["settings", json.dumps(given)]) == 0
+    assert read_settings(tmp_path / "settings.json").companies == ["https://jobs.lever.co/example"]
+    # Given anew, they are what was given.
+    assert cli.main(["settings", json.dumps({**given, "companies": []})]) == 0
+    assert read_settings(tmp_path / "settings.json").companies == []
+
+
+def test_hunt_settings_refuses_settings_it_cannot_read_and_keeps_the_old_ones(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    before = json.dumps({"titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6})
+    (tmp_path / "settings.json").write_text(before)
+
+    assert cli.main(["settings", json.dumps({"titles": [], "areas": [], "remote": "only", "lowest_salary": None,
+                                             "morning_hour": 7})]) == 1
+
+    assert "titles must name at least one job title" in capsys.readouterr().err
+    assert (tmp_path / "settings.json").read_text() == before
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["settings.json"]
+
+
+def test_hunt_settings_replaces_a_settings_file_that_cannot_be_read(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    for broken in ("{", "[1, 2]"):
+        (tmp_path / "settings.json").write_text(broken)
+
+        assert cli.main(["settings", json.dumps(GOOD)]) == 0
+
+        assert read_settings(tmp_path / "settings.json").titles == GOOD["titles"]
+
+
+def test_the_summary_hour_is_18_unless_the_settings_give_another(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).summary_hour == 18
+    assert read_settings(_write(tmp_path, {**GOOD, "summary_hour": 20})).summary_hour == 20
+
+
+@pytest.mark.parametrize("summary_hour", [7, 6, 24, "18", True])
+def test_a_summary_hour_not_after_the_morning_hour_is_refused(tmp_path: Path, summary_hour: object) -> None:
+    with pytest.raises(SettingsError, match="summary_hour"):
+        read_settings(_write(tmp_path, {**GOOD, "summary_hour": summary_hour}))

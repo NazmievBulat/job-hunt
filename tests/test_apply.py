@@ -1,5 +1,6 @@
 """`hunt apply`, `hunt answer`, `hunt resume-job` and `hunt status`: resumes for the picked jobs,
-then applying on company sites, up to three at once.
+then applying on company sites, up to three at once. The LinkedIn worker's own tests are in
+`test_apply_linkedin.py`.
 
 No model and no browser: the workers are stand-ins that write the files a worker would, the
 resume PDF or the report.
@@ -10,18 +11,19 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from job_hunt import cli
 from job_hunt.apply import (
-    MODEL, RESUME_SKILL, SITE_SKILL, SITE_WORKERS, ApplyError, AnswerError, answer, apply, read_report,
+    LINKEDIN_SKILL, MODEL, RESUME_SKILL, SITE_SKILL, SITE_WORKERS, ApplyError, AnswerError, answer, apply, read_report,
     resume_command, resume_job, site_command,
 )
 from job_hunt.career import Career, read_career, write_career
 from job_hunt.jobs import FoundJob, JobsList
+from job_hunt.linkedin_lock import LinkedInLock
 from movable_clock import MovableClock
 
 
@@ -78,18 +80,19 @@ class Resumes:
 
 
 class Sites:
-    """Stands in for the company-site workers: writes each job's report, one after another
-    from `reports` (the last one repeats), and counts how many run at once."""
+    """Stands in for the company-site workers, or with `skill` the LinkedIn worker: writes each
+    job's report, one after another from `reports` (the last one repeats), and counts how many
+    run at once."""
 
-    def __init__(self, project: Path, reports: dict[int, list[dict | str | None]] | None = None,
-                 seconds: float = 0.0) -> None:
-        self.project, self.reports, self.seconds = project, reports or {}, seconds
+    def __init__(self, project: Path, reports: dict[int, list[dict | str | bytes | None]] | None = None,
+                 seconds: float = 0.0, skill: str = SITE_SKILL) -> None:
+        self.project, self.reports, self.seconds, self.skill = project, reports or {}, seconds, skill
         self.ran: list[int] = []
         self.running = self.most = 0
         self._lock = threading.Lock()
 
     def __call__(self, command: list[str]) -> None:
-        job = _job_of(command, SITE_SKILL)
+        job = _job_of(command, self.skill)
         with self._lock:
             self.ran.append(job)
             self.running += 1
@@ -101,11 +104,21 @@ class Sites:
             out = self.project / "jobs" / str(job) / "report.json"
             if isinstance(report, str):
                 out.write_text(report)
+            elif isinstance(report, bytes):
+                out.write_bytes(report)
             elif report is not None:
                 out.write_text(json.dumps(report))
         finally:
             with self._lock:
                 self.running -= 1
+
+
+def no_linkedin(command: list[str]) -> None:
+    raise AssertionError(f"a LinkedIn worker started for a test with no Easy Apply job: {command}")
+
+
+def _no_pause(project: Path) -> LinkedInLock:
+    return LinkedInLock(project / "data", pause=lambda: timedelta(0))
 
 
 def test_a_resume_worker_reads_only_its_folder_and_the_career_and_runs_only_the_builder(project: Path) -> None:
@@ -143,13 +156,13 @@ def test_a_site_worker_drives_chrome_reads_its_folder_and_the_career_and_writes_
 
 def test_apply_writes_every_resume_at_once_then_applies_on_company_sites(project: Path, jobs: JobsList) -> None:
     site, easy = _picked(jobs, 1), _picked(jobs, 2, kind="easy_apply")
-    resumes, sites = Resumes(project), Sites(project)
-    summary = apply(jobs, project, run_resume=resumes, run_site=sites)
+    resumes, sites, linkedin = Resumes(project), Sites(project), Sites(project, skill=LINKEDIN_SKILL)
+    summary = apply(jobs, project, run_linkedin=linkedin, run_resume=resumes, run_site=sites)
     assert sorted(resumes.ran) == [site, easy]
-    # Easy Apply is the LinkedIn worker's (the next ticket): its resume waits for it.
-    assert sites.ran == [site]
-    assert (jobs.get(site).state, jobs.get(easy).state) == ("applied", "resume_ready")
-    assert (summary.resumes, summary.applied, summary.paused, summary.failed) == (2, 1, 0, 0)
+    # Easy Apply is the LinkedIn worker's.
+    assert (sites.ran, linkedin.ran) == ([site], [easy])
+    assert (jobs.get(site).state, jobs.get(easy).state) == ("applied", "applied")
+    assert (summary.resumes, summary.applied, summary.paused, summary.failed) == (2, 2, 0, 0)
 
 
 def test_all_the_resume_workers_run_at_the_same_time(project: Path, jobs: JobsList) -> None:
@@ -161,14 +174,15 @@ def test_all_the_resume_workers_run_at_the_same_time(project: Path, jobs: JobsLi
         together.wait()
         (project / "jobs" / str(_job_of(command, RESUME_SKILL)) / "resume.pdf").write_bytes(b"%PDF")
 
-    apply(jobs, project, run_resume=run, run_site=Sites(project))
-    assert {jobs.get(job).state for job in picked} == {"resume_ready"}
+    apply(jobs, project, run_linkedin=Sites(project, skill=LINKEDIN_SKILL), run_resume=run, run_site=Sites(project),
+          linkedin=_no_pause(project))
+    assert {jobs.get(job).state for job in picked} == {"applied"}
 
 
 def test_at_most_three_company_site_workers_run_at_once(project: Path, jobs: JobsList) -> None:
     picked = [_picked(jobs, n) for n in range(1, 8)]
     sites = Sites(project, seconds=0.05)
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert SITE_WORKERS == 3
     assert sites.most == 3
     assert sorted(sites.ran) == picked
@@ -178,10 +192,10 @@ def test_at_most_three_company_site_workers_run_at_once(project: Path, jobs: Job
 def test_a_job_is_applied_to_once_only_across_two_runs(project: Path, jobs: JobsList) -> None:
     first = _picked(jobs, 1)
     sites = Sites(project)
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     second = _picked(jobs, 2)
     resumes = Resumes(project)
-    summary = apply(jobs, project, run_resume=resumes, run_site=sites)
+    summary = apply(jobs, project, run_linkedin=no_linkedin, run_resume=resumes, run_site=sites)
     assert sites.ran == [first, second]
     assert resumes.ran == [second]
     assert (jobs.get(first).state, jobs.get(second).state) == ("applied", "applied")
@@ -192,10 +206,11 @@ def test_a_resume_already_built_is_not_written_again(project: Path, jobs: JobsLi
     job = _picked(jobs, 1, kind="easy_apply")
     (project / "jobs" / str(job)).mkdir()
     (project / "jobs" / str(job) / "resume.pdf").write_bytes(b"%PDF from a run that stopped")
-    resumes = Resumes(project)
-    apply(jobs, project, run_resume=resumes, run_site=Sites(project))
+    resumes, linkedin = Resumes(project), Sites(project, skill=LINKEDIN_SKILL)
+    apply(jobs, project, run_linkedin=linkedin, run_resume=resumes, run_site=Sites(project))
     assert resumes.ran == []
-    assert jobs.get(job).state == "resume_ready"
+    # Applied to with the resume already there.
+    assert (linkedin.ran, jobs.get(job).state) == ([job], "applied")
 
 
 def test_a_site_failure_is_tried_once_more_and_a_second_failure_ends_as_failed(project: Path, jobs: JobsList) -> None:
@@ -204,14 +219,14 @@ def test_a_site_failure_is_tried_once_more_and_a_second_failure_ends_as_failed(p
         once: [{"result": "failed", "reason": "The site showed an error page."}, {"result": "applied"}],
         twice: [{"result": "failed", "reason": "The form would not submit."}],
     })
-    summary = apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    summary = apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert sorted(sites.ran) == [once, once, twice, twice]
     assert jobs.get(once).state == "applied"
     failed = jobs.get(twice)
     assert (failed.state, failed.state_reason) == ("failed", "The form would not submit.")
     assert (summary.applied, summary.failed) == (1, 1)
     # Failed stays failed: the next run does not try it again.
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert sorted(sites.ran) == [once, once, twice, twice]
 
 
@@ -221,7 +236,7 @@ def test_a_failure_counts_across_runs(project: Path, jobs: JobsList) -> None:
     assert jobs.fail(job, "The site timed out.") == "picked"
     assert jobs.get(job).failures == 1
     sites = Sites(project, {job: [{"result": "failed", "reason": "The form would not submit."}]})
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     # This run gives it the one try it has left.
     assert sites.ran == [job]
     assert (jobs.get(job).state, jobs.get(job).state_reason) == ("failed", "The form would not submit.")
@@ -231,7 +246,7 @@ def test_a_resume_that_fails_twice_ends_as_failed_with_the_builders_words(projec
     once, twice = _picked(jobs, 1), _picked(jobs, 2)
     resumes = Resumes(project, failing={once: 1, twice: 2})
     sites = Sites(project)
-    apply(jobs, project, run_resume=resumes, run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=resumes, run_site=sites)
     assert sorted(resumes.ran) == [once, once, twice, twice]
     assert jobs.get(once).state == "applied"
     failed = jobs.get(twice)
@@ -242,7 +257,7 @@ def test_a_resume_that_fails_twice_ends_as_failed_with_the_builders_words(projec
 
 def test_a_resume_worker_that_ends_without_a_pdf_is_a_failure(project: Path, jobs: JobsList) -> None:
     job = _picked(jobs, 1)
-    apply(jobs, project, run_resume=lambda command: None, run_site=Sites(project))
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=lambda command: None, run_site=Sites(project))
     assert (jobs.get(job).state, jobs.get(job).state_reason) == (
         "failed", "the write-resume run built no resume.pdf")
 
@@ -254,8 +269,8 @@ def _unsure_after_two_runs(project: Path, jobs: JobsList, job: int, run_site) ->
     """The worker left no report it can be read by: the job waits for the user, in this run and
     the next, and nothing counts against it."""
     sites = Sites(project)
-    apply(jobs, project, run_resume=Resumes(project), run_site=run_site)
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=run_site)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert sites.ran == []
     assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
 
@@ -263,6 +278,8 @@ def _unsure_after_two_runs(project: Path, jobs: JobsList, job: int, run_site) ->
 @pytest.mark.parametrize(("written", "words"), [
     (None, "wrote no report"),
     ("{not json", "not JSON"),
+    # Cut off inside a character by a worker that stopped while writing.
+    (b'{"result": "paused", "tab": "\xc3', "not JSON"),
     ('{"result": "sent"}', "result"),
     ('{"result": "failed"}', "reason"),
     ('{"result": "paused", "needs": "captcha"}', "tab"),
@@ -271,7 +288,7 @@ def _unsure_after_two_runs(project: Path, jobs: JobsList, job: int, run_site) ->
     ('{"result": "paused", "needs": "captcha", "tab": "Apply", "tab_id": "41"}', "tab_id"),
 ])
 def test_a_report_that_cannot_be_read_pauses_the_job_saying_why(
-    project: Path, jobs: JobsList, written: str | None, words: str
+    project: Path, jobs: JobsList, written: str | bytes | None, words: str
 ) -> None:
     job = _picked(jobs, 1)
     sites = Sites(project, {job: [written]})
@@ -285,7 +302,7 @@ def test_a_report_that_cannot_be_read_pauses_the_job_saying_why(
 def test_a_report_left_by_an_earlier_try_does_not_pass_for_this_one(project: Path, jobs: JobsList) -> None:
     job = _picked(jobs, 1)
     sites = Sites(project, {job: [{"result": "failed", "reason": "The site showed an error page."}, None]})
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert sites.ran == [job, job]
     assert (jobs.get(job).state, jobs.get(job).state_reason) == (
         "paused", UNSURE + "the apply-site run wrote no report")
@@ -332,19 +349,19 @@ def test_a_run_stopped_before_the_retry_started_does_not_count_the_last_failure_
 
     monkeypatch.setattr(jobs, "move", stop_at_the_second_try)
     with pytest.raises(Stopped):
-        apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+        apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     monkeypatch.undo()
     assert (jobs.get(job).state, jobs.get(job).failures) == ("applying", 1)
     # The first try's failure was already counted; its report is gone before the second try.
     assert not (project / "jobs" / str(job) / "report.json").exists()
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 1)
     assert sites.ran == [job]
 
 
 def _pause(project: Path, jobs: JobsList, report: dict) -> int:
     job = _picked(jobs, 1)
-    apply(jobs, project, run_resume=Resumes(project), run_site=Sites(project, {job: [report]}))
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project, {job: [report]}))
     assert jobs.get(job).state == "paused"
     return job
 
@@ -373,7 +390,7 @@ def test_hunt_answer_saves_the_answer_in_the_career_and_puts_the_job_back(projec
     assert career_file.stat().st_mode & 0o777 == 0o600
     # The next run applies with it, and applies once.
     sites = Sites(project)
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert sites.ran == [job]
     assert jobs.get(job).state == "applied"
 
@@ -425,7 +442,7 @@ def test_hunt_resume_job_puts_a_paused_job_back_after_the_user_solved_it(project
     resume_job(jobs, job)
     assert (jobs.get(job).state, jobs.get(job).state_reason) == ("resume_ready", None)
     sites = Sites(project)
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert (sites.ran, jobs.get(job).state) == ([job], "applied")
     with pytest.raises(AnswerError, match="not paused"):
         resume_job(jobs, job)
@@ -440,7 +457,7 @@ def test_a_job_left_applying_by_a_run_that_stopped_is_not_applied_to_again(proje
     (project / "jobs" / str(reported)).mkdir()
     (project / "jobs" / str(reported) / "report.json").write_text('{"result": "applied"}')
     sites = Sites(project)
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert sites.ran == []
     assert jobs.get(reported).state == "applied"
     stopped = jobs.get(left)
@@ -459,14 +476,14 @@ def test_two_apply_runs_never_run_at_once(project: Path, jobs: JobsList) -> None
 
     def other_run() -> None:
         # Another hunt apply, with its own connection to the jobs list.
-        apply(JobsList(project / "data" / "jobs.db"), project, run_resume=slow, run_site=Sites(project))
+        apply(JobsList(project / "data" / "jobs.db"), project, run_linkedin=no_linkedin, run_resume=slow, run_site=Sites(project))
 
     first = threading.Thread(target=other_run)
     first.start()
     assert started.wait(5)
     try:
         with pytest.raises(ApplyError, match="already running"):
-            apply(jobs, project, run_resume=Resumes(project), run_site=Sites(project))
+            apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project))
     finally:
         release.set()
         first.join(5)
@@ -482,14 +499,17 @@ def hunt(project: Path, monkeypatch: pytest.MonkeyPatch, jobs: JobsList) -> Jobs
 
 def test_hunt_status_lines(hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]) -> None:
     applied, paused, failed = _picked(hunt, 1), _picked(hunt, 2), _picked(hunt, 3)
-    silent, easy = _picked(hunt, 4), _picked(hunt, 5, kind="easy_apply")
+    silent = _picked(hunt, 4)
     sites = Sites(project, {
         paused: [{"result": "paused", "needs": "captcha", "tab": "Apply - Example Co 2"}],
         failed: [{"result": "failed", "reason": "The site showed an error page."}],
         silent: [None],
     })
-    apply(hunt, project, run_resume=Resumes(project), run_site=sites)
-    unwritten = _picked(hunt, 6)  # picked after the run: its resume is not written yet
+    apply(hunt, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
+    # Picked after the run, its resume ready: it waits for the next run.
+    easy = _picked(hunt, 5, kind="easy_apply")
+    hunt.move(easy, "resume_ready")
+    unwritten = _picked(hunt, 6)  # its resume is not written yet
     hunt.add(_found(7))  # new, not picked: not part of applying
     capsys.readouterr()
     assert cli.main(["status"]) == 0
@@ -504,7 +524,7 @@ def test_hunt_status_lines(hunt: JobsList, project: Path, capsys: pytest.Capture
         "Failed (1):",
         f"  {failed}. QA Engineer 3 at Example Co 3: The site showed an error page.",
         "Waiting (2):",
-        f"  {easy}. QA Engineer 5 at Example Co 5: resume ready, for the LinkedIn worker",
+        f"  {easy}. QA Engineer 5 at Example Co 5: resume ready, for the next hunt apply",
         f"  {unwritten}. QA Engineer 6 at Example Co 6: resume not written yet",
     ]
 
@@ -568,7 +588,7 @@ def test_a_resumed_job_carries_on_in_the_tab_it_paused_in(project: Path, jobs: J
     resume_job(jobs, job)
     commands: list[list[str]] = []
     sites = Sites(project)
-    apply(jobs, project, run_resume=Resumes(project), run_site=lambda command: (commands.append(command), sites(command)))
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=lambda command: (commands.append(command), sites(command)))
     sent = json.loads(commands[0][3].removeprefix(f"/{SITE_SKILL} "))
     # Two jobs may pause on pages titled alike: the id names the tab, the title is for the user.
     assert (sent["tab"], sent["tab_id"]) == ("Application", 41)
@@ -584,7 +604,7 @@ def test_a_report_written_before_the_worker_stopped_badly_still_counts(project: 
         sites(command)
         raise ApplyError("the apply-site run did not finish in 30 minutes")
 
-    apply(jobs, project, run_resume=Resumes(project), run_site=sent_then_timed_out)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sent_then_timed_out)
     assert (sites.ran, jobs.get(job).state) == ([job], "applied")
 
 
@@ -598,7 +618,7 @@ def test_a_failure_reported_before_the_worker_stopped_badly_is_tried_again(proje
         raise ApplyError("the apply-site run did not finish in 30 minutes")
 
     # The worker said it sent nothing: the one case a stop is tried again.
-    apply(jobs, project, run_resume=Resumes(project), run_site=reported_then_timed_out)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=reported_then_timed_out)
     assert sites.ran == [job, job]
     assert (jobs.get(job).state, jobs.get(job).failures) == ("applied", 1)
 
@@ -606,7 +626,7 @@ def test_a_failure_reported_before_the_worker_stopped_badly_is_tried_again(proje
 def test_a_needs_that_is_not_a_word_pauses_the_job_and_does_not_crash_the_run(project: Path, jobs: JobsList) -> None:
     job, other = _picked(jobs, 1), _picked(jobs, 2)
     report = '{"result": "paused", "needs": ["captcha"], "tab": "Apply"}'
-    apply(jobs, project, run_resume=Resumes(project), run_site=Sites(project, {job: [report]}))
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project, {job: [report]}))
     assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
     assert jobs.get(other).state == "applied"
 
@@ -615,17 +635,19 @@ def test_a_needs_that_is_not_a_word_pauses_the_job_and_does_not_crash_the_run(pr
     ('{"result": "failed", "reason": "The site showed an error page."}', "applied"),
     ('{"result": "paused", "needs": "captcha", "tab": "Apply"}', "paused"),
     ("{not json", "paused"),
+    (b'{"result": "paused", "tab": "\xc3', "paused"),
 ])
 def test_every_report_a_stopped_run_left_is_saved_and_a_broken_one_pauses(
-    project: Path, jobs: JobsList, left: str, state: str
+    project: Path, jobs: JobsList, left: str | bytes, state: str
 ) -> None:
     job = _picked(jobs, 1)
     jobs.move(job, "resume_ready")
     jobs.move(job, "applying")
     (project / "jobs" / str(job)).mkdir()
-    (project / "jobs" / str(job) / "report.json").write_text(left)
+    report = project / "jobs" / str(job) / "report.json"
+    report.write_bytes(left) if isinstance(left, bytes) else report.write_text(left)
     sites = Sites(project)
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     # A failure counts once and the job is tried again; a pause or a broken report waits for the user.
     assert jobs.get(job).state == state
     assert sites.ran == ([job] if state == "applied" else [])
@@ -647,7 +669,7 @@ def test_a_job_whose_way_to_apply_is_not_known_keeps_its_resume_and_waits(projec
     jobs.score(job, 8, "Good match.")
     jobs.move(job, "picked")
     sites = Sites(project)
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert (jobs.get(job).state, sites.ran) == ("resume_ready", [])
 
 
@@ -657,7 +679,7 @@ def test_hunt_resume_job_and_the_status_of_a_stopped_run_on_the_command_line(
     job = _picked(hunt, 1)
     hunt.move(job, "resume_ready")
     hunt.move(job, "applying")
-    apply(hunt, project, run_resume=Resumes(project), run_site=Sites(project))
+    apply(hunt, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project))
     capsys.readouterr()
     cli.main(["status"])
     assert capsys.readouterr().out.splitlines()[1] == (
@@ -687,7 +709,7 @@ def test_hunt_applied_ends_a_job_the_user_saw_was_sent(hunt: JobsList, project: 
     assert capsys.readouterr().out == f"job {job} (QA Engineer 1 at Example Co 1) is applied to\n"
     assert (hunt.get(job).state, hunt.get(job).state_reason) == ("applied", None)
     sites = Sites(project)
-    apply(hunt, project, run_resume=Resumes(project), run_site=sites)
+    apply(hunt, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert sites.ran == []
     assert cli.main(["applied", str(job)]) == 1
     assert capsys.readouterr().err == f"hunt applied: job {job} is not paused, it is applied\n"
@@ -698,7 +720,7 @@ def test_hunt_applied_ends_a_job_the_user_saw_was_sent(hunt: JobsList, project: 
 def _two_questions(project: Path, jobs: JobsList) -> tuple[int, int]:
     first, second = _picked(jobs, 1), _picked(jobs, 2)
     sites = Sites(project, {first: [QUESTION], second: [{**QUESTION, "question": "Notice period?"}]})
-    apply(jobs, project, run_resume=Resumes(project), run_site=sites)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert {jobs.get(first).state, jobs.get(second).state} == {"paused"}
     return first, second
 
@@ -805,7 +827,7 @@ def test_chrome_out_of_reach_pauses_every_job_and_costs_none_a_try(
     picked = [_picked(hunt, n) for n in range(1, 4)]
     closed = {job: [{"result": "paused", "needs": "chrome"}] for job in picked}
     sites = Sites(project, closed)
-    apply(hunt, project, run_resume=Resumes(project), run_site=sites)
+    apply(hunt, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert sorted(sites.ran) == picked
     assert {(hunt.get(job).state, hunt.get(job).failures) for job in picked} == {("paused", 0)}
     assert hunt.get(picked[0]).state_reason == "Chrome open, with the Claude extension connected"
@@ -816,5 +838,28 @@ def test_chrome_out_of_reach_pauses_every_job_and_costs_none_a_try(
         f" (then: hunt resume-job {picked[0]})")
     # Once Chrome is back, each job goes on.
     resume_job(hunt, picked[0])
-    apply(hunt, project, run_resume=Resumes(project), run_site=Sites(project))
+    apply(hunt, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project))
     assert hunt.get(picked[0]).state == "applied"
+
+
+def test_a_job_resumed_after_chrome_was_out_of_reach_starts_in_a_new_tab(project: Path, jobs: JobsList) -> None:
+    job = _pause(project, jobs, {"result": "paused", "needs": "chrome"})
+    resume_job(jobs, job)
+    commands: list[list[str]] = []
+    sites = Sites(project)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=lambda command: (commands.append(command), sites(command)))
+    # It paused in no tab: the worker is given none, not a tab named null.
+    sent = json.loads(commands[0][3].removeprefix(f"/{SITE_SKILL} "))
+    assert "tab" not in sent and "tab_id" not in sent
+
+
+def test_a_worker_that_crashes_leaving_a_broken_report_is_named_by_its_error(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1)
+    sites = Sites(project, {job: ["{not json"]})
+
+    def wrote_half_then_crashed(command: list[str]) -> None:
+        sites(command)
+        raise ApplyError("the apply-site run failed (1): the connection to Chrome was lost")
+
+    _unsure_after_two_runs(project, jobs, job, wrote_half_then_crashed)
+    assert jobs.get(job).state_reason == UNSURE + "the apply-site run failed (1): the connection to Chrome was lost"

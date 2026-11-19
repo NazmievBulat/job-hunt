@@ -17,8 +17,12 @@ $ARGUMENTS
   and `"jobs": []`.
 - `areas`: the areas the person looks for jobs in, as they named them.
 - `out`: the file to write.
-- `messages_after`, only sometimes there: also read the messages that arrived after this time,
-  in Unix seconds (see "Messages" below). Without it, read no messages.
+- `messages_after`: when the arguments have it, a time in Unix seconds: also read the messages
+  that arrived after it (see "Messages" below) and add them to `out`. When the arguments do not
+  have it, read no messages.
+
+So a run does one or both of two jobs: the job alerts when `after` is a number, the messages
+when `messages_after` is a number. Look at both before you start.
 
 ## Find the alerts
 
@@ -27,8 +31,9 @@ Search Gmail with the Gmail connector for job alert emails that arrived after `a
 ZipRecruiter, Dice and Wellfound, and job alerts from companies' own career sites (for example
 a search for `after:<after> ("job alert" OR "new jobs" OR "jobs for you" OR "matching jobs")`
 next to one search for each board's sender). Open every alert and read the jobs it lists. Page
-through every result of a search. Leave out emails that are not alerts listing jobs: messages
-from recruiters, application receipts, interview invitations, newsletters.
+through every result of a search. Leave out of `jobs` the emails that are not alerts listing
+jobs: messages from recruiters (those are for "Messages"), application receipts, interview
+invitations, newsletters.
 
 ## Write each job
 

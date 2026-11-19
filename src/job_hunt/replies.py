@@ -15,6 +15,9 @@ and `hunt linkedin-messages` runs `read-linkedin-messages` in Chrome, under the 
                             "from": "...", "text": "...", "date": "...", "job_link": ..., "company": ...,
                             "asks_to_talk": false}]}
 
+or, when it could not read them, `"unreachable"` with why, and the next read starts again from
+the same time.
+
 Each message is saved once (an email by its id, a LinkedIn message by its conversation and its
 text); a newer message in a conversation replaces the one still open there, so only the latest
 is answered. A thread is linked to its job by the posting link in the message, or else by its
@@ -558,6 +561,9 @@ def read_linkedin(threads: Threads, jobs: JobsList, root: Path, *, run: Run, loc
         data = json.loads(out.read_text())
     except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ReplyError(f"the {READ_SKILL} run wrote no file it can be read by ({out})") from error
+    # Nothing read is not "no messages": the next read starts from the same time again.
+    if isinstance(data, dict) and (why := _text(data, "unreachable")):
+        raise ReplyError(f"the {READ_SKILL} run could not read LinkedIn: {why}")
     found, problems = read_messages(data)
     if problems:
         log_failure(root / "data", "hunt linkedin-messages", "left out " + "; ".join(problems), clock)

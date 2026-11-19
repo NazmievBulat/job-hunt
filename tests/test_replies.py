@@ -598,3 +598,17 @@ def test_a_watch_that_keeps_failing_is_told_once_until_it_works_again(
     monkeypatch.setattr(cli, "watch", lambda *args, **kwargs: (_ for _ in ()).throw(ReplyError("no Gmail")))
     assert cli.main(["watch"]) == 1
     assert "no Gmail" in questions(jobs, data)
+
+
+def test_a_linkedin_read_that_could_not_reach_linkedin_fails_and_keeps_the_time_it_reads_from(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    lock = LinkedInLock(project / "data", pause=lambda: timedelta(0))
+
+    def run(command: list[str]) -> None:
+        out = Path(_prompt(command, READ_SKILL)["out"])
+        out.write_text(json.dumps({"linkedin_messages": [], "unreachable": "Chrome is closed"}))
+
+    with pytest.raises(ReplyError, match="Chrome is closed"):
+        read_linkedin(threads, jobs, project, run=run, lock=lock, sleep=no_sleep, clock=clock)
+    assert threads.last_read("linkedin") is None and not lock.path.exists()

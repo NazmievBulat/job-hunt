@@ -56,7 +56,8 @@ Write `out` with the Write tool, once, at the end, even when nothing was found:
   in order.
 - `asks_to_talk` is `true` when the message asks for a call, a meeting or an interview, or asks
   when the person is free; otherwise `false`.
-- When Chrome cannot be reached, or LinkedIn asks to sign in, write `{"linkedin_messages": []}`
-  and say why in your reply.
+- When you could not read the messages (Chrome cannot be reached, LinkedIn asks to sign in or
+  shows a security check), write `{"linkedin_messages": [], "unreachable": "<one line: why>"}`.
+  Never write an empty list alone for messages you did not read.
 
 Reply with one line: how many messages you wrote, or why there are none.

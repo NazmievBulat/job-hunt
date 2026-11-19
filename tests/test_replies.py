@@ -26,6 +26,7 @@ from job_hunt.replies import (
 )
 from job_hunt.settings import Settings
 from job_hunt.watch import linkedin_due, watch
+from alert_skill import AlertSkill
 from movable_clock import MovableClock
 from only_named_tools import assert_only_named_tools
 
@@ -191,16 +192,28 @@ def test_a_company_with_two_jobs_links_the_thread_to_neither(threads: Threads, j
     assert threads.get(thread).job is None
 
 
+@pytest.mark.parametrize("link", ["https://jobs.example.com/2?source=LinkedIn", "https://jobs.example.com/2?src=email",
+                                  "https://jobs.example.com/2?gh_src=abc"])
+def test_a_posting_link_with_a_source_tag_finds_its_job_among_its_companys(
+    threads: Threads, jobs: JobsList, link: str
+) -> None:
+    jobs.add(_found(1, company="Example Labs"))
+    job = jobs.add(_found(2, company="Example Labs"))
+    thread, = _saved(threads, jobs, _email(1, job_link=link))
+    assert threads.get(thread).job == job
+
+
 def test_the_finder_saves_the_recruiter_emails_it_read_and_reads_them_from_the_last_time(
     project: Path, jobs: JobsList, threads: Threads, clock: MovableClock
 ) -> None:
     out = project / "data" / "found-jobs.json"
     arguments: list[dict] = []
 
+    skill = AlertSkill({"emails": 0, "jobs": [], "recruiter_emails": [_email(1)], "linkedin_notifications": 0})
+
     def run(command: list[str]) -> None:
         arguments.append(_prompt(command, ALERTS_SKILL))
-        out.write_text(json.dumps({"emails": 0, "jobs": [], "recruiter_emails": [_email(1)],
-                                   "linkedin_notifications": 0}))
+        skill(command)
 
     messages = EmailMessages(threads, jobs)
     find(SETTINGS, jobs, project / "jobs", out, run=run, fetch=no_fetch, clock=clock, messages=messages)
@@ -212,7 +225,7 @@ def test_the_finder_saves_the_recruiter_emails_it_read_and_reads_them_from_the_l
 
 
 def test_the_finder_without_messages_asks_for_none() -> None:
-    command = skill_command(MORNING, [], Path("data/found-jobs.json"))
+    command = skill_command(MORNING, Path("data/found-jobs.json"))
     assert "messages_after" not in _prompt(command, ALERTS_SKILL)
 
 
@@ -707,7 +720,7 @@ class FakeClaude:
         self.skills.append(skill)
         arguments = _prompt(command, skill)
         if skill == ALERTS_SKILL:
-            Path(arguments["out"]).write_text(json.dumps(self.found))
+            AlertSkill(self.found)(command)
         elif skill == DRAFT_SKILL:
             Path(arguments["out"]).write_text(json.dumps({"reply": "Thanks, Jane. Ada", "draft_id": "d1"}))
         elif skill == SEND_SKILL and self.sent is not None:
@@ -878,8 +891,7 @@ def test_a_linkedin_notification_the_finder_read_is_owed_to_the_next_watch(
 ) -> None:
     out = project / "data" / "found-jobs.json"
 
-    def run(command: list[str]) -> None:
-        out.write_text(json.dumps({"emails": 0, "jobs": [], "recruiter_emails": [], "linkedin_notifications": 1}))
+    run = AlertSkill({"emails": 0, "jobs": [], "recruiter_emails": [], "linkedin_notifications": 1})
 
     find(SETTINGS, jobs, project / "jobs", out, run=run, fetch=no_fetch, clock=clock,
          messages=EmailMessages(threads, jobs))
@@ -900,9 +912,7 @@ def test_a_message_about_a_job_found_in_the_same_run_is_linked_to_it(
            "remote": "remote", "board": "indeed", "email_id": "a1", "email_date": "2026-11-18T06:00:00+00:00",
            "area": None}
 
-    def run(command: list[str]) -> None:
-        out.write_text(json.dumps({"emails": 1, "jobs": [job], "recruiter_emails": [
-            _email(1, job_link="https://jobs.example.com/9")]}))
+    run = AlertSkill({"emails": 1, "jobs": [job], "recruiter_emails": [_email(1, job_link="https://jobs.example.com/9")]})
 
     page = "<html><body><main><p>Test the things.</p></main></body></html>"
     find(SETTINGS, jobs, project / "jobs", out, run=run, fetch=lambda link: (link, page), clock=clock,

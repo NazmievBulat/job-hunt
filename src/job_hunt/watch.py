@@ -83,7 +83,7 @@ def _watch(threads: Threads, jobs: JobsList, data: Path, settings: Settings, che
     out = data / "messages-check.json"
     emails = EmailMessages(threads, jobs)
     out.unlink(missing_ok=True)
-    check(skill_command(None, [], out, emails.since(now)))
+    check(skill_command(None, out, emails.since(now)))
     try:
         found = json.loads(out.read_text())
     except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as error:

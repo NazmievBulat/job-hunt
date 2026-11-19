@@ -57,7 +57,7 @@ from urllib.parse import urlsplit
 
 from job_hunt.apply import CHROME_TOOLS
 from job_hunt.finder import ONLY_NAMED_TOOLS, PageError, page_text_and_kind
-from job_hunt.jobs import JobsList
+from job_hunt.jobs import JobsList, clean_link
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.questions import log_failure
 from job_hunt.settings import SettingsError, read_settings
@@ -265,7 +265,9 @@ def job_of(jobs: JobsList, message: Message) -> int | None:
     """The job the message is about: the one of its posting link, else the one job of its company."""
     if message.job_link:
         try:
-            job = jobs.job_of_link(message.job_link)
+            # A recruiter's link to a posting often carries a source tag (`?source=LinkedIn`), which
+            # keeps it as given in the lookup: its cleaned address is the posting's own.
+            job = jobs.job_of_link(message.job_link) or jobs.job_of_link(clean_link(message.job_link))
         except ValueError:
             job = None
         if job is not None:

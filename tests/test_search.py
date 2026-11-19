@@ -13,8 +13,8 @@ import shutil
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,6 +34,7 @@ from job_hunt.search import (
     linkedin_search, read_board,
 )
 from job_hunt.settings import Settings, SettingsError, read_settings
+from alert_skill import AlertSkill
 from movable_clock import MovableClock
 
 HERE = Path(__file__).parent / "search"
@@ -162,8 +163,37 @@ def test_a_429_or_999_ends_linkedin_for_the_run(settings: Settings, clock: Movab
     sites = Sites({LINKEDIN: [Answer(200, _saved("linkedin-full-page.html")), Answer(status, "")]})
     result = linkedin_search(settings, clock.now - timedelta(days=1), clock.now, sites, _no_pause())
     assert len(sites.urls(LINKEDIN)) == 2
-    assert result.stopped == f"LinkedIn answered {status}, so it is not searched again this run"
+    assert result.stopped == f"LinkedIn answered {status} after 1 search page, so it is not searched again this run"
     assert len(result.jobs) == 10
+
+
+def test_a_linkedin_search_page_is_counted_before_its_turn_is_given_up(
+    settings: Settings, clock: MovableClock
+) -> None:
+    # A job page read in another thread may take the turn as soon as it is given up, and its
+    # stop names the pages counted by then.
+    class Watched(Pace):
+        counted: list[int] = []
+
+        @contextmanager
+        def turn(self) -> Iterator[None]:
+            with super().turn():
+                yield
+            self.counted.append(self.pages)
+
+    one = replace(settings, titles=["QA Automation Engineer"], areas=["Raleigh-Durham-Chapel Hill"], remote="exclude")
+    pace = Watched(sleep=lambda seconds: None, between=lambda: 3.0, order=lambda searches: None)
+    linkedin_search(one, clock.now - timedelta(days=1), clock.now, _linkedin_sites(["linkedin-full-page.html", ""]),
+                    pace)
+    assert pace.counted == [1, 2]
+
+
+def test_a_linkedin_search_page_that_did_not_answer_200_is_not_counted(settings: Settings, clock: MovableClock) -> None:
+    sites = Sites({LINKEDIN: [Answer(500, ""), Answer(429, "")]})
+    pace = _no_pause()
+    result = linkedin_search(settings, clock.now - timedelta(days=1), clock.now, sites, pace)
+    assert pace.pages == 0
+    assert result.stopped == "LinkedIn answered 429 after 0 search pages, so it is not searched again this run"
 
 
 def test_linkedin_pauses_two_to_five_seconds_between_requests(settings: Settings, clock: MovableClock) -> None:
@@ -445,7 +475,7 @@ def test_a_504_from_common_crawl_is_tried_again(clock: MovableClock) -> None:
 def test_a_common_crawl_query_that_keeps_failing_is_named_and_the_others_go_on() -> None:
     sites = _crawl_sites(Answer(504, "Gateway Time-out"))
     boards, problems = crawl_index(sites, sleep=lambda seconds: None)
-    assert boards == [] and CRAWL_TRIES == 3
+    assert boards == [] and CRAWL_TRIES == 4
     assert problems == ["Common Crawl for jobs.ashbyhq.com/*: HTTP 504"]
 
 
@@ -511,13 +541,10 @@ def _board_sites() -> Sites:
     })
 
 
-class Skill:
+class Skill(AlertSkill):
     def __init__(self, found: Path, fail: bool = False) -> None:
-        self.found, self.fail = found, fail
-
-    def __call__(self, command: list[str]) -> None:
-        if not self.fail:
-            shutil.copy(FINDER / "found-jobs.json", self.found)
+        # Failing, the search writes nothing.
+        super().__init__(FINDER / "found-jobs.json", {1} if fail else None)
 
 
 def _fetch(link: str) -> tuple[str, str]:
@@ -601,7 +628,7 @@ def test_a_failing_source_is_named_and_the_others_are_saved(
     tmp_path: Path, settings: Settings, clock: MovableClock
 ) -> None:
     summary, jobs, _ = _run(tmp_path, settings, clock, _board_sites(), skill_fails=True)
-    assert summary.failed[0].startswith("alert: the read-job-alerts run wrote no jobs file")
+    assert summary.failed[0].startswith("alert: the read-job-alerts search wrote no file")
     assert {job.source for job in jobs.all()} == {"greenhouse", "lever", "linkedin_search"}
     # The alerts are read from the same time again; the searches from this run.
     assert jobs.last_run("alert") is None and jobs.last_run("linkedin_search") == clock.now
@@ -651,7 +678,8 @@ def test_a_linkedin_stop_is_named_and_linkedin_is_read_from_the_same_time_next(
     sites.answers = {start: answer for start, answer in sites.answers.items() if "linkedin" not in start}
     sites.answers[LINKEDIN] = Answer(429, "")
     summary, jobs, _ = _run(tmp_path, settings, clock, sites)
-    assert "linkedin_search: LinkedIn answered 429, so it is not searched again this run" in summary.failed
+    assert "linkedin_search: LinkedIn answered 429 after 0 search pages, so it is not searched again this run" in (
+        summary.failed)
     assert len(sites.urls(LINKEDIN)) == 1
     assert jobs.last_run("linkedin_search") is None
     assert any(job.source == "greenhouse" for job in jobs.all())
@@ -851,7 +879,7 @@ def test_after_linkedin_said_stop_no_linkedin_page_is_read_and_its_jobs_are_stil
     searched = [job for job in jobs.all() if job.source == "linkedin_search"]
     assert len(searched) == 3 and not any("41000001" in link for link in read)
     assert {(job.kind, job.page_problem) for job in searched} == {
-        (None, "not read: LinkedIn answered 429, so it is not searched again this run")}
+        (None, "not read: LinkedIn answered 429 after 1 search page, so it is not searched again this run")}
 
 
 @pytest.mark.parametrize("status", [429, 999])
@@ -892,7 +920,10 @@ def test_a_linkedin_page_that_answers_429_ends_the_reading_of_linkedin_pages(
     found = tmp_path / "found-jobs.json"
     search = Search(get=get, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
     summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock, search=search)
-    assert summary.failed.count(f"linkedin_search: LinkedIn answered {status}, so it is not searched again this run") == 1
+    # How many search pages answered first depends on when the page was read.
+    stops = [line for line in summary.failed if re.fullmatch(
+        f"linkedin_search: LinkedIn answered {status} after \\d+ search pages?, so it is not searched again this run", line)]
+    assert len(stops) == 1
     # LinkedIn is searched from the same time next run.
     assert jobs.last_run("linkedin_search") is None
     # The first LinkedIn page answered 429: no other LinkedIn page or search is asked for after it.
@@ -945,7 +976,9 @@ def test_a_linkedin_page_stop_after_the_searches_is_named_and_keeps_linkedins_wi
                    LINKEDIN: Answer(200, "")})
     search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
     summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock, search=search)
-    assert "linkedin_search: LinkedIn answered 429, so it is not searched again this run" in summary.failed
+    assert any(re.fullmatch(
+        r"linkedin_search: LinkedIn answered 429 after \d+ search pages?, so it is not searched again this run", line)
+        for line in summary.failed)
     assert jobs.last_run("linkedin_search") is None
 
 
@@ -1051,7 +1084,7 @@ def test_the_sources_run_at_once(tmp_path: Path, settings: Settings, clock: Mova
 
     def alerts(command: list[str]) -> None:
         if _wait_for(greenhouse):
-            shutil.copy(FINDER / "found-jobs.json", found)
+            AlertSkill(FINDER / "found-jobs.json")(command)
 
     jobs = JobsList(tmp_path / "jobs.db", clock=clock)
     companies = _companies(tmp_path, clock)
@@ -1080,7 +1113,7 @@ def test_a_source_that_breaks_or_is_told_to_stop_leaves_the_others_to_finish(
     search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
     summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=_fetch, clock=clock,
                    search=search, feeds=Broken())  # type: ignore[arg-type]
-    assert summary.failed == ["linkedin_search: LinkedIn answered 429, so it is not searched again this run",
+    assert summary.failed == ["linkedin_search: LinkedIn answered 429 after 0 search pages, so it is not searched again this run",
                               "feeds: RuntimeError: the feeds broke"]
     lines = str(summary).splitlines()
     assert "alert: 4 emails, 8 jobs, 4 new" in lines and "greenhouse: 3 found, 2 new (1 board)" in lines
@@ -1164,7 +1197,7 @@ def test_a_board_an_alerts_link_leads_to_is_swept_in_the_same_run(
     def alerts(command: list[str]) -> None:
         # The sweep has its boards by the time the alerts' links are read, as on a slow morning.
         if _wait_for(lambda: bool(sites.urls("https://boards-api.greenhouse.io/"))):
-            shutil.copy(FINDER / "found-jobs.json", found)
+            AlertSkill(FINDER / "found-jobs.json")(command)
 
     jobs = JobsList(tmp_path / "jobs.db", clock=clock)
     companies = _companies(tmp_path, clock)
@@ -1209,11 +1242,11 @@ def test_a_board_met_through_the_same_job_under_another_link_is_swept_in_the_sam
     found = tmp_path / "found-jobs.json"
 
     def alerts(command: list[str]) -> None:
-        found.write_text(json.dumps({"emails": 1, "jobs": [{
+        AlertSkill({"emails": 1, "jobs": [{
             "link": "https://jobs.lever.co/hooli-example/2222", "title": "QA Automation Engineer",
             "company": "Hooli Example, Inc.", "place": "Durham, NC", "remote": "on_site", "board": "lever",
             "email_id": "18c0ffee00000009", "email_date": "2026-11-18T06:00:00+00:00",
-            "area": "Raleigh-Durham-Chapel Hill"}]}))
+            "area": "Raleigh-Durham-Chapel Hill"}]})(command)
 
     sites = _board_sites()
     sites.answers["https://api.lever.co/v0/postings/hooli-example?mode=json"] = _ok("lever.json")
@@ -1255,11 +1288,11 @@ def test_a_page_an_alert_leads_to_shares_its_hosts_limit_with_the_boards(
     def alerts(command: list[str]) -> None:
         # The alert's page is read while the boards hold the host's four requests.
         _wait_for(lambda: running[0] == 4)
-        found.write_text(json.dumps({"emails": 1, "jobs": [{
+        AlertSkill({"emails": 1, "jobs": [{
             "link": "https://apply.workable.com/hooli/j/AB12CD34EF/", "title": "QA Automation Engineer",
             "company": "Hooli Example", "place": "Durham, NC", "remote": "on_site", "board": "workable",
             "email_id": "18c0ffee00000009", "email_date": "2026-11-18T06:00:00+00:00",
-            "area": "Raleigh-Durham-Chapel Hill"}]}))
+            "area": "Raleigh-Durham-Chapel Hill"}]})(command)
 
     def fetch(link: str) -> tuple[str, str]:
         if urlsplit(link).hostname == "apply.workable.com":

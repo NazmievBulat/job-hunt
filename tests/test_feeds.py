@@ -28,6 +28,7 @@ from job_hunt.finder import find
 from job_hunt.jobs import JobsList
 from job_hunt.search import Answer, SearchError
 from job_hunt.settings import Settings, SettingsError, read_settings
+from alert_skill import AlertSkill
 from movable_clock import MovableClock
 
 HERE = Path(__file__).parent / "feeds"
@@ -368,10 +369,9 @@ def test_with_remote_excluded_or_only_the_place_searches_follow(settings: Settin
 # The feeds inside hunt find
 
 
-class Skill:
-    def __call__(self, command: list[str]) -> None:
-        out = Path(json.loads(command[2].split(" ", 1)[1])["out"])
-        shutil.copy(FINDER / "found-jobs.json", out)
+class Skill(AlertSkill):
+    def __init__(self) -> None:
+        super().__init__(FINDER / "found-jobs.json")
 
 
 def _fetch(link: str, db: Path | None = None) -> tuple[str, str]:

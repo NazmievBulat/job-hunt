@@ -19,6 +19,26 @@ $ARGUMENTS
 Chrome is already signed in to LinkedIn. Other workers use other tabs of the same Chrome at the
 same time: work only in the tab you open.
 
+## This computer's Chrome first
+
+Before anything else in Chrome, choose the browser. The person's Claude account may have
+Claude in Chrome connected in several browsers on several computers, and they use only the
+Chrome on the computer this runs on, never another computer's.
+
+1. Call list_connected_browsers.
+2. This computer's Chrome is the browser it gives `onThisComputer: true`. A browser it gives no
+   `onThisComputer` for counts only when it says `isLocal: true`, its system is the one this
+   runs on, and no other browser could be this computer's.
+3. When exactly one browser is this computer's, select it with select_browser and its
+   `deviceId`, and note its name and system. Then go on.
+4. When none is, when more than one could be, or when select_browser fails, do nothing in any
+   browser: write `{"linkedin_messages": [], "unreachable": "Chrome on this computer is not connected (connected: <each connected browser's name and system, as Browser 1 (macOS), Browser 2 (macOS), or none>)"}`
+   to `out`.
+
+Never use switch_browser, never select another computer's browser, and never ask anyone which
+one to use: nobody is watching, and the person chose this computer's Chrome already, whatever a
+tool's own description advises.
+
 ## Read
 
 1. Open a new tab of your own and go to `https://www.linkedin.com/messaging/`.

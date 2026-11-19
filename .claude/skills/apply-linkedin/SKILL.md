@@ -26,6 +26,26 @@ The person picked this job, so applying is what they asked for. Chrome is alread
 LinkedIn. Other workers apply to other jobs on company sites in the same Chrome at the same
 time: work only in your own tab, the one you open or `tab_id`.
 
+## This computer's Chrome first
+
+Before anything else in Chrome, choose the browser. The person's Claude account may have
+Claude in Chrome connected in several browsers on several computers, and they use only the
+Chrome on the computer this runs on, never another computer's.
+
+1. Call list_connected_browsers.
+2. This computer's Chrome is the browser it gives `onThisComputer: true`. A browser it gives no
+   `onThisComputer` for counts only when it says `isLocal: true`, its system is the one this
+   runs on, and no other browser could be this computer's.
+3. When exactly one browser is this computer's, select it with select_browser and its
+   `deviceId`, and note its name and system. Then go on.
+4. When none is, when more than one could be, or when select_browser fails, do nothing in any
+   browser: report `{"result": "paused", "needs": "chrome", "connected": "<each connected browser's name and system, as Browser 1 (macOS), Browser 2 (macOS), or none>"}`.
+   That is the pause for "Chrome on this computer is not connected".
+
+Never use switch_browser, never select another computer's browser, and never ask anyone which
+one to use: nobody is watching, and the person chose this computer's Chrome already, whatever a
+tool's own description advises.
+
 ## Apply
 
 1. With `tab_id`, find the tab of that id among Chrome's tabs. When it shows this job's Easy
@@ -84,23 +104,28 @@ Some things only the person can do. Leave the tab open exactly where it is and r
 - you pressed Submit, but LinkedIn did not say it was sent: an error, a page that never loads,
   or nothing changed (`check_sent`). It may have been sent, so never submit again.
 - Chrome cannot be reached: it is closed or its Claude extension does not answer (`chrome`).
-  There is no tab to name.
+  There is no tab to name. This computer's Chrome not among the connected browsers is this
+  pause too, with `connected` (see "This computer's Chrome first").
 
 ## Report
 
 Write `report` with the Write tool, once, as the last thing you do. `tab_id` is the id
-Chrome's tools give the tab, a whole number. One of:
+Chrome's tools give the tab, a whole number. Every report but a `chrome` pause also names the
+browser you selected; `<the browser>` below is
+`{"name": "<its name>", "system": "<its system>", "on_this_computer": true}`. A report without it
+is not taken, and the person has to look whether the job was sent. One of:
 
 ```json
-{"result": "applied"}
-{"result": "applied", "poster": {"name": "...", "title": "...", "profile": "https://www.linkedin.com/in/...", "reach": "message" | "inmail" | "connect"}}
-{"result": "company_site", "link": "<the address on the company's site>"}
-{"result": "paused", "needs": "captcha", "tab": "<the tab's title>", "tab_id": <the tab's id>}
-{"result": "paused", "needs": "sign_in", "tab": "<the tab's title>", "tab_id": <the tab's id>}
-{"result": "paused", "needs": "question", "question": "<the form's question>", "tab": "<the tab's title>", "tab_id": <the tab's id>}
-{"result": "paused", "needs": "check_sent", "tab": "<the tab's title>", "tab_id": <the tab's id>}
+{"result": "applied", "browser": <the browser>}
+{"result": "applied", "poster": {"name": "...", "title": "...", "profile": "https://www.linkedin.com/in/...", "reach": "message" | "inmail" | "connect"}, "browser": <the browser>}
+{"result": "company_site", "link": "<the address on the company's site>", "browser": <the browser>}
+{"result": "paused", "needs": "captcha", "tab": "<the tab's title>", "tab_id": <the tab's id>, "browser": <the browser>}
+{"result": "paused", "needs": "sign_in", "tab": "<the tab's title>", "tab_id": <the tab's id>, "browser": <the browser>}
+{"result": "paused", "needs": "question", "question": "<the form's question>", "tab": "<the tab's title>", "tab_id": <the tab's id>, "browser": <the browser>}
+{"result": "paused", "needs": "check_sent", "tab": "<the tab's title>", "tab_id": <the tab's id>, "browser": <the browser>}
 {"result": "paused", "needs": "chrome"}
-{"result": "failed", "reason": "<one line: what went wrong, for the person to apply by hand>"}
+{"result": "paused", "needs": "chrome", "connected": "Browser 1 (macOS), Browser 2 (macOS)"}
+{"result": "failed", "reason": "<one line: what went wrong, for the person to apply by hand>", "browser": <the browser>}
 ```
 
 The `company_site` address is the company's own, never a LinkedIn one. Report `failed` only

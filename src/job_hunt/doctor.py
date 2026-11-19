@@ -1,9 +1,11 @@
 """`hunt doctor`: what the hunt needs, one line each, ok or what is missing and how to add it.
 
-The checks call no model. Claude Code's sign-in is `claude auth status`; the Gmail connector is
-its line in `claude mcp list`; Claude in Chrome is its native messaging host, which the
-extension installs, and the `claude --chrome-native-host` process Chrome starts while the
-extension is connected. Chrome Remote Desktop, for solving a paused application from the phone,
+The checks call no model but one. Claude Code's sign-in is `claude auth status`; the Gmail
+connector is its line in `claude mcp list`; Claude in Chrome is its native messaging host, which
+the extension installs, and the `claude --chrome-native-host` process Chrome starts while the
+extension is connected, then the browsers the account has connected, listed by one short
+`claude --chrome -p` on Haiku allowed only the listing tool: the workers use only this
+computer's Chrome, so exactly one of them must be on this computer. Chrome Remote Desktop, for solving a paused application from the phone,
 is optional: its host installed and turned on for this computer. The account's email is never
 printed.
 """
@@ -19,12 +21,24 @@ from pathlib import Path
 from typing import Literal
 
 from job_hunt.career import CareerError, career_from_resume, read_career
+from job_hunt.finder import ONLY_NAMED_TOOLS
 from job_hunt.settings import SettingsError, read_settings
 
 NATIVE_HOST = "com.anthropic.claude_code_browser_extension.json"
 EXTENSION = "https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn"
 CONNECTORS = "claude.ai/settings/connectors"
 REMOTE_DESKTOP = "https://remotedesktop.google.com/access"
+BROWSER_MODEL = "claude-haiku-5-5"
+LIST_BROWSERS = "mcp__claude-in-chrome__list_connected_browsers"
+# The model only copies the tool's answer: which browser is this computer's is decided below.
+LIST_PROMPT = (
+    "Call list_connected_browsers once and do nothing else. Reply with only one JSON list, no other "
+    'text: one object for each browser it lists, {"name": its display name, "system": its OS platform, '
+    '"isLocal": its isLocal, "onThisComputer": its onThisComputer, or null when it does not give one}, '
+    "the values exactly as the tool gave them. With no browser connected, reply []."
+)
+# How each system names itself in the browser listing, in lower case.
+SYSTEM_NAMES = {"Linux": ("linux",), "Darwin": ("mac", "darwin", "os x"), "Windows": ("windows",)}
 
 Run = Callable[[list[str]], "subprocess.CompletedProcess[str] | None"]
 State = Literal["ok", "missing", "optional"]
@@ -103,7 +117,55 @@ def _chrome(machine: Machine) -> Line:
     if running is None or running.returncode != 0:
         return Line("chrome", "missing", "Claude in Chrome is not connected: open Chrome and click the Claude "
                     "extension once, signed in to the same Claude account")
-    return Line("chrome", "ok", "Claude in Chrome, connected")
+    browsers = _connected_browsers(machine)
+    if browsers is None:
+        return Line("chrome", "missing", "Claude in Chrome did not say which browsers are connected: open Chrome on "
+                    "this computer, click the Claude extension once, then run hunt doctor again")
+    here = [browser for browser in browsers if _could_be_here(browser, machine.system)]
+    others = ", ".join(_named(browser) for browser in browsers if browser not in here)
+    if not here:
+        return Line("chrome", "missing", "Claude in Chrome is not connected in this computer's Chrome"
+                    + (f" (connected: {others}; workers never use them)" if others else "")
+                    + ": open Chrome on this computer, click the Claude extension and sign it in to the same "
+                    "Claude account")
+    if len(here) > 1:
+        return Line("chrome", "missing", "more than one connected Chrome could be this computer's ("
+                    + ", ".join(map(_named, here)) + "), so the workers use none: keep the Claude extension "
+                    "connected in one Chrome on this computer and sign it out in the others")
+    name, system = here[0]["name"], here[0]["system"]
+    return Line("chrome", "ok", f"Claude in Chrome, connected in this computer's Chrome ({name}, {system})"
+                + (f"; also connected: {others}; workers never use them" if others else ""))
+
+
+def _connected_browsers(machine: Machine) -> list[dict] | None:
+    """The account's connected browsers, or None when the listing cannot be read."""
+    done = machine.run(["claude", "--chrome", "-p", LIST_PROMPT, "--model", BROWSER_MODEL, *ONLY_NAMED_TOOLS,
+                        "--allowedTools", LIST_BROWSERS])
+    if done is None or done.returncode != 0:
+        return None
+    text = done.stdout.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    try:
+        browsers = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(browsers, list) or not all(
+            isinstance(browser, dict) and isinstance(browser.get("name"), str)
+            and isinstance(browser.get("system"), str) for browser in browsers):
+        return None
+    return browsers
+
+
+def _could_be_here(browser: dict, system: str) -> bool:
+    """On this computer by the tool's word; without that word, local by the tool's weaker hint and of
+    this computer's system. Two that could be leave the workers none."""
+    if browser.get("onThisComputer") is not None:
+        return browser["onThisComputer"] is True
+    names = SYSTEM_NAMES.get(system, (system.lower(),))
+    return browser.get("isLocal") is True and any(name in browser["system"].lower() for name in names)
+
+
+def _named(browser: dict) -> str:
+    return f"{browser['name']} ({browser['system']})"
 
 
 def _gmail(machine: Machine) -> Line:

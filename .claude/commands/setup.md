@@ -28,6 +28,10 @@ other line marked `missing`, one at a time, say what to do in the doctor's words
 "done", then run the doctor again. A fix that is a command the person must run themselves
 (`claude auth login`), they type in this chat with `!` in front: `! claude auth login`.
 
+Say once, with the Chrome line: "The hunt uses only the Chrome on this computer, never a Chrome
+on another computer your Claude account is connected to. Sign in to LinkedIn and the job sites
+in this computer's Chrome." The doctor's Chrome line names the other browsers it saw.
+
 ## 2. The resume
 
 Done when the doctor says `ok` for `data/career.json`. Otherwise ask: "Send me your resume: the

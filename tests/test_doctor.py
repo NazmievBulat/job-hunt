@@ -1,7 +1,8 @@
 """`hunt doctor`: one line for each thing the hunt needs, ok or what is missing and how to add it.
 
 Every check looks at a stand-in machine: the commands it runs (`claude auth status`,
-`claude mcp list`, `pgrep`) are answered by a fake runner, the home and the root are temporary
+`claude mcp list`, `pgrep`, the short `claude --chrome -p` that lists the connected browsers) are
+answered by a fake runner, the home and the root are temporary
 folders. Nothing real is run or read."""
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from job_hunt.career import career_from_resume, write_career
-from job_hunt.doctor import NATIVE_HOST, Machine, doctor, remote_desktop_ready
+from job_hunt.doctor import BROWSER_MODEL, LIST_BROWSERS, NATIVE_HOST, Machine, doctor, remote_desktop_ready
 
 SIGNED_IN = {"loggedIn": True, "authMethod": "claude.ai", "email": "ada@example.com", "subscriptionType": "pro"}
 MCP_LIST = """Checking MCP server health...
@@ -26,6 +27,20 @@ SETTINGS = {"titles": ["QA Engineer"], "areas": ["New York City"], "remote": "in
 DRAFT = {"person": {"name": "Ada Example", "email": "ada@example.com"},
          "jobs": [{"title": "QA Engineer", "company": "Acme", "start_date": "2020-01", "end_date": None,
                    "material": ["Wrote the tests."]}]}
+
+
+HERE = {"Linux": "Linux", "Darwin": "macOS"}
+WORK_MAC = {"name": "Browser 1", "system": "macOS", "isLocal": False, "onThisComputer": False}
+HOME_MAC = {"name": "Browser 2", "system": "macOS", "isLocal": False, "onThisComputer": False}
+
+
+def this_computers(system: str = "Linux", name: str = "Browser 3") -> dict:
+    return {"name": name, "system": HERE[system], "isLocal": True, "onThisComputer": True}
+
+
+def listed(*browsers: dict) -> tuple[int, str]:
+    """What the listing run prints: the browsers as one JSON list, as its prompt asks."""
+    return 0, json.dumps(list(browsers))
 
 
 class Runner:
@@ -56,7 +71,8 @@ def everything_ready(tmp_path: Path, system: str = "Linux") -> tuple[Machine, Ru
     data.mkdir()
     write_career(career_from_resume(DRAFT), data / "career.json")
     (data / "settings.json").write_text(json.dumps(SETTINGS))
-    runner = Runner(claude_auth=(0, json.dumps(SIGNED_IN)), claude_mcp=(0, MCP_LIST), pgrep__f=(0, "4242\n"))
+    runner = Runner(claude_auth=(0, json.dumps(SIGNED_IN)), claude_mcp=(0, MCP_LIST), pgrep__f=(0, "4242\n"),
+                    claude___chrome=listed(this_computers(system)))
     machine = Machine(
         system=system, home=home, root=root, data=data, python=(3, 14), run=runner,
         which=lambda name: f"/usr/bin/{name}" if name in ("claude", "uv") else None,
@@ -157,6 +173,93 @@ def test_chrome_with_the_extension_but_not_connected_says_to_open_it(tmp_path: P
 
     assert said.startswith("missing: Claude in Chrome is not connected")
     assert ["pgrep", "-f", "chrome-native-host"] in runner.commands
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_one_browser_on_this_computer_is_ok_and_named(tmp_path: Path, system: str) -> None:
+    machine, _ = everything_ready(tmp_path, system)
+
+    said = lines(machine)["chrome"]
+
+    assert said == f"ok: Claude in Chrome, connected in this computer's Chrome (Browser 3, {HERE[system]})"
+
+
+def test_other_computers_browsers_are_named_and_never_used(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    runner.answers["claude___chrome"] = listed(WORK_MAC, this_computers(), HOME_MAC)
+
+    said = lines(machine)["chrome"]
+
+    assert said == ("ok: Claude in Chrome, connected in this computer's Chrome (Browser 3, Linux); also connected: "
+                    "Browser 1 (macOS), Browser 2 (macOS); workers never use them")
+
+
+def test_only_other_computers_browsers_is_missing_with_what_to_do(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    runner.answers["claude___chrome"] = listed(WORK_MAC, HOME_MAC)
+
+    said = lines(machine)["chrome"]
+
+    assert said.startswith("missing: Claude in Chrome is not connected in this computer's Chrome")
+    assert "Browser 1 (macOS), Browser 2 (macOS)" in said
+    assert "open Chrome on this computer, click the Claude extension" in said
+    assert "same Claude account" in said
+
+
+def test_two_browsers_that_could_be_this_computers_are_missing(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    runner.answers["claude___chrome"] = listed(this_computers(name="Browser 3"), this_computers(name="Browser 4"))
+
+    said = lines(machine)["chrome"]
+
+    assert said.startswith("missing: more than one connected Chrome could be this computer's")
+    assert "Browser 3 (Linux), Browser 4 (Linux)" in said
+
+
+def test_without_on_this_computer_the_one_local_browser_of_this_system_counts(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    unsure = {"name": "Browser 3", "system": "Linux", "isLocal": True, "onThisComputer": None}
+    runner.answers["claude___chrome"] = listed(unsure, {**WORK_MAC, "onThisComputer": None})
+    assert lines(machine)["chrome"].startswith("ok: Claude in Chrome, connected in this computer's Chrome (Browser 3")
+
+    # Local by its system alone, two of them: either could be another computer of the same system.
+    runner.answers["claude___chrome"] = listed(unsure, {**unsure, "name": "Browser 4"})
+    assert lines(machine)["chrome"].startswith("missing: more than one connected Chrome could be")
+
+    # Said to be local, but of another system than this computer's: not this computer.
+    runner.answers["claude___chrome"] = listed({**unsure, "system": "macOS"})
+    assert lines(machine)["chrome"].startswith("missing: Claude in Chrome is not connected in this computer's")
+
+
+@pytest.mark.parametrize("answer", [None, (1, "error"), (0, "I could not list them."), (0, '{"browsers": 3}')])
+def test_a_listing_that_cannot_be_read_is_missing(tmp_path: Path, answer: tuple[int, str] | None) -> None:
+    machine, runner = everything_ready(tmp_path)
+    runner.answers["claude___chrome"] = answer
+
+    said = lines(machine)["chrome"]
+
+    assert said.startswith("missing: Claude in Chrome did not say which browsers are connected")
+
+
+def test_the_listing_runs_on_haiku_allowed_only_the_listing_tool(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+
+    lines(machine)
+
+    [command] = [command for command in runner.commands if command[:2] == ["claude", "--chrome"]]
+    assert command[command.index("--model") + 1] == BROWSER_MODEL == "claude-haiku-5-5"
+    assert command[command.index("--allowedTools") + 1] == LIST_BROWSERS
+    assert LIST_BROWSERS == "mcp__claude-in-chrome__list_connected_browsers"
+    assert command[command.index("--permission-mode") + 1] == "dontAsk"
+
+
+def test_the_listing_is_not_run_while_the_native_host_is_not_running(tmp_path: Path) -> None:
+    machine, runner = everything_ready(tmp_path)
+    runner.answers["pgrep__f"] = (1, "")
+
+    lines(machine)
+
+    assert not [command for command in runner.commands if command[:2] == ["claude", "--chrome"]]
 
 
 def test_chromium_counts_as_chrome(tmp_path: Path) -> None:

@@ -334,12 +334,16 @@ class JobsList:
         # Bound, not `picked_at = updated_at`, which reads the row as it was before this update.
         decision += ", picked_at = ?" if state == "picked" else ""
         now = self._stamp()
-        self._db.execute(
+        # Only from the state read: another connection (`hunt skip` from the chat, a run starting
+        # the job) may have moved it between that read and this write.
+        moved = self._db.execute(
             f"UPDATE jobs SET state = ?, state_reason = ?, updated_at = ?, not_before = NULL, asked = 0{decision}"
-            " WHERE id = ?",
+            " WHERE id = ? AND state = ?",
             (state, reason, now, *((state,) if state in ("picked", "skipped") else ()),
-             *((now,) if state == "picked" else ()), job),
+             *((now,) if state == "picked" else ()), job, start),
         )
+        if moved.rowcount != 1:
+            raise MoveError(f"job {job} moved meanwhile from {start}, to {self.get(job).state}")
 
     def fail(self, job: int, reason: str) -> State:
         """Count a worker's failure against the job and return its state now: `failed` with the

@@ -543,7 +543,8 @@ def _morning(args: argparse.Namespace) -> int:
                       start=lambda: start_session(ROOT), running=session_running, threads=Threads(DATA / "jobs.db"),
                       draft=draft_step, notes=Notes(DATA / "jobs.db"), notes_daily=notes_daily(),
                       draft_notes=draft_notes_step, pick=pick_step,
-                      auto_from=plan.auto_from if (plan := day_plan()) is not None else None))
+                      auto_from=plan.auto_from if (plan := day_plan()) is not None else None,
+                      tell=lambda: tell_session(ROOT, text=TELL_JOBS)))
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         # Today's session did not start, so the next morning's questions tell it.
         log_failure(DATA, "hunt morning", error, lambda: datetime.now(UTC))

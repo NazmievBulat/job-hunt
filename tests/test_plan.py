@@ -7,16 +7,18 @@ No model, no network and no browser: the workers are stand-ins, and the clock is
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from job_hunt import cli
-from job_hunt.apply import LINKEDIN_SKILL, RESUME_SKILL, SITE_SKILL, apply
-from job_hunt.jobs import JobsList
+from job_hunt.apply import LINKEDIN_SKILL, NAP, RESUME_SKILL, SITE_SKILL, apply
+from job_hunt.jobs import JobsList, MoveError
 from job_hunt.plan import MOST_GAP, RESUME_WORKERS, Plan, auto_pick, gap, order, room, today
 from movable_clock import MovableClock
 # The fixtures `project` and `jobs` too: a made-up person's project folder and its jobs list.
@@ -131,6 +133,49 @@ def test_a_job_skipped_while_others_are_applied_to_is_not_started(jobs: JobsList
 
     _apply(jobs, project, Plan(site_workers=1), site=run)
     assert sites.ran == [one]
+
+
+def _between_read_and_move(jobs: JobsList, to: str, other: Callable[[int], None]) -> None:
+    """Make `other` run once, from another connection, after `jobs` read a job's state to move it
+    to `to` and before it writes the move."""
+    read = jobs.get
+    done: list[int] = []
+
+    def get(job: int):  # type: ignore[no-untyped-def]
+        found = read(job)
+        caller = sys._getframe(1)
+        if caller.f_code.co_name == "_move" and caller.f_locals.get("state") == to and not done:
+            done.append(job)
+            other(job)
+        return found
+
+    jobs.get = get  # type: ignore[method-assign]
+
+
+@pytest.mark.parametrize("kind", ["company_site", "easy_apply"])
+def test_a_skip_between_the_starts_read_and_its_move_keeps_the_job_skipped(
+        jobs: JobsList, project: Path, kind: str) -> None:
+    one, two = _picked(jobs, 1, kind=kind), _picked(jobs, 2, kind=kind)
+    # `hunt skip`, from the chat, with its own connection, as the run starts the first job.
+    _between_read_and_move(jobs, "applying",
+                           lambda job: JobsList(project / "data" / "jobs.db").move(job, "skipped"))
+    worker = Sites(project, skill=LINKEDIN_SKILL if kind == "easy_apply" else SITE_SKILL)
+    _apply(jobs, project, Plan(), site=worker, linkedin=worker)
+    skipped = one if jobs.get(one).state == "skipped" else two
+    assert jobs.get(skipped).state == "skipped"
+    # The other one is still applied to, by the same run.
+    assert worker.ran == [two if skipped == one else one]
+
+
+def test_a_start_between_the_skips_read_and_its_move_refuses_the_skip(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1)
+    jobs.move(job, "resume_ready")
+    chat = JobsList(project / "data" / "jobs.db")
+    # The run starts the application after the skip read the job as ready.
+    _between_read_and_move(chat, "skipped", lambda job: jobs.move(job, "applying"))
+    with pytest.raises(MoveError, match="moved meanwhile"):
+        chat.move(job, "skipped")
+    assert jobs.get(job).state == "applying"
 
 
 # The plan's limits.
@@ -296,6 +341,31 @@ def test_a_paused_job_put_back_while_the_run_goes_on_is_taken_by_it(jobs: JobsLi
     _apply(jobs, project, Plan(), site=run)
     assert sites.ran == [other, paused]
     assert jobs.get(paused).state == "applied"
+
+
+def test_a_job_going_on_in_its_tab_put_back_during_the_spreads_wait_starts_within_a_minute(
+        jobs: JobsList, project: Path) -> None:
+    clock = _clock(jobs)
+    paused = _picked(jobs, 1)
+    _apply(jobs, project, Plan(), site=Sites(project, {
+        paused: [{"result": "paused", "needs": "question", "question": "Visa?", "tab": "Acme"}]}))
+    one, two = _picked(jobs, 2), _picked(jobs, 3)
+    started: dict[int, datetime] = {}
+    sites = Sites(project, {paused: [{"result": "applied"}]})
+    waiting = Waiting(clock)
+
+    def nap(seconds: float) -> None:
+        waiting(seconds)
+        if clock.now >= MORNING + timedelta(minutes=1) and jobs.get(paused).state == "paused":
+            # The answer, from the chat: `hunt answer`, with its own connection.
+            JobsList(project / "data" / "jobs.db", clock=clock).move(paused, "resume_ready")
+
+    apply(jobs, project, run_resume=Resumes(project), run_site=_started(clock, sites, started, SITE_SKILL),
+          run_linkedin=no_linkedin, linkedin=_no_pause(project), sleep=nap, plan=Plan())
+    # The first pick waits 15 minutes for the spread; the job answered a minute in does not.
+    assert started[paused] <= MORNING + timedelta(minutes=2)
+    assert started[paused] < started[one] < started[two]
+    assert max(waiting.slept) <= NAP
 
 
 def test_a_ready_job_with_no_way_to_apply_known_ends_the_run(jobs: JobsList, project: Path) -> None:
@@ -560,6 +630,21 @@ def test_the_picks_by_score_are_told_once_numbered_for_skip_and_ask_nothing(jobs
     assert anything_waiting(jobs, data) is True
 
 
+def test_unfinished_applications_are_not_asked_while_a_hunt_apply_runs(jobs: JobsList, project: Path) -> None:
+    import fcntl
+
+    from job_hunt.questions import questions
+
+    data = project / "data"
+    _picked(jobs, 1)
+    (project / "jobs").mkdir(exist_ok=True)
+    # A run spread over the day holds the lock until the summary hour, and takes the job itself.
+    with (project / "jobs" / "apply.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert "Unfinished applications" not in questions(jobs, data)
+    assert "Unfinished applications (1): run hunt apply" in questions(jobs, data)
+
+
 def test_the_morning_run_picks_by_score_also_with_nothing_new(jobs: JobsList, project: Path) -> None:
     from job_hunt.morning import morning
 
@@ -572,6 +657,32 @@ def test_the_morning_run_picks_by_score_also_with_nothing_new(jobs: JobsList, pr
     assert picks == ["1 jobs picked by their score"]
     assert jobs.get(left).state == "picked"
     assert said.startswith("Started the job-hunt session")
+
+
+def test_jobs_picked_by_a_later_morning_run_are_told_once_to_the_running_session(
+        jobs: JobsList, project: Path) -> None:
+    from job_hunt.morning import morning
+
+    data = project / "data"
+    told: list[str] = []
+
+    def noon() -> str:
+        return morning(jobs, data, find=lambda: None, score=lambda: None, start=lambda: told.append("started"),
+                       running=lambda: True, clock=_clock(jobs), pick=lambda: auto_pick(jobs, Plan(auto_from=7)),
+                       tell=lambda: told.append("told"), auto_from=7)
+
+    _scored(jobs, 1, 9)
+    noon()
+    # The day's first run started today's session; the morning's applications ended since.
+    assert told == ["started"]
+    for job in jobs.in_states("picked"):
+        jobs.move(job.id, "skipped")
+    _scored(jobs, 2, 9), _scored(jobs, 3, 8)
+    assert noon() == "The job-hunt session already runs: told it of 2 jobs picked by their score."
+    assert told == ["started", "told"]
+    # Not told again for the same picks.
+    assert noon().startswith("The job-hunt session already runs: it asks")
+    assert told == ["started", "told"]
 
 
 def _settings(project: Path, **plan: object) -> None:
@@ -627,6 +738,14 @@ def test_hunt_morning_picks_by_the_settings_score_and_hunt_skip_leaves_one_out(
     assert cli.main(["list"]) == 0
     assert capsys.readouterr().out.startswith(
         "Applying to 1 job today (score 8 and up). Reply skip 3 12 to leave some out.\n 1. 10  QA Engineer 2")
+    # The noon run picks one more while today's session runs: it is told, to run hunt questions.
+    told: list[str] = []
+    monkeypatch.setattr(cli, "session_running", lambda: True)
+    monkeypatch.setattr(cli, "tell_session", lambda root, text: told.append(text))
+    _scored(hunt, 4, 9)
+    assert cli.main(["morning"]) == 0
+    assert told == [cli.TELL_JOBS]
+    assert capsys.readouterr().out == "The job-hunt session already runs: told it of 1 job picked by their score.\n"
 
 
 def test_hunt_settings_keeps_the_days_plan_it_was_not_given(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:

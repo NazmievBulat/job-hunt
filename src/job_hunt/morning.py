@@ -88,7 +88,10 @@ def morning(
     draft_notes: Callable[[], object] | None = None,
     pick: Callable[[], object] | None = None,
     auto_from: int | None = None,
+    tell: Callable[[], object] | None = None,
 ) -> str:
+    """`tell` has today's running session run `hunt questions`: the jobs a later run picks by
+    their score are applied to once it does, also when the morning's `hunt apply` has ended."""
     # The person's own day: the computer's clock, not UTC.
     today = clock().astimezone().date().isoformat()
     marked = data / "morning-day"
@@ -105,12 +108,14 @@ def morning(
             score()
         except Exception as error:
             log_failure(data, "hunt score", _said(error), clock)
+    picked = {job.id for job in jobs.in_states("picked")}
     if pick is not None:
         # Also with nothing new: jobs left over above the score are picked for a new day.
         try:
             pick()
         except Exception as error:
             log_failure(data, "hunt pick by score", _said(error), clock)
+    picked = {job.id for job in jobs.in_states("picked")} - picked
     if draft is not None and threads is not None and threads.in_states("new"):
         try:
             draft()
@@ -126,6 +131,14 @@ def morning(
     if not anything_waiting(jobs, data, threads, notes, notes_daily, auto_from=auto_from):
         return "Nothing new and nothing waiting: no session started."
     if not first and running():
+        if picked and tell is not None:
+            try:
+                tell()
+            except Exception as error:
+                log_failure(data, "hunt morning, telling the session", _said(error), clock)
+            else:
+                count = f"{len(picked)} jobs" if len(picked) > 1 else "1 job"
+                return f"The {SESSION} session already runs: told it of {count} picked by their score."
         return f"The {SESSION} session already runs: it asks for anything new at its next hunt questions."
     start()
     return f"Started the {SESSION} session: tmux attach -t {SESSION}, or the Claude app's Remote Control."

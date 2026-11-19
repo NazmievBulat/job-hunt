@@ -33,7 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from job_hunt.apply import NEEDS, UNSURE
+from job_hunt.apply import NEEDS, UNSURE, apply_running
 from job_hunt.jobs import Job, JobsList
 
 if TYPE_CHECKING:
@@ -262,7 +262,8 @@ def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes:
     failures = _lines(log[told:])
     if failures:
         parts.append("\n".join(["The morning run had a problem:", *map(_failure, failures)]))
-    left = unfinished(jobs)
+    # A `hunt apply` running, all day when spread, takes them itself: nothing to start.
+    left = unfinished(jobs) if not apply_running(data.parent) else []
     if left:
         parts.append("\n".join([f"Unfinished applications ({len(left)}): run hunt apply", *(
             f"  {job.id}. {job.title} at {job.company}" for job in left)]))

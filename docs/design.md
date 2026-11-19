@@ -157,7 +157,11 @@ Without it the job waits until the user is at the computer, and the other jobs g
    worker takes the Easy Apply picks one after another, three to six minutes apart, up to its
    daily number. Up to `site_workers` company-site workers take the rest at once. Past the
    day's number, LinkedIn's, or the summary hour, a job waits for the next morning. A job
-   resumed in the tab it paused in is the same application and is never held.
+   resumed in the tab it paused in is the same application and is never held: the run looks
+   for jobs put back at least once a minute, also while it waits for the spread. Jobs a later
+   run (12:00, 16:00) picks by their score are taken by the run still going, or, when it has
+   ended, the running session is told once and starts `hunt apply` for them. While a run
+   holds `jobs/apply.lock`, `hunt questions` asks nothing about unfinished applications.
 7. **Paused jobs.** A CAPTCHA, a site that needs an account, or a form question the career
    file cannot answer pauses that one job. The session says what is needed and in which Chrome
    tab, and the other jobs go on. The user replies "done" or gives the answer; an answer to a

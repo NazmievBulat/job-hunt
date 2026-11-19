@@ -57,7 +57,7 @@ from urllib.parse import urlsplit
 
 from job_hunt.career import career_lock, read_career, write_career
 from job_hunt.finder import ONLY_NAMED_TOOLS
-from job_hunt.jobs import CAPTCHA_ASKS, Job, JobsList, State
+from job_hunt.jobs import CAPTCHA_ASKS, Job, JobsList, MoveError, State
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.plan import LINKEDIN_HOST, RESUME_WORKERS, Plan, applied_lately, gap, midnight, order, started_today
 from resume_kit.contracts.form_answers import asks_self_identification
@@ -87,6 +87,9 @@ RETRY_AFTER = timedelta(hours=3)
 CAPTCHA_FAILED = "the site asks for a CAPTCHA"
 HOST_SPACING = timedelta(minutes=10)
 HOST_DAILY = 6
+# The longest the run waits without looking for jobs put back meanwhile: an answered job or a
+# solved CAPTCHA goes on in its tab within it, not after the spread's 15 minutes.
+NAP = 60.0
 
 Run = Callable[[list[str]], None]
 
@@ -451,7 +454,9 @@ def _spread(this: _Run, waiting: int) -> float | None:
     starts = this.jobs.started_since(midnight(now))
     if not starts:
         return None
-    left = (max(starts.values()) + gap(this.plan, now, min(waiting, this.plan.daily - len(starts))) - now)
+    # From the last start, the day shared as it was then: rechecked each nap, it stays put.
+    last = max(starts.values())
+    left = last + gap(this.plan, last, min(waiting, this.plan.daily - len(starts))) - now
     return left.total_seconds() if left > timedelta(0) else None
 
 
@@ -508,16 +513,21 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         for skill, line in waiting.items():
             waiting[skill] = [job.id for job in order([jobs.get(job) for job in line])]
 
-    def start(job: int, run: Run) -> None:
+    def start(job: int, run: Run) -> bool:
+        """Start the job's worker; False when the job was moved meanwhile (skipped from the chat)."""
         skill = _skill(jobs.get(job))
         report = _folder(root, job) / "report.json"
         paused = _paused(report, skill)
         # Gone before the job is `applying`: a run stopped in between must not take an
         # earlier try's report for this one's.
         report.unlink(missing_ok=True)
-        jobs.move(job, "applying")
+        try:
+            jobs.move(job, "applying")
+        except MoveError:
+            return False
         jobs.started_on(host(jobs.get(job)) if skill == SITE_SKILL else LINKEDIN_HOST, job)
         running[pool.submit(_apply_one, jobs.get(job), root, run, paused)] = (job, skill)
+        return True
 
     # The jobs list is written here only, on this thread; the workers run the skills.
     try:
@@ -533,8 +543,7 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
                     if chosen is None:
                         break
                     waiting[SITE_SKILL].remove(chosen)
-                    start(chosen, run_site)
-                    busy += 1
+                    busy += start(chosen, run_site)
                 return site_later
 
             def linkedin_one() -> float | None:
@@ -550,8 +559,10 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
                             later := _spread(this, sum(map(len, waiting.values())))) is not None:
                         return later
                     later = linkedin.take(in_line[0])
-                    if later is None:
-                        start(in_line.pop(0), run_linkedin)
+                    if later is None and not start(in_line.pop(0), run_linkedin):
+                        # Skipped as it started: the lock goes back, and the next one waits the pause.
+                        linkedin.release()
+                        continue
                     return later
                 return None
 
@@ -572,9 +583,10 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
                     if jobs.in_states("picked"):
                         return True
                     if later is not None:
-                        sleep(later)
+                        sleep(min(later, NAP))
                     continue
-                done, _ = wait(running, timeout=later, return_when=FIRST_COMPLETED)
+                done, _ = wait(running, timeout=min(later, NAP) if later is not None else NAP,
+                               return_when=FIRST_COMPLETED)
                 for future in done:
                     job, skill = running.pop(future)
                     if skill == LINKEDIN_SKILL:
@@ -589,6 +601,22 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         # A run stopped while the LinkedIn worker applied still starts the pause, once the
         # worker ended.
         linkedin.release()
+    return False
+
+
+def apply_running(root: Path) -> bool:
+    """Whether a `hunt apply` holds its lock now: a run spread over the day takes the jobs ready
+    meanwhile itself."""
+    path = root / "jobs" / "apply.lock"
+    if not path.exists():
+        return False
+    with path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        # Let go at once: a run starting now must not find it held.
+        fcntl.flock(lock, fcntl.LOCK_UN)
     return False
 
 

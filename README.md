@@ -1,8 +1,9 @@
 # job-hunt
 
 A job-search assistant that runs on [Claude Code](https://claude.com/claude-code) with your own
-Claude subscription. Each morning it reads your job alert emails, scores the new jobs against
-your career, and sends you one numbered list. You reply with the ones you want ("apply 1 3 4"),
+Claude subscription. Each morning, and again at noon and at four, it reads your job alert
+emails and searches LinkedIn and the public job boards of every company it knows itself,
+scores the new jobs against your career, and sends you one numbered list. You reply with the ones you want ("apply 1 3 4"),
 and it writes a resume for each and applies through your own Chrome. It pauses for what needs
 you: a CAPTCHA, a site sign-in, a question it cannot answer. Every 20 minutes during the day it
 looks for recruiters' messages, by email and on LinkedIn, and drafts a reply for you to send.

@@ -142,6 +142,23 @@ def test_hunt_settings_keeps_the_working_hours_and_the_time_zone_it_was_not_give
     assert read_settings(tmp_path / "settings.json").working_hours == (8, 12)
 
 
+def test_hunt_settings_keeps_the_companies_added_by_hand(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({
+        "titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6,
+        "companies": ["https://jobs.lever.co/example"]}))
+    given = {"titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 7}
+
+    assert cli.main(["settings", json.dumps(given)]) == 0
+    assert read_settings(tmp_path / "settings.json").companies == ["https://jobs.lever.co/example"]
+    # Given anew, they are what was given.
+    assert cli.main(["settings", json.dumps({**given, "companies": []})]) == 0
+    assert read_settings(tmp_path / "settings.json").companies == []
+
+
 def test_hunt_settings_refuses_settings_it_cannot_read_and_keeps_the_old_ones(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from job_hunt import cli

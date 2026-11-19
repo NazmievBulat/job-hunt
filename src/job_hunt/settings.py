@@ -9,7 +9,8 @@
      "working_hours": {"start": 9, "end": 17},
      "time_zone": "America/New_York",
      "linkedin_notes_daily": 15,
-     "pushover": {"token": "...", "user": "..."}}
+     "pushover": {"token": "...", "user": "..."},
+     "companies": ["https://jobs.lever.co/example"]}
 
 Areas are names as a person says them, never distances; the finder's skill says which of them
 a job is in. `remote` is `include` (remote jobs too), `exclude` (no remote jobs) or `only`.
@@ -20,6 +21,12 @@ how many notes to hiring managers go out a day (`notes`), may be left out (15); 
 and more than 15 is refused, to keep the LinkedIn account safe. `pushover`, the keys `hunt
 notify` pushes the chat's questions
 with, may be left out; they are never printed.
+
+`hunt find` reads the alert emails and also searches the sites itself: LinkedIn signed out, and
+the public job boards (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable) of every
+company in `data/companies.db`, which fills itself from Common Crawl. `companies`, which may be
+left out, adds companies by hand: each the address of the company's board on one of those
+systems.
 """
 
 from __future__ import annotations
@@ -30,10 +37,12 @@ from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from job_hunt.companies import board_of
+
 Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
-OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover", "linkedin_notes_daily")
+OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover", "linkedin_notes_daily", "companies")
 SUMMARY_HOUR = 18
 WORKING_HOURS = (9, 17)
 NOTES_DAILY = 15
@@ -61,6 +70,7 @@ class Settings:
     working_hours: tuple[int, int] = WORKING_HOURS
     time_zone: str | None = None
     linkedin_notes_daily: int = NOTES_DAILY
+    companies: list[str] = field(default_factory=list)
 
 
 def _names(data: dict[str, Any], field: str) -> list[str]:
@@ -114,6 +124,16 @@ def _time_zone(data: dict[str, Any]) -> str | None:
     except (ZoneInfoNotFoundError, ValueError):
         pass
     raise SettingsError(f"time_zone must be a zone's name such as America/New_York, not {name!r}")
+def _companies(data: dict[str, Any]) -> list[str]:
+    links = data.get("companies", [])
+    if not isinstance(links, list) or not all(isinstance(link, str) and link.strip() for link in links):
+        raise SettingsError("companies must be a list of job board addresses, or left out")
+    for link in links:
+        if board_of(link) is None:
+            raise SettingsError(
+                f"companies has {link.strip()!r}, which is not a Greenhouse, Lever, Ashby, Workday, SmartRecruiters "
+                "or Workable board address")
+    return [link.strip() for link in links]
 
 
 def read_settings(path: Path) -> Settings:
@@ -158,4 +178,5 @@ def read_settings(path: Path) -> Settings:
         working_hours=_working_hours(data),
         time_zone=_time_zone(data),
         linkedin_notes_daily=notes_daily,
+        companies=_companies(data),
     )

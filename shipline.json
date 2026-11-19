@@ -2,5 +2,6 @@
   "repository": "NazmievBulat/job-hunt",
   "commands": {
     "test": "uv run --frozen pytest -q -p no:cacheprovider"
-  }
+  },
+  "answer_for_owner_after_minutes": 1
 }

@@ -54,19 +54,21 @@ class FakeSkill:
         out.write_text(self.scores if isinstance(self.scores, str) else json.dumps(self.scores))
 
 
-def test_the_skill_reads_only_the_job_folders_and_the_career_and_writes_only_its_file(project: Path) -> None:
-    command = skill_command([{"id": 3, "posting": "jobs/3/posting.md"}], project)
+def test_the_skill_reads_only_the_postings_sent_and_the_career_and_writes_only_its_file(project: Path) -> None:
+    postings = [str(project / "jobs" / "3" / "posting.md"), str(project / "jobs" / "5" / "posting.md")]
+    command = skill_command([{"id": 3, "posting": postings[0]}, {"id": 5, "posting": postings[1]}], project)
     assert command[:2] == ["claude", "-p"]
     arguments = json.loads(command[2].removeprefix(f"/{SKILL} "))
     assert arguments == {
-        "jobs": [{"id": 3, "posting": "jobs/3/posting.md"}],
+        "jobs": [{"id": 3, "posting": postings[0]}, {"id": 5, "posting": postings[1]}],
         "career": str(project / "data" / "career.json"),
         "out": str(project / "jobs" / "scores.json"),
     }
     assert command[command.index("--model") + 1] == MODEL == "claude-haiku-5-5"
     assert_only_named_tools(command)
+    # Not another job's folder, nor the recruiters' messages under jobs/replies.
     assert command[command.index("--allowedTools") + 1].split(",") == [
-        f"Read(/{project}/jobs/**)",
+        f"Read(/{postings[0]})", f"Read(/{postings[1]})",
         f"Read(/{project}/data/career.json)",
         f"Edit(/{project}/jobs/scores.json)",
     ]

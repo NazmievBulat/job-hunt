@@ -9,6 +9,7 @@ resume PDF or the report.
 from __future__ import annotations
 
 import json
+import shlex
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -128,7 +129,7 @@ def test_a_resume_worker_reads_only_its_folder_and_the_career_and_runs_only_the_
     folder, career = project / "jobs" / "12", project / "data" / "career.json"
     # Absolute: the run starts in an empty folder, not the project.
     assert json.loads(command[2].removeprefix(f"/{RESUME_SKILL} ")) == {
-        "job": 12, "folder": str(folder), "career": str(career)}
+        "job": 12, "folder": str(folder), "career": str(career), "build": f"uv run hunt resume {folder}"}
     assert command[command.index("--model") + 1] == MODEL
     assert_only_named_tools(command)
     assert command[command.index("--allowedTools") + 1].split(",") == [
@@ -821,6 +822,15 @@ def test_a_resume_worker_may_build_only_its_own_jobs_resume(project: Path) -> No
     tools = resume_command(1, project)[resume_command(1, project).index("--allowedTools") + 1].split(",")
     # A rule ending in `:*` would let job 1's worker build, and overwrite, job 12's resume too.
     assert [tool for tool in tools if tool.startswith("Bash(")] == [f"Bash(uv run hunt resume {project}/jobs/1)"]
+
+
+def test_a_resume_worker_in_a_folder_with_a_space_builds_with_the_command_its_rule_names(tmp_path: Path) -> None:
+    root = tmp_path / "My Projects" / "job-hunt"
+    command = resume_command(3, root)
+    build = json.loads(command[2].removeprefix(f"/{RESUME_SKILL} "))["build"]
+    # One folder argument to the shell, and the very text the rule allows.
+    assert shlex.split(build) == ["uv", "run", "hunt", "resume", str(root / "jobs" / "3")]
+    assert f"Bash({build})" in command[command.index("--allowedTools") + 1].split(",")
 
 
 SENT_CHECK = {"result": "paused", "needs": "check_sent", "tab": "Thank you - Example Co 1", "tab_id": 7}

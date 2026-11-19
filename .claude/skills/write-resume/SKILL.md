@@ -7,7 +7,8 @@ description: Write the resume content for one job posting in a job folder, then 
 
 The job folder is the arguments' `folder`, and the career the arguments' `career`; without
 them, they are `jobs/<id>/` and `data/career.json`. Use these paths as they are given. The
-folder holds `posting.md`, the job description.
+folder holds `posting.md`, the job description. Read the files with the Read tool: the one
+shell command this work may run is the build below, and any other is refused.
 
 ## Write
 
@@ -48,7 +49,7 @@ Write `resume-content.json` in the job folder:
 
 ## Build
 
-Run `uv run hunt resume <the job folder>`, with the folder exactly as given. It prints the
-PDF's path when the resume is built. When it prints `resume-content.json needs a fix: …`, fix
-what it names and run it again, up to three times. Then reply with one line: the PDF's path, or
-the last error.
+Run the arguments' `build` command exactly as given, or `uv run hunt resume jobs/<id>` without
+it, even after another command was refused. It prints the PDF's path when the resume is built. When it prints `resume-content.json needs
+a fix: …`, fix what it names and run it again, up to three times. Then reply with one line: the
+PDF's path, or the last error.

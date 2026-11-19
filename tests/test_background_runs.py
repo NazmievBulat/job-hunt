@@ -7,7 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from job_hunt.finder import run_claude
+import pytest
+
+from job_hunt.finder import FinderError, run_claude
 
 ROOT = Path(__file__).parent.parent
 
@@ -55,3 +57,25 @@ def test_a_background_run_starts_in_an_empty_folder_of_the_project(tmp_path: Pat
     assert listed == []
     # Ignored, so nothing a run leaves there is committed.
     assert ".background/" in (ROOT / ".gitignore").read_text().splitlines()
+
+
+def test_a_run_folder_that_holds_a_file_starts_no_run(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    (project / ".background").mkdir(parents=True)
+    (project / ".background" / "career.json").write_text("{}")
+    started = tmp_path / "started"
+    with pytest.raises(FinderError, match="holds career.json, and it must be empty"):
+        run_claude([sys.executable, "-c", f"open({str(started)!r}, 'w')"], project, skill="look")
+    assert not started.exists()
+
+
+def test_only_run_claude_starts_a_program_in_a_working_folder_of_its_choosing() -> None:
+    # Any other process started with `cwd=` could be a background run started in the project.
+    found = []
+    for path in sorted((ROOT / "src" / "job_hunt").glob("*.py")):
+        tree = ast.parse(path.read_text())
+        for function in ast.walk(tree):
+            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                found += [(path.name, function.name) for node in ast.walk(function)
+                          if isinstance(node, ast.Call) and any(word.arg == "cwd" for word in node.keywords)]
+    assert found == [("finder.py", "run_claude")]

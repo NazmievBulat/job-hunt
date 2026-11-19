@@ -338,9 +338,12 @@ def run_claude(
     command: list[str], folder: Path, *, skill: str = SKILL, error: type[RuntimeError] = FinderError
 ) -> None:
     """Run a skill in the project `folder`'s run folder; a run that fails raises `error` saying why."""
+    here = run_folder(folder)
+    # A file left there could be read by every run without a rule: nothing starts until it is gone.
+    if left := sorted(path.name for path in here.iterdir()):
+        raise error(f"the {skill} run did not start: {here} holds {', '.join(left)}, and it must be empty")
     try:
-        done = subprocess.run(command, cwd=run_folder(folder), capture_output=True, text=True,
-                              timeout=SKILL_MINUTES * 60)
+        done = subprocess.run(command, cwd=here, capture_output=True, text=True, timeout=SKILL_MINUTES * 60)
     except subprocess.TimeoutExpired as timeout:
         raise error(f"the {skill} run did not finish in {SKILL_MINUTES} minutes") from timeout
     except FileNotFoundError as missing:

@@ -1411,3 +1411,11 @@ def test_every_chrome_worker_may_select_a_browser_but_never_ask_every_browser() 
         assert "mcp__claude-in-chrome__list_connected_browsers" in tools
         assert "mcp__claude-in-chrome__select_browser" in tools
         assert "mcp__claude-in-chrome__switch_browser" not in tools
+
+
+def test_no_browser_connected_anywhere_pauses_for_chrome_without_naming_any(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1)
+    nowhere = {"result": "paused", "needs": "chrome", "connected": "none"}
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project, {job: [nowhere]}))
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
+    assert jobs.get(job).state_reason == "Chrome open, with the Claude extension connected"

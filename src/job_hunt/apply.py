@@ -288,7 +288,9 @@ def _report(data: dict, skill: str) -> Report:
     if not isinstance(needs, str) or needs not in NEEDS:
         raise ApplyError(f'the {skill} run paused, but "needs" is not one of {", ".join(NEEDS)}')
     if needs == "chrome":
-        return Report("paused", needs=needs, connected=_text(data, "connected"))
+        # "none": no browser connected anywhere, so there are none to name.
+        connected = _text(data, "connected")
+        return Report("paused", needs=needs, connected=None if (connected or "").lower() == "none" else connected)
     if not (tab := _text(data, "tab")):
         raise ApplyError(f"the {skill} run paused without naming the tab")
     tab_id = data.get("tab_id")

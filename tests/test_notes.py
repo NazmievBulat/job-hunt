@@ -697,6 +697,7 @@ def test_the_morning_drafts_again_a_note_whose_drafting_failed(
     started: list[bool] = []
 
     morning(jobs, project / "data", find=lambda: None, score=lambda: None, start=lambda: started.append(True),
+            running=lambda: False,
             clock=clock, notes=notes, draft_notes=lambda: draft_notes(notes, jobs, project, run=Drafter()))
 
     assert [note.state for note in notes.all()] == ["drafted"]
@@ -716,6 +717,7 @@ def test_the_morning_collects_a_poster_an_apply_stopped_before_drafting(
         return draft_notes(notes, jobs, project, run=Drafter())
 
     morning(jobs, project / "data", find=lambda: None, score=lambda: None, start=lambda: started.append(True),
+            running=lambda: False,
             clock=clock, notes=notes, draft_notes=draft)
 
     assert [note.state for note in notes.all()] == ["drafted"]

@@ -7,7 +7,8 @@
      "morning_hour": 7,
      "summary_hour": 18,
      "linkedin_notes_daily": 15,
-     "pushover": {"token": "...", "user": "..."}}
+     "pushover": {"token": "...", "user": "..."},
+     "companies": ["https://jobs.lever.co/example"]}
 
 Areas are names as a person says them, never distances; the finder's skill says which of them
 a job is in. `remote` is `include` (remote jobs too), `exclude` (no remote jobs) or `only`.
@@ -16,6 +17,12 @@ out (18). `linkedin_notes_daily`, how many notes to hiring managers go out a day
 be left out (15); 0 sends none, and more than 15 is refused, to keep the LinkedIn account safe.
 `pushover`, the keys `hunt notify` pushes the chat's questions
 with, may be left out; they are never printed.
+
+`hunt find` reads the alert emails and also searches the sites itself: LinkedIn signed out, and
+the public job boards (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable) of every
+company in `data/companies.db`, which fills itself from Common Crawl. `companies`, which may be
+left out, adds companies by hand: each the address of the company's board on one of those
+systems.
 """
 
 from __future__ import annotations
@@ -25,10 +32,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from job_hunt.companies import board_of
+
 Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
-OPTIONAL = ("summary_hour", "pushover", "linkedin_notes_daily")
+OPTIONAL = ("summary_hour", "pushover", "linkedin_notes_daily", "companies")
 SUMMARY_HOUR = 18
 NOTES_DAILY = 15
 
@@ -53,6 +62,7 @@ class Settings:
     summary_hour: int = SUMMARY_HOUR
     pushover: Pushover | None = None
     linkedin_notes_daily: int = NOTES_DAILY
+    companies: list[str] = field(default_factory=list)
 
 
 def _names(data: dict[str, Any], field: str) -> list[str]:
@@ -80,6 +90,18 @@ def _pushover(data: dict[str, Any]) -> Pushover | None:
             or not all(isinstance(key, str) and key.strip() for key in keys.values())):
         raise SettingsError('pushover must be {"token": ..., "user": ...}, both filled in, or left out')
     return Pushover(token=keys["token"].strip(), user=keys["user"].strip())
+
+
+def _companies(data: dict[str, Any]) -> list[str]:
+    links = data.get("companies", [])
+    if not isinstance(links, list) or not all(isinstance(link, str) and link.strip() for link in links):
+        raise SettingsError("companies must be a list of job board addresses, or left out")
+    for link in links:
+        if board_of(link) is None:
+            raise SettingsError(
+                f"companies has {link.strip()!r}, which is not a Greenhouse, Lever, Ashby, Workday, SmartRecruiters "
+                "or Workable board address")
+    return [link.strip() for link in links]
 
 
 def read_settings(path: Path) -> Settings:
@@ -122,4 +144,5 @@ def read_settings(path: Path) -> Settings:
         summary_hour=summary_hour,
         pushover=_pushover(data),
         linkedin_notes_daily=notes_daily,
+        companies=_companies(data),
     )

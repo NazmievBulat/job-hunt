@@ -1,0 +1,39 @@
+{
+  "id": "744000000000001",
+  "name": "QA Automation Engineer",
+  "company": {
+    "identifier": "ExampleCorp",
+    "name": "Example Corp"
+  },
+  "location": {
+    "city": "Morrisville",
+    "region": "NC",
+    "country": "us",
+    "remote": false,
+    "hybrid": true,
+    "fullLocation": "Morrisville, NC, United States"
+  },
+  "releasedDate": "2026-11-16T10:00:00.000Z",
+  "jobAd": {
+    "sections": {
+      "companyDescription": {
+        "title": "Company Description",
+        "text": "<p>Example Corp makes test rigs.</p>"
+      },
+      "jobDescription": {
+        "title": "Job Description",
+        "text": "<p>Automate the rig checks.</p>"
+      },
+      "qualifications": {
+        "title": "Qualifications",
+        "text": "<ul><li>Python</li></ul>"
+      },
+      "additionalInformation": {
+        "title": "Additional Information",
+        "text": ""
+      }
+    }
+  },
+  "postingUrl": "https://jobs.smartrecruiters.com/ExampleCorp/744000000000001-qa-automation-engineer",
+  "applyUrl": "https://jobs.smartrecruiters.com/ExampleCorp/744000000000001-qa-automation-engineer?oga=true"
+}

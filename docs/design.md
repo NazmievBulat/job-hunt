@@ -20,8 +20,10 @@ without them.
 - A background run may use only the tools its command names. It loads the project's settings
   and none of the person's own (`--setting-sources project`), so their plugins, hooks, allowed
   tools and permission mode stay out of it, and runs in `dontAsk`, which refuses every tool the
-  command does not name. Claude Code still lets it read files in the project folder without a
-  rule, by Read or a read-only shell command.
+  command does not name. WebFetch, WebSearch and subagents are taken away outright, since
+  `dontAsk` would still let WebFetch reach Claude Code's preapproved documentation sites. Claude
+  Code still lets it read files in the project folder without a rule, by Read or a read-only
+  shell command.
 - No app and no web screens. The chat session is the interface; `/setup` is the way in.
 - Choosing a job approves its resume. Nothing reviews or tests the model's writing. A bad
   resume is one lost application.

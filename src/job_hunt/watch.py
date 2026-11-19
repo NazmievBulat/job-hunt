@@ -22,7 +22,7 @@ from pathlib import Path
 from job_hunt.finder import skill_command
 from job_hunt.jobs import JobsList
 from job_hunt.morning import SESSION, TARGET, start_session, tmux
-from job_hunt.replies import EmailMessages, ReplyError, Thread, Threads
+from job_hunt.replies import EmailMessages, ReplyError, Thread, Threads, linkedin_owed, linkedin_paid
 from job_hunt.settings import Settings
 
 TELL = ("A recruiter's message waits for your answer. Run `uv run hunt questions` and ask what is new, "
@@ -90,14 +90,11 @@ def _watch(threads: Threads, jobs: JobsList, data: Path, settings: Settings, che
         raise ReplyError(f"the messages check wrote no file it can be read by ({out})") from error
     problems = emails.saved(found, now)
     new = emails.new
-    # Kept until LinkedIn is read: a read that failed is tried again at the next run.
-    owed = data / "linkedin.owed"
-    if emails.notifications:
-        owed.write_text(f"{now.isoformat()}\n")
-    if owed.exists() or linkedin_due(threads.last_read("linkedin"), now, settings):
+    # A notification, this run's or the finder's, is owed until a LinkedIn read works.
+    if linkedin_owed(threads.data) or linkedin_due(threads.last_read("linkedin"), now, settings):
         read = read_linkedin()
         if read is not None:
-            owed.unlink(missing_ok=True)
+            linkedin_paid(threads.data)
             new += read
     if not new and not threads.in_states("new") and not threads.unasked():
         return "; ".join(problems)

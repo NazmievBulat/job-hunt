@@ -256,8 +256,25 @@ def job_of(jobs: JobsList, message: Message) -> int | None:
     return None
 
 
+OWED = "linkedin.owed"
+
+
+def owe_linkedin(data: Path, now: datetime) -> None:
+    """A notification email came: LinkedIn is read at the next watch, and until a read works."""
+    (data / OWED).write_text(f"{now.isoformat()}\n")
+
+
+def linkedin_owed(data: Path) -> bool:
+    return (data / OWED).exists()
+
+
+def linkedin_paid(data: Path) -> None:
+    (data / OWED).unlink(missing_ok=True)
+
+
 class Threads:
     def __init__(self, path: Path, clock: Callable[[], datetime] = _now) -> None:
+        self.data = path.parent
         self._clock = clock
         new = not path.exists()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -312,8 +329,13 @@ class Threads:
     def move(self, thread: int, state: State, reason: str | None = None) -> None:
         self._set(thread, state=state, state_reason=reason)
 
-    def drafted(self, thread: int, reply: str, draft_id: str | None) -> None:
-        self._set(thread, state="drafted", state_reason=None, reply=reply, draft_id=draft_id)
+    def drafted(self, thread: int, reply: str, draft_id: str | None) -> bool:
+        """Save the reply, unless the thread left `new` meanwhile (replaced, skipped)."""
+        with self._db:
+            done = self._db.execute(
+                "UPDATE threads SET state = 'drafted', state_reason = NULL, reply = ?, draft_id = ?, updated_at = ?"
+                " WHERE id = ? AND state = 'new'", (reply, draft_id, self._stamp(), thread)).rowcount
+        return done == 1
 
     def edited(self, thread: int, reply: str) -> None:
         self._set(thread, reply=reply)
@@ -367,7 +389,9 @@ class EmailMessages:
         found, problems = read_messages(data)
         self.save_all(found)
         count = data.get("linkedin_notifications") if isinstance(data, dict) else None
-        self.notifications += count if type(count) is int and count > 0 else 0
+        if type(count) is int and count > 0:
+            self.notifications += count
+            owe_linkedin(self.threads.data, started)
         self.threads.finished_read("email", started)
         return [f"recruiter {problem}" for problem in problems]
 
@@ -481,9 +505,9 @@ def _draft_replies(threads: Threads, root: Path, run: Run, fetch: Callable[[str]
             if threads.fail(thread.id, str(error)) == "failed":
                 log_failure(root / "data", "hunt draft-replies", f"no reply to {thread.sender}: {error}", clock)
             continue
-        _write(here / "reply.md", reply + "\n")
-        threads.drafted(thread.id, reply, draft)
-        drafted += 1
+        if threads.drafted(thread.id, reply, draft):
+            _write(here / "reply.md", reply + "\n")
+            drafted += 1
     return drafted
 
 
@@ -619,20 +643,27 @@ def read_linkedin(threads: Threads, jobs: JobsList, root: Path, *, run: Run, loc
                   sleep: Callable[[float], None], clock: Callable[[], datetime] = _now) -> int:
     """Read the new LinkedIn messages under the lock; return how many threads are new."""
     out = root / "data" / "linkedin-messages.json"
-    started = clock()
-    after = threads.last_read("linkedin") or started - FIRST_READ
-    out.unlink(missing_ok=True)
-    _with_lock(lock, sleep, lambda: run(read_command(after, out)))
-    try:
-        data = json.loads(out.read_text())
-    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise ReplyError(f"the {READ_SKILL} run wrote no file it can be read by ({out})") from error
+    found: dict[str, Any] = {}
+
+    def read() -> None:
+        # The file is the lock holder's alone: another read waits until this one has read it.
+        found["started"] = clock()
+        found["after"] = threads.last_read("linkedin") or found["started"] - FIRST_READ
+        out.unlink(missing_ok=True)
+        run(read_command(found["after"], out))
+        try:
+            found["data"] = json.loads(out.read_text())
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ReplyError(f"the {READ_SKILL} run wrote no file it can be read by ({out})") from error
+
+    _with_lock(lock, sleep, read)
+    data, started = found["data"], found["started"]
     # Nothing read is not "no messages": the next read starts from the same time again.
     if isinstance(data, dict) and (why := _text(data, "unreachable")):
         raise ReplyError(f"the {READ_SKILL} run could not read LinkedIn: {why}")
-    found, problems = read_messages(data)
+    messages, problems = read_messages(data)
     if problems:
         log_failure(root / "data", "hunt linkedin-messages", "left out " + "; ".join(problems), clock)
-    new = EmailMessages(threads, jobs).save_all(found)
+    new = EmailMessages(threads, jobs).save_all(messages)
     threads.finished_read("linkedin", started)
     return new

@@ -69,6 +69,12 @@ def unfinished(jobs: JobsList) -> list[Job]:
 
 
 def anything_waiting(jobs: JobsList, data: Path, threads: Threads | None = None) -> bool:
+    if threads is not None:
+        # Imported here: `replies` uses this module's `log_failure`.
+        from job_hunt.replies import recover_sends
+
+        # A send a dead run left is asked about, so it starts the session too.
+        recover_sends(threads, data)
     return bool(untold_failures(data) or jobs.waiting() or jobs.in_states("paused") or unfinished(jobs)
                 or (threads is not None and threads.in_states("drafted", "unsure")))
 

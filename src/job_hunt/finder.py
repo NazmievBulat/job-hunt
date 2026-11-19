@@ -367,8 +367,6 @@ def _find(
     if not found.exists():
         raise FinderError(f"the {SKILL} run wrote no jobs file ({found})")
     emails, found_jobs, problems = read_found(found, settings)
-    if messages is not None:
-        problems += messages.saved(json.loads(found.read_text()), started)
     new = 0
     for each in found_jobs:
         if jobs.has(each.link) or not title_matches(each.title, settings.titles) or not place_kept(each, settings):
@@ -381,5 +379,8 @@ def _find(
     for job in jobs.all():
         if job.state == "new" and not (jobs_folder / str(job.id) / "posting.md").exists():
             _write_posting(job, jobs_folder)
+    # After the jobs: a message about a job of this run is linked to it.
+    if messages is not None:
+        problems += messages.saved(json.loads(found.read_text()), started)
     jobs.finished_run(started)
     return Summary(emails, len(found_jobs), new, problems)

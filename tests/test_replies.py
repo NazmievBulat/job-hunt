@@ -814,3 +814,99 @@ def test_two_drafting_runs_never_draft_one_thread_twice(project: Path, threads: 
     other.join()
 
     assert len(ran) == 1
+
+
+# Found by Codex's second review
+
+
+def test_a_thread_replaced_while_its_reply_was_drafted_stays_replaced(
+    project: Path, threads: Threads, jobs: JobsList
+) -> None:
+    first, = _saved(threads, jobs, _linkedin(1, text="Hello Ada"))
+
+    def drafter(command: list[str]) -> None:
+        # A newer message in the conversation arrives while the model writes.
+        _saved(threads, jobs, _linkedin(1, text="Hello again, Ada"))
+        Drafter()(command)
+
+    draft_replies(threads, project, run=drafter, fetch=no_fetch)
+
+    assert threads.get(first).state == "replaced"
+
+
+def test_a_dead_send_alone_is_something_waiting(project: Path, threads: Threads, jobs: JobsList) -> None:
+    thread, = _saved(threads, jobs, _email(1))
+    draft_replies(threads, project, run=Drafter(), fetch=no_fetch)
+    threads.move(thread, "sending")
+
+    assert anything_waiting(jobs, project / "data", threads)
+
+
+def test_a_linkedin_notification_the_finder_read_is_owed_to_the_next_watch(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    out = project / "data" / "found-jobs.json"
+
+    def run(command: list[str]) -> None:
+        out.write_text(json.dumps({"emails": 0, "jobs": [], "recruiter_emails": [], "linkedin_notifications": 1}))
+
+    find(SETTINGS, jobs, project / "jobs", out, run=run, fetch=no_fetch, clock=clock,
+         messages=EmailMessages(threads, jobs))
+    clock.advance(hours=1)
+    _read_linkedin_today(threads, clock)
+    clock.advance(seconds=20 * 60)
+    watched = Watch(project, threads, jobs)
+    watched(clock)
+
+    assert watched.linkedin_reads == 1
+
+
+def test_a_message_about_a_job_found_in_the_same_run_is_linked_to_it(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    out = project / "data" / "found-jobs.json"
+    job = {"link": "https://jobs.example.com/9", "title": "QA Engineer", "company": "Example Labs", "place": "",
+           "remote": "remote", "board": "indeed", "email_id": "a1", "email_date": "2026-11-18T06:00:00+00:00",
+           "area": None}
+
+    def run(command: list[str]) -> None:
+        out.write_text(json.dumps({"emails": 1, "jobs": [job], "recruiter_emails": [
+            _email(1, job_link="https://jobs.example.com/9")]}))
+
+    page = "<html><body><main><p>Test the things.</p></main></body></html>"
+    find(SETTINGS, jobs, project / "jobs", out, run=run, fetch=lambda link: (link, page), clock=clock,
+         messages=EmailMessages(threads, jobs))
+
+    (thread,) = threads.in_states("new")
+    assert thread.job is not None and jobs.get(thread.job).link == "https://jobs.example.com/9"
+
+
+def test_two_linkedin_reads_at_once_each_read_their_own_file(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    import threading
+    import time
+
+    errors: list[Exception] = []
+    second: list[threading.Thread] = []
+
+    def read() -> None:
+        try:
+            read_linkedin(Threads(project / "data" / "jobs.db", clock=clock), JobsList(project / "data" / "jobs.db"),
+                          project, run=run, lock=LinkedInLock(project / "data", pause=lambda: timedelta(0),
+                                                              poll_seconds=0.01), sleep=time.sleep, clock=clock)
+        except Exception as error:  # noqa: BLE001 - the test reports it
+            errors.append(error)
+
+    def run(command: list[str]) -> None:
+        Path(_prompt(command, READ_SKILL)["out"]).write_text(json.dumps({"linkedin_messages": [_linkedin(1)]}))
+        if not second:
+            # The second read starts while the first has written its file and not yet read it.
+            second.append(threading.Thread(target=read))
+            second[0].start()
+            time.sleep(0.1)
+
+    read()
+    second[0].join()
+
+    assert errors == []

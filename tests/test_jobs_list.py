@@ -341,3 +341,44 @@ def test_the_jobs_list_can_be_used_from_another_thread(jobs: JobsList) -> None:
     worker.start()
     worker.join()
     assert done == [1]
+
+
+def test_a_started_job_or_one_with_its_own_apply_link_keeps_where_it_applies(jobs: JobsList) -> None:
+    started = jobs.add(_found("https://www.linkedin.com/jobs/view/4012345678"), kind="company_site")
+    for state in ("scored", "picked", "resume_ready", "applying"):
+        jobs.move(started, state)  # type: ignore[arg-type]
+    jobs.also_link(started, _board_job())
+    assert jobs.get(started).apply_link is None
+    own = jobs.add(_found("https://www.linkedin.com/jobs/view/4011111111", title="SDET"), kind="company_site")
+    for state in ("scored", "picked", "resume_ready", "applying"):
+        jobs.move(own, state)  # type: ignore[arg-type]
+    jobs.to_company_site(own, "https://careers.example.com/sdet")
+    jobs.also_link(own, _board_job("https://jobs.lever.co/examplelabs/2", title="SDET"))
+    assert jobs.get(own).apply_link == "https://careers.example.com/sdet"
+
+
+def test_the_page_another_sources_link_ended_at_is_known_too(jobs: JobsList) -> None:
+    first = jobs.add(_found("https://www.linkedin.com/jobs/view/4012345678"))
+    jobs.also_link(first, _board_job("https://click.example.com/t/1"), "https://careers.example.com/jobs/7?utm_source=x")
+    assert jobs.has("https://careers.example.com/jobs/7")
+    assert {"https://click.example.com/t/1", "https://careers.example.com/jobs/7"} <= jobs.known_links()
+
+
+def test_company_names_in_other_alphabets_keep_their_letters(jobs: JobsList) -> None:
+    from job_hunt.jobs import company_key
+
+    assert company_key("示例甲") != company_key("示例乙")
+    assert company_key("Müller Example GmbH") == "müller example" != company_key("Möller Example")
+    jobs.add(_found("https://www.linkedin.com/jobs/view/4012345678", company="示例甲", remote="remote", area=None))
+    assert jobs.same_job(_board_job(company="示例乙", remote="remote", area=None)) is None
+
+
+def test_a_recruiters_message_about_another_link_of_a_job_is_linked_to_it(jobs: JobsList) -> None:
+    from job_hunt.replies import Message, job_of
+
+    first = jobs.add(_found("https://www.linkedin.com/jobs/view/4012345678"))
+    jobs.add(_found("https://www.linkedin.com/jobs/view/4099999999", title="SDET"))
+    jobs.also_link(first, _board_job())
+    message = Message("email", "m1", "t1", "m1", "Ada Example", None, "About the job", None,
+                      "https://boards.greenhouse.io/examplelabs/jobs/7001?gh_src=mail", "Example Labs", False)
+    assert job_of(jobs, message) == first

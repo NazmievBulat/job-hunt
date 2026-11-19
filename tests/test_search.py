@@ -18,6 +18,7 @@ from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -1188,3 +1189,50 @@ def test_hunt_find_help_says_the_sources_run_at_once_and_a_job_from_two_is_liste
     assert "A job is listed once" in help_text and "found in the last 30 days" in help_text
     design = " ".join((Path(__file__).parents[1] / "docs" / "design.md").read_text().split())
     assert "The sources run at once" in design and "same job from two sources: N" in design
+
+
+@pytest.mark.parametrize("breaks", ["sweep", "sweep_met"])
+def test_a_sweep_that_breaks_is_named_and_the_other_sources_still_save_and_say_how_long(
+    tmp_path: Path, settings: Settings, clock: MovableClock, breaks: str
+) -> None:
+    class Broken(Search):
+        def sweep(self, *args: Any, **kwargs: Any) -> Any:
+            if breaks == "sweep":
+                raise RuntimeError("a bug in the sweep")
+            return super().sweep(*args, **kwargs)
+
+        def sweep_met(self, *args: Any, **kwargs: Any) -> Any:
+            # The second pass takes a minute of the made-up clock, then breaks.
+            clock.advance(seconds=60)
+            raise RuntimeError("a bug in the second pass")
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    found = tmp_path / "found-jobs.json"
+    search = Broken(get=_board_sites(), pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=_fetch, clock=clock, search=search)
+    said = "a bug in the sweep" if breaks == "sweep" else "a bug in the second pass"
+    assert summary.failed == [f"boards: RuntimeError: {said}"]
+    lines = str(summary).splitlines()
+    assert lines[0] == "alert: 4 emails, 8 jobs, 4 new" and lines[1].startswith("linkedin_search: ")
+    assert lines[-1] == f"took: alert 0s, linkedin_search 0s, boards {'0s' if breaks == 'sweep' else '1m 0s'}"
+    alerts = [job for job in jobs.all() if job.source == "alert"]
+    assert len(alerts) == 4 and all((tmp_path / "jobs" / str(job.id) / "posting.md").exists() for job in alerts)
+
+
+def test_a_linkedin_search_that_gets_no_answer_is_named_and_the_others_go_on(
+    settings: Settings, clock: MovableClock
+) -> None:
+    sites = Sites({LINKEDIN: _ok("linkedin-short-page.html")})
+
+    def get(url: str, body: object = None) -> Answer:
+        if "keywords=SDET" in url:
+            raise SearchError("no answer in 30 seconds")
+        return sites(url, body)
+
+    result = linkedin_search(settings, clock.now - timedelta(days=1), clock.now, get, _no_pause())
+    assert result.problems == ["LinkedIn search for SDET in Raleigh-Durham-Chapel Hill: no answer in 30 seconds",
+                               "LinkedIn search for SDET in San Francisco Bay Area: no answer in 30 seconds",
+                               "LinkedIn search for SDET, remote: no answer in 30 seconds"]
+    assert len(result.jobs) == 3 and result.stopped is None

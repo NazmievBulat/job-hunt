@@ -393,6 +393,7 @@ def _saved_by_then(db: Path | None, link: str) -> None:
             if reading.execute("SELECT 1 FROM jobs WHERE link = ?", (link,)).fetchone():
                 return
         time.sleep(0.01)
+    raise AssertionError(f"{link} was not saved in 5 seconds")
 
 
 def _find(tmp_path: Path, settings: Settings, clock: MovableClock, sites: Sites, jobs: JobsList | None = None):

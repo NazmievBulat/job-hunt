@@ -236,8 +236,8 @@ def _untracked(query: str) -> str:
 
 
 def _folded(text: str) -> list[str]:
-    # Case and punctuation do not count; C++ and C# keep their marks.
-    return re.findall(r"[a-z0-9]+[+#]*", text.casefold())
+    # Case and punctuation do not count; letters of every alphabet do, and C++ and C# keep their marks.
+    return re.findall(r"[^\W_]+[+#]*", text.casefold())
 
 
 def company_key(company: str) -> str:
@@ -296,6 +296,14 @@ class JobsList:
         return self._db.execute(
             "SELECT 1 FROM jobs WHERE ? IN (link, page_link) UNION ALL SELECT 1 FROM other_links WHERE link = ?",
             (link, link)).fetchone() is not None
+
+    def job_of_link(self, link: str) -> int | None:
+        """The job a link is of, by its link, its page link or another link of it, or None."""
+        link = clean_link(link)
+        row = self._db.execute(
+            "SELECT id FROM jobs WHERE ? IN (link, page_link) UNION ALL SELECT job FROM other_links WHERE link = ?",
+            (link, link)).fetchone()
+        return row[0] if row else None
 
     def known_links(self) -> set[str]:
         """Every link, page link and other link of the list, for the searches that run beside this

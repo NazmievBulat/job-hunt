@@ -617,3 +617,10 @@ def test_hunt_find_starts_no_run_while_the_run_folder_holds_a_file(
     assert cli.main(["find"]) == 1
     assert "holds career.json, and it must be empty" in capsys.readouterr().err
     assert not (tmp_path / "claude.json").exists()
+
+
+@pytest.mark.parametrize(("seconds", "said"), [(0, "0s"), (-1, "0s"), (45, "45s"), (250, "4m 10s"), (3720, "1h 2m")])
+def test_how_long_a_source_took_is_said_in_hours_minutes_or_seconds(seconds: float, said: str) -> None:
+    from job_hunt.finder import took
+
+    assert took(seconds) == said

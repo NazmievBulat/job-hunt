@@ -328,15 +328,15 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
             with pace.turn():
                 # A job page the alerts led to may have been told to stop meanwhile.
                 answer = None if pace.stopped else _linkedin_get(get, f"{LINKEDIN_SEARCH}?{query}")
-                if answer is not None and answer.status in LINKEDIN_STOPS:
+                if isinstance(answer, Answer) and answer.status in LINKEDIN_STOPS:
                     pace.stop(answer.status)
+            if isinstance(answer, SearchError):
+                result.problems.append(f"{named}: {answer}")
+                break
             if answer is None or answer.status in LINKEDIN_STOPS:
                 result.stopped = pace.stopped
                 result.jobs = list(found.values())
                 return result
-            if isinstance(answer, SearchError):
-                result.problems.append(f"{named}: {answer}")
-                break
             if answer.status != 200:
                 result.problems.append(f"{named}: HTTP {answer.status}")
                 break

@@ -32,17 +32,18 @@ offers those times. Nothing is sent: the person reads the reply first.
    and `timeZone` set to `time_zone`. Read every page. Every event the person has not declined
    is busy, a whole day's event too; an event marked free (availability free) is not.
 2. A free time is a call of `minutes` that starts on the hour or the half hour, starts and ends
-   inside one day's `from` and `to`, and touches no busy event. Choose two or three of them,
-   on different days when there are free times on more than one day, and not at the very start
-   or the very end of a day when others are free. When only one time is free, offer that one.
-   When none is, offer none.
-3. Write the reply the person would send, in the first person, signed with their first name:
-   glad to talk, the times you chose as a short list, each with its weekday, date, time and the
-   time zone's short name (for example "Thursday, November 19, 10:00 EST"), and a line asking
-   which suits, or for another time if none does. When no time is free, say the person would
-   be glad to talk and ask for a few times that suit the recruiter. Answer briefly anything
-   else the message asks, from the career; leave out what it does not say. Short: what a busy
-   recruiter reads in half a minute. A LinkedIn reply is shorter still, with no signature
+   inside one day's `from` and `to`, and overlaps no busy event; a call may start the minute an
+   event ends. Choose two or three of them, on different days when there are free times on more
+   than one day, and not at the very start or the very end of a day when others are free. When
+   only one time is free, offer that one. When none is, offer none.
+3. Write the reply the person would send, in the first person, signed with their first name (on
+   LinkedIn too): glad to talk about the role, named as the message names it and not by the
+   career's titles, the times you chose as a short list, each with its weekday, date, time and
+   the time zone's short name (for example "Thursday, November 19, 10:00 EST"), and a line
+   asking which suits, or for another time if none does. When no time is free, say the person
+   would be glad to talk and ask for a few times that suit the recruiter. Answer briefly
+   anything else the message asks, from the career; leave out what it does not say. Short: what
+   a busy recruiter reads in half a minute. A LinkedIn reply is shorter still, with no signature
    block. Plain text: no Markdown, no placeholders.
 4. For an email (`source` is `email`), save the reply as a Gmail draft answering that email:
    create_draft with `replyToMessageId` set to `email_id` and the reply as `body`. When

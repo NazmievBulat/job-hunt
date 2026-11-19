@@ -44,18 +44,20 @@ CONVERSATION = """list "Messages" [ref_40]
   button "Send" [ref_41]"""
 
 
-def _transcript(tmp_path: Path, *results: tuple[str, object]) -> Path:
-    """A run's transcript as Claude Code writes it: each tool call and its result, among entries of
-    other kinds that also carry text, which the guard must not read as a page."""
+def _transcript(tmp_path: Path, *results: tuple) -> Path:
+    """A run's transcript as Claude Code writes it: each tool call (tool, result, and its input
+    when not tab 7's) and its result, among entries of other kinds that also carry text, which the
+    guard must not read as a page."""
     entries: list[dict] = [
         {"type": "queue-operation"},
         {"type": "user", "message": {"role": "user", "content": "/read-linkedin-messages {}"}},
         {"type": "api-request-blob", "message": {"content": [{"type": "text", "text": 'listitem "x" [ref_90]'}]}},
         {"type": "assistant", "message": {"content": [{"type": "text", "text": 'listitem "y" [ref_91]'}]}},
     ]
-    for number, (tool, content) in enumerate(results):
+    for number, (tool, content, *given) in enumerate(results):
         entries.append({"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "id": f"toolu_{number}", "name": f"{CHROME}{tool}", "input": {"tabId": 7}}]}})
+            {"type": "tool_use", "id": f"toolu_{number}", "name": f"{CHROME}{tool}",
+             "input": given[0] if given else {"tabId": 7}}]}})
         entries.append({"type": "user", "message": {"content": [
             {"tool_use_id": f"toolu_{number}", "type": "tool_result", "content": content, "is_error": False}]}})
     path = tmp_path / "transcript.jsonl"
@@ -136,6 +138,42 @@ def test_find_says_what_a_ref_is_too_and_the_latest_read_counts(tmp_path: Path) 
     later = ("read_page", 'button "Send" [ref_10]')
     assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST), later)))
     assert refusal(_click("ref_10", _transcript(tmp_path, later, ("read_page", LIST)))) is None
+
+
+@pytest.mark.parametrize("line", [
+    'link "https://example.com/listitem" [ref_41]',
+    'button "Open the options for your conversation with listitem" [ref_41]',
+    'button "Ada \\"listitem\\" Example" [ref_41]',
+    'textbox [ref_41] "listitem"',
+    '[ref_41]',
+])
+def test_the_role_is_read_from_the_line_never_from_the_text_on_it(tmp_path: Path, line: str) -> None:
+    # A sender's name or a link in a message is quoted text: it never makes a button a list item.
+    assert refusal(_click("ref_41", _transcript(tmp_path, ("read_page", line))))
+
+
+@pytest.mark.parametrize("line", ['  listitem "Ada Example" [ref_10]', '- [ref_10] listitem "Ada Example"',
+                                  'ref_10: listitem (Ada Example, Nov 19)'])
+def test_a_list_item_is_one_however_the_read_lays_its_line_out(tmp_path: Path, line: str) -> None:
+    assert refusal(_click("ref_10", _transcript(tmp_path, ("find", line)))) is None
+
+
+def test_a_read_counts_only_in_its_own_tab_and_until_the_tab_navigates_or_clicks(tmp_path: Path) -> None:
+    click = {"tabId": 7, "action": "left_click", "ref": "ref_10"}
+    # Read in another tab.
+    assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST, {"tabId": 8}))))
+    # Read, then the tab went elsewhere, or clicked: the refs may name other elements now.
+    assert refusal(_click("ref_10", _transcript(tmp_path, ("read_page", LIST), ("navigate", "ok"))))
+    assert refusal(_click("ref_12", _transcript(tmp_path, ("read_page", LIST), ("computer", "clicked", click))))
+    # Read again after the click, or another tab navigated or clicked: it goes through.
+    again = _transcript(tmp_path, ("read_page", LIST), ("computer", "clicked", click), ("read_page", LIST))
+    assert refusal(_click("ref_12", again)) is None
+    other = _transcript(tmp_path, ("read_page", LIST), ("navigate", "ok", {"tabId": 8, "url": "https://example.com"}),
+                        ("computer", "clicked", {**click, "tabId": 8}), ("computer", "scrolled", {"tabId": 7, "action": "scroll"}))
+    assert refusal(_click("ref_12", other)) is None
+    # A click with no tab is refused.
+    assert refusal({**_click("ref_10", _transcript(tmp_path, ("read_page", LIST))), "tool_input": {
+        "action": "left_click", "ref": "ref_10"}})
 
 
 def test_a_click_without_a_transcript_it_can_read_is_refused(tmp_path: Path) -> None:

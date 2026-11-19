@@ -6,10 +6,11 @@ LinkedIn's conversation list has no links, so the reader opens a conversation by
 the computer tool that clicks also types. The reader reads strangers' messages with nobody
 watching; this hook, not only the skill's words, keeps a message from making it type, or click
 Send, Archive, Delete or a menu: a click must name an element by its ref, and the latest page
-read (read_page or find) that showed that ref must have shown it as a `listitem`. A button, a
-message box or a menu item is never one. The hook reads the run's transcript for that, a file
-Claude Code writes before it calls the hook (`transcript_path`), and only the results of those
-two tools in it: not the model's own words.
+read (read_page or find) of the same tab that showed that ref, since the tab's last navigate or
+click, must have given it the role `listitem`. A button, a link, a message box or a menu item is
+never one. The hook reads the run's transcript for that, a file Claude Code writes before it
+calls the hook (`transcript_path`), and only the results of those two tools in it: not the
+model's own words.
 
 Claude Code runs it before each call of the tool, with the call as JSON on stdin; exit code 2
 refuses the call and tells the model why on stderr. Anything it cannot read is refused too.
@@ -30,8 +31,9 @@ COMPUTER = "mcp__claude-in-chrome__computer"
 READ_ACTIONS = ("left_click", "scroll", "scroll_to", "screenshot", "zoom", "wait")
 # The tools whose results say what a ref is.
 PAGE_READERS = ("mcp__claude-in-chrome__read_page", "mcp__claude-in-chrome__find")
+NAVIGATE = "mcp__claude-in-chrome__navigate"
 REF = re.compile(r"\bref_\d+\b")
-LIST_ITEM = re.compile(r"\blistitem\b")
+QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 
 def _strings(content: Any) -> str:
@@ -43,9 +45,10 @@ def _strings(content: Any) -> str:
     return ""
 
 
-def page_reads(transcript: Path) -> list[str]:
-    """The text of each read_page and find result in the transcript, in order."""
-    names: dict[str, str] = {}
+def page_reads(transcript: Path, tab: int) -> list[str]:
+    """The text of each read_page and find result of `tab` in the transcript, in order, since the
+    last navigate or click in that tab: a ref read before either may name another element now."""
+    calls: dict[str, tuple[str, Any]] = {}
     reads: list[str] = []
     for line in transcript.read_text().splitlines():
         entry = json.loads(line) if line.strip() else {}
@@ -57,22 +60,34 @@ def page_reads(transcript: Path) -> list[str]:
             if not isinstance(item, dict):
                 continue
             if entry.get("type") == "assistant" and item.get("type") == "tool_use":
-                names[str(item.get("id"))] = str(item.get("name"))
-            elif entry.get("type") == "user" and item.get("type") == "tool_result" and \
-                    names.get(str(item.get("tool_use_id"))) in PAGE_READERS:
-                reads.append(_strings(item.get("content")))
+                name, given = str(item.get("name")), item.get("input")
+                given = given if isinstance(given, dict) else {}
+                calls[str(item.get("id"))] = (name, given.get("tabId"))
+                if given.get("tabId") == tab and (name == NAVIGATE or (name == COMPUTER and given.get("action") == "left_click")):
+                    reads.clear()
+            elif entry.get("type") == "user" and item.get("type") == "tool_result":
+                name, read_tab = calls.get(str(item.get("tool_use_id")), ("", None))
+                if name in PAGE_READERS and read_tab == tab:
+                    reads.append(_strings(item.get("content")))
     return reads
+
+
+def role(line: str) -> str | None:
+    """The role a read gives an element on its line: its first word once its quoted name and text
+    and its refs are taken out. Text a stranger wrote is quoted, so it is never the role."""
+    words = re.findall(r"[A-Za-z]+", REF.sub(" ", QUOTED.sub(" ", line)))
+    return words[0] if words else None
 
 
 def is_list_item(ref: str, reads: list[str]) -> bool:
     """Whether the latest read that showed `ref` showed it as a list item: each line that names
-    it, and no other ref, says `listitem`. A line naming two refs is an element whose text names
-    another, as a message could; it says nothing of what that ref is."""
+    it, and no other ref, gives it the role `listitem`. A line naming two refs is an element whose
+    text names another, as a message could; it says nothing of what that ref is."""
     own = re.compile(rf"\b{re.escape(ref)}\b")
     for read in reversed(reads):
         lines = [line for line in read.splitlines() if own.search(line) and len(REF.findall(line)) == 1]
         if lines:
-            return all(LIST_ITEM.search(line) for line in lines)
+            return all(role(line) == "listitem" for line in lines)
     return False
 
 
@@ -94,11 +109,12 @@ def refusal(event: Any) -> str | None:
     ref = call.get("ref")
     if not isinstance(ref, str) or not REF.fullmatch(ref) or call.get("coordinate") is not None:
         return "the LinkedIn reader clicks only by ref, never at a place on the screen"
-    transcript = event.get("transcript_path")
-    if not isinstance(transcript, str) or not is_list_item(ref, page_reads(Path(transcript))):
-        return (f"the LinkedIn reader clicks only a conversation's list item: the latest read_page or find "
-                f"that showed {ref} did not show it as a listitem. Read the list of conversations with read_page "
-                f"and click the ref of the line that says listitem.")
+    transcript, tab = event.get("transcript_path"), call.get("tabId")
+    if not isinstance(transcript, str) or not isinstance(tab, int) or \
+            not is_list_item(ref, page_reads(Path(transcript), tab)):
+        return (f"the LinkedIn reader clicks only a conversation's list item: no read_page or find of tab {tab} "
+                f"since its last navigate or click showed {ref} as a listitem. Read the list of conversations "
+                f"with read_page again and click the ref of the line that says listitem.")
     return None
 
 

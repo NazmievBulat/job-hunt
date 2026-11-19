@@ -55,19 +55,22 @@ LinkedIn's list of conversations has no links: a conversation opens only when yo
 the list. You click with the computer tool, and this run lets that tool do only these actions:
 `left_click` (without modifier keys), `scroll`, `scroll_to`, `screenshot`, `zoom` and `wait`.
 Any other action, `type` and `key` among them, is refused, and you need none. A `left_click`
-goes through only with a `ref`, never a coordinate, and only when the latest read_page or find
-that showed that ref showed it as a `listitem`: a conversation in the list.
+goes through only with a `ref`, never a coordinate, and only when a read_page or find of your
+tab since its last navigate or click showed that ref as a `listitem`: a conversation in the
+list.
 
 1. Open a new tab of your own (tabs_create_mcp) and go to `https://www.linkedin.com/messaging/`
    in it. Wait 2 seconds for the list of conversations.
 2. Read the list with read_page (get_page_text gives nothing on this page). Use find for "the
-   list of conversations" and read_page with its ref_id; each conversation is a `listitem`. Each item shows who the conversation is
-   with, the time of its last message and a preview of it; a preview that begins with "You:" was
-   written by the person. The conversations to open are the ones whose last message was sent
-   after `after` and the ones marked unread. When an item shows only a day, open it unless that
-   day is before the day of `after`. The newest are at the top: while the last item read is
-   still after `after`, scroll the list down (scroll_to its last item) and read it again, until
-   an item is older than `after` or the list ends.
+   list of conversations" and read_page with its ref_id; each conversation is a `listitem`. Each
+   item shows who the conversation is with, the time of its last message and a preview of it; a
+   preview that begins with "You:" was written by the person. The conversations to open are the
+   ones whose last message was sent after `after`, and, among the items read, the ones marked
+   unread. When an item shows only a day, open it unless that day is before the day of `after`.
+   The newest are at the top: while the last item read is still after `after`, scroll the list
+   down (scroll_to its last item) and read it again, until an item is older than `after` or the
+   list ends. Do not look further down for unread ones: a conversation whose last message is
+   older than `after` was read by an earlier run, or is older than the hunt looks back.
 3. Open the conversations one at a time. Click the item with left_click and the ref of its
    `listitem` line in read_page. Never click a button inside the item: its menu archives, mutes
    and deletes. Wait 2 seconds. Then the tab's address, from tabs_context_mcp, must be

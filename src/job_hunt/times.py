@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from job_hunt.finder import ONLY_NAMED_TOOLS
 from job_hunt.settings import Settings
 
 SKILL = "offer-times"
@@ -219,7 +220,7 @@ def offer_command(arguments: dict[str, Any], days: list[tuple[datetime, datetime
             "minutes": int(LENGTH.total_seconds() // 60)}
     out = Path(arguments["out"])
     tools = [*reads, f"Edit({_rule(out)})", *READ_TOOLS, *gmail]
-    return ["claude", "-p", f"/{SKILL} {json.dumps(task, ensure_ascii=False)}", "--model", OFFER_MODEL,
+    return ["claude", "-p", f"/{SKILL} {json.dumps(task, ensure_ascii=False)}", "--model", OFFER_MODEL, *ONLY_NAMED_TOOLS,
             "--allowedTools", ",".join(tools)]
 
 
@@ -233,7 +234,7 @@ def event_command(task: Literal["hold", "confirm"], talk: Talk, start: datetime,
     elif move is not None:
         arguments["event_id"] = move
     tools = HOLD_TOOLS if task == "hold" and move is None else CONFIRM_TOOLS
-    return ["claude", "-p", f"/{SKILL} {json.dumps(arguments, ensure_ascii=False)}", "--model", MODEL,
+    return ["claude", "-p", f"/{SKILL} {json.dumps(arguments, ensure_ascii=False)}", "--model", MODEL, *ONLY_NAMED_TOOLS,
             "--allowedTools", ",".join([*tools, f"Edit({_rule(out)})"])]
 
 

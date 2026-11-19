@@ -39,6 +39,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from job_hunt.career import career_lock, read_career, write_career
+from job_hunt.finder import ONLY_NAMED_TOOLS
 from job_hunt.jobs import Job, JobsList, State
 from job_hunt.linkedin_lock import LinkedInLock
 from resume_kit.contracts.form_answers import asks_self_identification
@@ -119,7 +120,7 @@ def resume_command(job: int, root: Path) -> list[str]:
     # A permission rule's path: `//` starts an absolute one. Edit rules cover the Write tool too.
     return [
         "claude", "-p", f"/{RESUME_SKILL} {json.dumps(arguments)}",
-        "--model", MODEL,
+        "--model", MODEL, *ONLY_NAMED_TOOLS,
         "--allowedTools", ",".join([
             f"Read(/{folder}/**)", f"Read(/{_career(root)})", f"Edit(/{folder}/resume-content.json)",
             # This job's build only: another folder's would let it overwrite that job's resume.
@@ -149,7 +150,7 @@ def _chrome_command(skill: str, job: Job, link: str, root: Path, paused: Report 
         arguments |= {"tab": paused.tab, "tab_id": paused.tab_id}
     return [
         "claude", "--chrome", "-p", f"/{skill} {json.dumps(arguments, ensure_ascii=False)}",
-        "--model", MODEL,
+        "--model", MODEL, *ONLY_NAMED_TOOLS,
         "--allowedTools", ",".join([
             f"Read(/{folder}/**)", f"Read(/{_career(root)})", f"Edit(/{folder}/report.json)", *CHROME_TOOLS,
         ]),

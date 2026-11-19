@@ -53,6 +53,10 @@ GMAIL_READ_TOOLS = (
     "mcp__claude_ai_Gmail__get_thread",
     "mcp__claude_ai_Gmail__get_message",
 )
+# Every background run: `--allowedTools` only adds to what the person's own settings allow (their
+# `Bash`, a plugin's browser), so the run loads no user or local settings, and `dontAsk` refuses
+# any tool its command does not name, a file of the project folder or a read-only command too.
+ONLY_NAMED_TOOLS = ("--setting-sources", "project", "--permission-mode", "dontAsk")
 FIRST_RUN = timedelta(days=14)
 SKILL_MINUTES = 30
 PAGE_SECONDS = 20
@@ -307,7 +311,7 @@ def skill_command(
     write = f"Edit(/{out})" if out.is_absolute() else f"Edit(./{out})"
     return [
         "claude", "-p", f"/{SKILL} {json.dumps(arguments, ensure_ascii=False)}",
-        "--model", MODEL,
+        "--model", MODEL, *ONLY_NAMED_TOOLS,
         "--allowedTools", ",".join([*GMAIL_READ_TOOLS, write]),
     ]
 

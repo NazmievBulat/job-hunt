@@ -37,6 +37,7 @@ from job_hunt.finder import (
 from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.settings import Settings, read_settings
 from movable_clock import MovableClock
+from only_named_tools import assert_only_named_tools
 
 HERE = Path(__file__).parent / "finder"
 PAGES = {
@@ -212,6 +213,7 @@ def test_the_skill_runs_on_haiku_with_only_gmails_read_tools_and_its_one_file(tm
     assert command[command.index("--model") + 1] == "claude-haiku-5-5"
     allowed = command[command.index("--allowedTools") + 1].split(",")
     assert allowed == [*GMAIL_READ_TOOLS, "Edit(./data/found-jobs.json)"]
+    assert_only_named_tools(command)
     assert all(tool.startswith("mcp__claude_ai_Gmail__") for tool in GMAIL_READ_TOOLS)
     assert not any(word in tool for tool in GMAIL_READ_TOOLS for word in ("send", "draft", "label", "trash", "spam", "forward", "reply"))
 

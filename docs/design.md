@@ -17,6 +17,9 @@ without them.
 - Each user runs it on their own computer, on the official Claude Code program, signed in with
   their own Claude subscription. Background work starts Claude Code with `claude -p`. It does
   not use the Agent SDK and never routes one person's work through another's subscription.
+- A background run may use only the tools its command names. It loads the project's settings
+  and none of the person's own (`--setting-sources project`), so their plugins, hooks and
+  allowed tools stay out of it, and runs in `dontAsk`, which refuses every other tool.
 - No app and no web screens. The chat session is the interface; `/setup` is the way in.
 - Choosing a job approves its resume. Nothing reviews or tests the model's writing. A bad
   resume is one lost application.

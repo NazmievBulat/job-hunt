@@ -23,6 +23,7 @@ from job_hunt.linkedin_lock import PAUSE, STALE, LinkedInLock, random_pause
 from movable_clock import MovableClock
 # The fixtures `project` and `jobs` too: a made-up person's project folder and its jobs list.
 from test_apply import Resumes, Sites, _found, _job_of, _picked, hunt, jobs, no_linkedin, project  # noqa: F401
+from only_named_tools import assert_only_named_tools
 
 START = datetime(2026, 11, 18, 7, 0, tzinfo=UTC)
 
@@ -74,6 +75,7 @@ def test_a_linkedin_worker_opens_the_jobs_linkedin_page_with_the_site_workers_na
     # The same tools as a company-site worker: its folder, the career, its report and Chrome.
     tools = command[command.index("--allowedTools") + 1]
     assert tools == site_command(job, project)[command.index("--allowedTools") + 1]
+    assert_only_named_tools(command)
 
 
 def test_one_linkedin_application_at_a_time_each_under_the_lock_beside_the_site_workers(

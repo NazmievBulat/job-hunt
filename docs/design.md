@@ -93,9 +93,18 @@ without them.
    tab, and the other jobs go on. The user replies "done" or gives the answer; an answer to a
    form question is saved, so it is not asked again.
 8. **Summary.** One message at the end: applied, waiting for the user, failed and why.
-9. **Recruiter emails.** The finder also notes replies from recruiters and companies. For each,
-   the session shows a drafted answer, saved as a Gmail draft. The user says "send", edits it,
-   or says "skip".
+9. **Recruiter messages (every 20 minutes during the day).** A recruiter gets an answer within
+   the hour. `hunt watch` runs every 20 minutes from the morning hour to the summary hour: one
+   small `claude -p` on Claude Haiku with only Gmail's read tools notes new emails from
+   recruiters and companies and counts LinkedIn's own emails about a new message. Only after
+   one of those, and besides in the morning and at mid-day, does `hunt linkedin-messages` open
+   LinkedIn's messages in Chrome, under the LinkedIn lock, reading and sending nothing else. A
+   run with nothing new ends there. Each new message is a thread, saved once in the jobs list
+   and linked to its job; `hunt draft-replies` drafts a reply in the user's voice from the
+   message, the career and the job (for an email also as a Gmail draft), and the session asks
+   at once: the message, the job description, the reply, "Send?". The user says yes
+   (`hunt send-reply`), changes it (`hunt edit-reply`) or says "skip" (`hunt skip-reply`). A
+   send that does not report back may have gone out: it is never sent again on its own.
 
 ## Pieces
 
@@ -103,15 +112,17 @@ Each piece has one job and talks to the others only through the jobs list and fi
 
 | Piece | Kind | What it does |
 |---|---|---|
-| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `status`. It is the coordinator. |
+| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`, `watch`, `linkedin-messages`, `draft-replies`, `send-reply`, `edit-reply`, `skip-reply`. It is the coordinator. |
 | Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
-| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the timer's hour. |
+| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the morning hour, the summary hour (18 when left out). |
 | Resume worker | `claude -p` with the `write-resume` skill | Gets the career and one job description and writes `resume-content.json`. |
 | Resume builder | Python (`resume_kit`) | Merges that content with the career, checks it against the resume contract, builds `resume.pdf`. |
 | LinkedIn worker | `claude -p --chrome` with the `apply-linkedin` skill | Opens the job's LinkedIn page, presses Easy Apply, uploads the PDF, answers from the career, submits. |
 | Company-site worker | `claude -p --chrome` with the `apply-site` skill | Opens the site's apply link, uploads the PDF, checks the fields the site read from it, answers, submits. |
-| Reply drafter | `claude -p` with the `draft-reply` skill | Drafts an answer to one recruiter email as a Gmail draft. |
+| Reply drafter | `claude -p` with the `draft-reply` skill | Drafts an answer to one recruiter's message, an email (also as a Gmail draft) or a LinkedIn message. |
+| Reply sender | `claude -p` with the `send-reply` skill | Sends one approved reply word for word: through Gmail, or in Chrome on LinkedIn under the LinkedIn lock. |
+| Watch | `hunt watch` on a timer | Every 20 minutes from the morning hour to the summary hour: the Haiku check for new messages, LinkedIn only when needed, drafting and asking. |
 | The chat | `CLAUDE.md` and `.claude/commands` | The `job-hunt` session: asks the questions, turns answers into `hunt` commands, starts and waits for workers. |
 | Notifier | `hunt notify` | Sends one question as a Pushover push, when the user set its keys. |
 | Scheduler | `claude -p` with the `offer-times` skill | Reads free times from Google Calendar, drafts the reply offering them, adds the held event on yes. |
@@ -159,7 +170,11 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 
 - A job whose worker fails twice (the site errors, the form breaks) is marked failed with the
   reason, and is named in the summary for the user to apply by hand.
-- If Chrome is closed or the computer is asleep, applying waits and says so once.
+- A worker that stops without saying what happened (a timeout, a crash, no report) may have
+  sent the application. Its job is never tried again on its own: it pauses for the user to look
+  in Chrome, and the user says it was sent or tries it again.
+- If Chrome is closed or the computer is asleep, applying waits and says so once. (Built so
+  far: a worker that cannot reach Chrome pauses its job, which costs it no try.)
 - Everything is files on the computer. If a session or worker stops halfway, `hunt apply`
   picks up from each job's state.
 - The finder or the scoring failing is reported once, with the error.
@@ -171,7 +186,8 @@ PDF and the worker's report. A worker sees only its own folder and the career.
   Claude Sonnet took 28 seconds and $0.32; one small Chrome task on Haiku cost $0.02.
 - Background work (`claude -p`) draws from the subscription's separate monthly credit for
   background use, not from its chat limits.
-- A day with no new jobs costs only the finder's read.
+- A day with no new jobs costs only the finder's read, and the watch's small Haiku checks (33 a
+  day from 7:00 to 18:00); LinkedIn is opened only after a notification email, and twice a day.
 
 ## Testing
 
@@ -195,5 +211,5 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 4. The company-site worker, then the LinkedIn worker.
 5. The chat: the morning session, its questions and Pushover.
 6. `/setup`, with the resume reader.
-7. Recruiter replies, by email and on LinkedIn.
+7. Done: recruiter replies, by email and on LinkedIn, watched every 20 minutes.
 8. Offering times from Google Calendar.

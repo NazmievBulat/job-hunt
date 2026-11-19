@@ -14,6 +14,8 @@ bullets, and a job id the career does not have is an error.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -82,4 +84,13 @@ def build_resume(career: Career, content: dict[str, Any]) -> Resume:
 
 def write_pdf(career: Career, content_path: Path, pdf_path: Path) -> None:
     content = json.loads(content_path.read_text())
-    pdf_path.write_bytes(render_pdf(build_resume(career, content)))
+    printed = render_pdf(build_resume(career, content))
+    # Replaced whole: a build that stops leaves no cut-off resume.pdf for a later run to take as built.
+    descriptor, temporary = tempfile.mkstemp(dir=pdf_path.parent, prefix=f".{pdf_path.name}.")
+    try:
+        with os.fdopen(descriptor, "wb") as out:
+            out.write(printed)
+        os.replace(temporary, pdf_path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise

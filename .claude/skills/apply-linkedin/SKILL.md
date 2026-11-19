@@ -47,10 +47,28 @@ time: work only in your own tab, the one you open or `tab_id`.
 7. Answer the rest from the career: the person's details, their jobs and schools, the standing
    form answers, and a saved answer whose question means the same as the form's. Optional
    fields with no answer in the career are left empty.
-8. Questions about gender, race, ethnicity, veteran status or disability are voluntary: choose
+8. When the form has a cover letter field or a "message to the hiring team" field, fill it with
+   a note of two or three sentences in the person's voice: the role by its title, and one
+   reason from the career that fits the job, only what the career says. No placeholders, no
+   Markdown. It is part of the application the person approved, so it is sent with it.
+9. Questions about gender, race, ethnicity, veteran status or disability are voluntary: choose
    the option that declines to answer ("I don't wish to answer", "Decline to self-identify").
-9. On the last step, clear the box that follows the company, if it is ticked.
-10. Submit, once. Wait for LinkedIn to say the application was sent.
+10. On the last step, clear the box that follows the company, if it is ticked.
+11. Submit, once. Wait for LinkedIn to say the application was sent.
+
+## The poster
+
+Once LinkedIn said the application was sent, look at the job's page for the person who posted
+the job ("Meet the hiring team", "Job poster"). When it shows one, note their name, their title
+and the link to their profile (`https://www.linkedin.com/in/...`), and what LinkedIn offers to
+reach them, without pressing anything that sends:
+
+- `message`: a `Message` button that sends a free message.
+- `inmail`: a `Message` that would spend an InMail credit, or that offers Premium to send it.
+- `connect`: only `Connect`, or nothing else to write with.
+
+When you cannot tell whether a `Message` is free, it is `inmail`. Never press Connect, never
+send an invitation, never write to the poster here: only note who they are.
 
 ## Pause instead
 
@@ -75,6 +93,7 @@ Chrome's tools give the tab, a whole number. One of:
 
 ```json
 {"result": "applied"}
+{"result": "applied", "poster": {"name": "...", "title": "...", "profile": "https://www.linkedin.com/in/...", "reach": "message" | "inmail" | "connect"}}
 {"result": "company_site", "link": "<the address on the company's site>"}
 {"result": "paused", "needs": "captcha", "tab": "<the tab's title>", "tab_id": <the tab's id>}
 {"result": "paused", "needs": "sign_in", "tab": "<the tab's title>", "tab_id": <the tab's id>}

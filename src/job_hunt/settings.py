@@ -5,12 +5,17 @@
      "remote": "include",
      "lowest_salary": 120000,
      "morning_hour": 7,
+     "summary_hour": 18,
+     "linkedin_notes_daily": 15,
      "pushover": {"token": "...", "user": "..."},
      "companies": ["https://jobs.lever.co/example"]}
 
 Areas are names as a person says them, never distances; the finder's skill says which of them
 a job is in. `remote` is `include` (remote jobs too), `exclude` (no remote jobs) or `only`.
-`lowest_salary` may be null. `pushover`, the keys `hunt notify` pushes the chat's questions
+`lowest_salary` may be null. `summary_hour`, the end of the day for `hunt watch`, may be left
+out (18). `linkedin_notes_daily`, how many notes to hiring managers go out a day (`notes`), may
+be left out (15); 0 sends none, and more than 15 is refused, to keep the LinkedIn account safe.
+`pushover`, the keys `hunt notify` pushes the chat's questions
 with, may be left out; they are never printed.
 
 `hunt find` reads the alert emails and also searches the sites itself: LinkedIn signed out, and
@@ -32,7 +37,9 @@ from job_hunt.companies import board_of
 Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
-OPTIONAL = ("pushover", "companies")
+OPTIONAL = ("summary_hour", "pushover", "linkedin_notes_daily", "companies")
+SUMMARY_HOUR = 18
+NOTES_DAILY = 15
 
 
 class SettingsError(ValueError):
@@ -52,7 +59,9 @@ class Settings:
     remote: Remote
     lowest_salary: int | None
     morning_hour: int
+    summary_hour: int = SUMMARY_HOUR
     pushover: Pushover | None = None
+    linkedin_notes_daily: int = NOTES_DAILY
     companies: list[str] = field(default_factory=list)
 
 
@@ -120,12 +129,20 @@ def read_settings(path: Path) -> Settings:
     if not areas and remote == "exclude":
         raise SettingsError("areas is empty and remote is exclude, so no job could be kept")
     lowest_salary = None if data["lowest_salary"] is None else _whole_number(data, "lowest_salary", 0)
+    morning_hour = _whole_number(data, "morning_hour", 0, 23)
+    summary_hour = _whole_number(data, "summary_hour", 1, 23) if "summary_hour" in data else SUMMARY_HOUR
+    if summary_hour <= morning_hour:
+        raise SettingsError(f"summary_hour ({summary_hour}) must be later than morning_hour ({morning_hour})")
+    notes_daily = (_whole_number(data, "linkedin_notes_daily", 0, NOTES_DAILY) if "linkedin_notes_daily" in data
+                   else NOTES_DAILY)
     return Settings(
         titles=titles,
         areas=areas,
         remote=remote,
         lowest_salary=lowest_salary,
-        morning_hour=_whole_number(data, "morning_hour", 0, 23),
+        morning_hour=morning_hour,
+        summary_hour=summary_hour,
         pushover=_pushover(data),
+        linkedin_notes_daily=notes_daily,
         companies=_companies(data),
     )

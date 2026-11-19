@@ -1,10 +1,16 @@
-"""`hunt morning`: the day's start, run by the timer.
+"""`hunt morning`: the day's start, run by the timer, and its two later runs.
 
-It runs `hunt find`, then `hunt score` when any job is new (one a failed run left new too).
-When anything waits for the person (`questions.anything_waiting`) it ends yesterday's `job-hunt`
-session and starts a fresh interactive Claude Code session of that name with Remote Control,
-in a `tmux` session of the same name; its first message asks it to ask today's questions. With
-nothing waiting it starts nothing. A failed step is written to `data/morning.log` and goes on;
+It runs `hunt find`, then `hunt score` when any job is new (one a failed run left new too),
+and drafts a reply to each recruiter's message the find noted (`hunt draft-replies`) and a
+note to each hiring manager not drafted yet, a poster `hunt apply` stopped before or a failed
+drafting (`hunt draft-notes`).
+When anything waits for the person, notes to hiring managers included,
+(`questions.anything_waiting`) the day's first run ends yesterday's `job-hunt` session and starts
+a fresh interactive Claude Code session of that name with Remote Control, in a `tmux` session of
+the same name; its first message asks it to ask today's questions. A later run of the day leaves
+a running session alone, since the chat asks for the new jobs at its next `hunt questions`, and
+starts one only when none runs. With nothing waiting it starts nothing. The day of the first run
+is kept in `data/morning-day`. A failed step is written to `data/morning.log` and goes on;
 the next `hunt questions` tells it once, so a failure alone also starts the session.
 
 Yesterday's session is ended only while no `hunt apply` runs (`jobs/apply.lock`): ending it
@@ -21,12 +27,17 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from job_hunt.finder import FinderError
 from job_hunt.jobs import JobsList
 from job_hunt.questions import anything_waiting, log_failure
 from job_hunt.scoring import ScoreError
 from job_hunt.settings import SettingsError
+
+if TYPE_CHECKING:
+    from job_hunt.notes import Notes
+    from job_hunt.replies import Threads
 
 __all__ = ["FIRST_MESSAGE", "SESSION", "log_failure", "morning", "start_session"]
 
@@ -63,8 +74,21 @@ def morning(
     find: Callable[[], object],
     score: Callable[[], object],
     start: Callable[[], object],
+    running: Callable[[], bool],
     clock: Callable[[], datetime] = _now,
+    threads: Threads | None = None,
+    draft: Callable[[], object] | None = None,
+    notes: Notes | None = None,
+    notes_daily: int = 15,
+    draft_notes: Callable[[], object] | None = None,
 ) -> str:
+    # The person's own day: the computer's clock, not UTC.
+    today = clock().astimezone().date().isoformat()
+    marked = data / "morning-day"
+    first = not marked.exists() or marked.read_text().strip() != today
+    if first:
+        data.mkdir(parents=True, exist_ok=True)
+        marked.write_text(today + "\n")
     try:
         find()
     except Exception as error:
@@ -74,8 +98,22 @@ def morning(
             score()
         except Exception as error:
             log_failure(data, "hunt score", _said(error), clock)
-    if not anything_waiting(jobs, data):
+    if draft is not None and threads is not None and threads.in_states("new"):
+        try:
+            draft()
+        except Exception as error:
+            log_failure(data, "hunt draft-replies", _said(error), clock)
+    if draft_notes is not None:
+        # A poster a hunt apply stopped before drafting, and a note whose drafting failed, are
+        # drafted now: the step collects the posters first and drafts only the new notes.
+        try:
+            draft_notes()
+        except Exception as error:
+            log_failure(data, "hunt draft-notes", _said(error), clock)
+    if not anything_waiting(jobs, data, threads, notes, notes_daily):
         return "Nothing new and nothing waiting: no session started."
+    if not first and running():
+        return f"The {SESSION} session already runs: it asks for anything new at its next hunt questions."
     start()
     return f"Started the {SESSION} session: tmux attach -t {SESSION}, or the Claude app's Remote Control."
 
@@ -87,6 +125,10 @@ def tmux(command: list[str]) -> subprocess.CompletedProcess[str]:
         raise RuntimeError("tmux is not installed or not on the PATH") from missing
     except subprocess.TimeoutExpired as hung:
         raise RuntimeError(f"tmux did not answer in 60 seconds: {' '.join(command[:2])}") from hung
+
+
+def session_running(*, run: Run = tmux) -> bool:
+    return run(["tmux", "has-session", "-t", TARGET]).returncode == 0
 
 
 def session_command(root: Path) -> list[str]:

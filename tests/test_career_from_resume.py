@@ -358,6 +358,8 @@ def test_damaged_form_answers_of_the_old_career_never_break_saving_the_standing_
     ({"education": [{**DRAFT["education"][0], "field_of_study": "Physics 🚀"}]}, r"school 1 .*: the field"),
     ({"certifications": ["ISTQB 🚀"]}, r"certification 1"),
     ({"person": {**DRAFT["person"], "name": "Ada 🚀"}}, r"person\.name"),
+    ({"person": {**DRAFT["person"], "links": [{"url": "https://example.com/ada", "label": "Port 🚀"}]}},
+     r"person\.links\.0\.label"),
 ])
 def test_a_character_the_resume_pdf_cannot_print_is_refused_where_it_is(changes: dict, named: str) -> None:
     with pytest.raises(CareerError, match=named + r".*cannot print.*🚀"):
@@ -512,3 +514,13 @@ def test_a_later_section_with_a_header_of_its_own_is_read_too(tmp_path: Path) ->
 
     assert text[:2] == ["Ada Example", "ada@example.com"]
     assert text[-1] == "+1 555 010 0000"
+
+
+def test_a_person_with_a_bad_contact_is_still_checked_for_what_the_pdf_cannot_print() -> None:
+    person = {**DRAFT["person"], "name": "Ada 🚀", "links": [{"url": "not a link"}]}
+
+    with pytest.raises(CareerError) as refused:
+        career_from_resume(draft(person=person))
+
+    assert "person.links.0.url" in str(refused.value)
+    assert "person.name: the resume PDF cannot print 🚀" in str(refused.value)

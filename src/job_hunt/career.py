@@ -211,6 +211,7 @@ def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Car
         _printable(Person.model_validate(person).model_dump(mode="json"), "person", problems)
     except ValidationError as error:
         problems += [f"person.{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
+        _printable(person, "person", problems)
     if not _text(person.get("email")):
         problems.append("person has no email: forms and the resume need one")
     entries = draft.get("jobs") if isinstance(draft.get("jobs"), list) else []

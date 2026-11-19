@@ -710,6 +710,9 @@ def _read_alerts(
                 # A second before it: the search's `after:` may leave out an email of that very second.
                 done.through = newest - timedelta(seconds=1) if newest else None
                 in_order = False
+            if any(date is None for _, date in batch):
+                # An email without a date may be older than any the batches before read.
+                done.through = None
             continue
         finally:
             out.unlink(missing_ok=True)

@@ -819,3 +819,77 @@ def test_the_skill_reads_each_alert_in_plain_text_by_its_id_and_keeps_a_tracking
            "and never `get_thread`" in skill
     assert "Read each email of `email_ids`" in skill and "Read no other email and make no search." in skill
     assert "also a click-tracking address" in skill and "never leave a job out because of its link" in skill
+
+
+def test_a_failed_batch_holding_an_email_without_a_date_leaves_the_last_run_where_it_was(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    found = tmp_path / "found-jobs.json"
+    listed = [{"email_id": f"18c0ffee{number:08d}", "email_date": f"2026-11-10T{number:02d}:00:00+00:00"}
+              for number in range(10)] + [{"email_id": "18c0ffee00000099"}]
+
+    def run(command: list[str]) -> None:
+        args = arguments(command)
+        if "email_ids" not in args:
+            found.write_text(json.dumps({"alerts": listed}))
+        elif "18c0ffee00000099" not in args["email_ids"]:
+            Path(args["out"]).write_text(json.dumps({"emails": len(args["email_ids"]), "jobs": []}))
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=run, fetch=_any_page, clock=clock)
+    assert [line.split(":", 2)[1] for line in summary.failed] == [" batch 2 of 2 failed"]
+    # Its email may have come before the ten read: the next run reads from the same time again.
+    assert jobs.last_run() is None
+
+
+@pytest.mark.parametrize(("written", "said"), [
+    ('{"emails": 0, "jobs": []}', 'a file without a list of "alerts"'),
+    ('{"alerts": null}', 'a file without a list of "alerts"'),
+    ("{not json", "a file that is not JSON"),
+])
+def test_a_search_without_a_list_of_alerts_fails_and_the_last_run_stays(
+    tmp_path: Path, settings: Settings, clock: MovableClock, written: str, said: str
+) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=AlertSkill({"emails": 0, "jobs": []}),
+         fetch=_any_page, clock=clock)
+    before = jobs.last_run()
+    clock.advance(days=1)
+    found = tmp_path / "found-jobs.json"
+    commands: list[list[str]] = []
+
+    def run(command: list[str]) -> None:
+        commands.append(command)
+        found.write_text(written)
+
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=run, fetch=_any_page, clock=clock)
+    assert len(summary.failed) == 1 and summary.failed[0].startswith(f"alert: the read-job-alerts search wrote {said}")
+    assert (len(commands), jobs.last_run()) == (1, before)
+
+
+def test_alert_emails_are_ordered_by_their_time_whatever_its_offset(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    found = tmp_path / "found-jobs.json"
+    # Ten emails from 16:30 UTC, one a minute; 12:00-05:00 is 17:00 UTC, after them as a time but first as text;
+    # 08:00 with no offset is read as UTC and is the oldest.
+    listed = [{"email_id": f"utc-{number}", "email_date": f"2026-11-05T16:{30 + number:02d}:00+00:00"}
+              for number in range(10)]
+    listed += [{"email_id": "eastern", "email_date": "2026-11-05T12:00:00-05:00"},
+               {"email_id": "no-offset", "email_date": "2026-11-05T08:00:00"}]
+    batches: list[list[str]] = []
+
+    def run(command: list[str]) -> None:
+        args = arguments(command)
+        if "email_ids" not in args:
+            found.write_text(json.dumps({"alerts": listed}))
+            return
+        batches.append(args["email_ids"])
+        if len(batches) == 1:
+            Path(args["out"]).write_text(json.dumps({"emails": len(args["email_ids"]), "jobs": []}))
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    find(settings, jobs, tmp_path / "jobs", found, run=run, fetch=_any_page, clock=clock)
+    assert batches == [["no-offset", *(f"utc-{number}" for number in range(9))], ["utc-9", "eastern"]]
+    # The newest of the first batch, 16:38 UTC, less a second: before both emails of the failed one.
+    assert jobs.last_run() == datetime(2026, 11, 5, 16, 37, 59, tzinfo=UTC)

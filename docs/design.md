@@ -260,6 +260,15 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 
 - The workers use the user's own Chrome through the Claude in Chrome extension. The user signs
   in to LinkedIn and to company sites there, and the browser stays signed in.
+- The workers use only the Chrome on the computer the hunt runs on, never another computer's,
+  whatever else the Claude account has connected. Each browser worker first lists the
+  connected browsers and selects the one the tool says is on this computer (`onThisComputer`;
+  without that, `isLocal` with this computer's system, when only one matches). With none, or
+  more than one that could be, it does nothing in any browser: an application pauses for
+  Chrome, naming the browsers connected, at no cost of a try. An application's report names
+  the browser it used, and `hunt apply` takes no report without it: the job pauses for the user
+  to look. `hunt doctor` checks the same thing with one short run on Haiku allowed only the
+  listing tool, and names the other computers' browsers, which the workers never use.
 - Several `claude -p --chrome` workers can each drive a tab of their own in one Chrome at the
   same time (checked on 2026-11-18 with three).
 - Only one worker at a time may use LinkedIn: a lock file the LinkedIn worker holds for each

@@ -22,7 +22,7 @@ from job_hunt.jobs import JobsList, MoveError
 from job_hunt.linkedin_lock import PAUSE, STALE, LinkedInLock, random_pause
 from movable_clock import MovableClock
 # The fixtures `project` and `jobs` too: a made-up person's project folder and its jobs list.
-from test_apply import Resumes, Sites, _found, _job_of, _picked, hunt, jobs, no_linkedin, project  # noqa: F401
+from test_apply import Resumes, Sites, _found, from_this_chrome, _job_of, _picked, hunt, jobs, no_linkedin, project  # noqa: F401
 from only_named_tools import assert_only_named_tools
 
 START = datetime(2026, 11, 18, 7, 0, tzinfo=UTC)
@@ -54,7 +54,7 @@ class LinkedIn:
             self.unlocked.append(job)
         time.sleep(self.seconds)
         (self.project / "jobs" / str(job) / "report.json").write_text(
-            json.dumps(self.reports.get(job, {"result": "applied"})))
+            json.dumps(from_this_chrome(self.reports.get(job, {"result": "applied"}))))
         with self._lock:
             self.running -= 1
             self.ran.append((job, began, time.monotonic()))
@@ -390,7 +390,7 @@ def test_a_linkedin_worker_that_stops_with_no_report_releases_the_lock_and_its_j
         tries.append(_job_of(command, LINKEDIN_SKILL))
         if len(tries) == 1:
             raise ApplyError("the apply-linkedin run failed (1): no message")
-        (project / "jobs" / str(job) / "report.json").write_text('{"result": "applied"}')
+        (project / "jobs" / str(job) / "report.json").write_text(json.dumps(from_this_chrome({"result": "applied"})))
 
     apply(jobs, project, run_resume=Resumes(project), run_site=no_linkedin, run_linkedin=run, linkedin=_lock(project))
     # No report: it may have been sent, so it pauses for a look and is not tried again.
@@ -439,7 +439,7 @@ def test_a_company_site_report_a_stopped_run_left_is_saved(project: Path, jobs: 
     jobs.move(job, "resume_ready")
     jobs.move(job, "applying")
     (project / "jobs" / str(job) / "report.json").write_text(
-        json.dumps({"result": "company_site", "link": "https://careers.example.com/1"}))
+        json.dumps(from_this_chrome({"result": "company_site", "link": "https://careers.example.com/1"})))
     sites = Sites(project)
     apply(jobs, project, run_resume=Resumes(project), run_site=sites, run_linkedin=no_linkedin, linkedin=_lock(project))
     assert (jobs.get(job).kind, sites.ran, jobs.get(job).state) == ("company_site", [job], "applied")

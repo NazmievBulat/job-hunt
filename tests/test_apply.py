@@ -81,10 +81,22 @@ class Resumes:
         (self.project / "jobs" / str(job) / "resume.pdf").write_bytes(b"%PDF-1.4 stand-in")
 
 
+# The browser a worker says it selected: this computer's Chrome.
+THIS_CHROME = {"name": "Browser 3", "system": "Linux", "on_this_computer": True}
+
+
+def from_this_chrome(report: dict) -> dict:
+    """The report as a worker writes it: naming this computer's Chrome, unless it reached no
+    Chrome, or the test gives its own `browser` (None for none named)."""
+    if report.get("needs") == "chrome" or "browser" in report:
+        return {key: value for key, value in report.items() if not (key == "browser" and value is None)}
+    return {**report, "browser": THIS_CHROME}
+
+
 class Sites:
     """Stands in for the company-site workers, or with `skill` the LinkedIn worker: writes each
     job's report, one after another from `reports` (the last one repeats), and counts how many
-    run at once."""
+    run at once. A report given as a dict names this computer's Chrome (`from_this_chrome`)."""
 
     def __init__(self, project: Path, reports: dict[int, list[dict | str | bytes | None]] | None = None,
                  seconds: float = 0.0, skill: str = SITE_SKILL) -> None:
@@ -109,7 +121,7 @@ class Sites:
             elif isinstance(report, bytes):
                 out.write_bytes(report)
             elif report is not None:
-                out.write_text(json.dumps(report))
+                out.write_text(json.dumps(from_this_chrome(report)))
         finally:
             with self._lock:
                 self.running -= 1
@@ -467,7 +479,7 @@ def test_a_job_left_applying_by_a_run_that_stopped_is_not_applied_to_again(proje
         jobs.move(job, "applying")
     # The run stopped after this one's worker had written its report.
     (project / "jobs" / str(reported)).mkdir()
-    (project / "jobs" / str(reported) / "report.json").write_text('{"result": "applied"}')
+    (project / "jobs" / str(reported) / "report.json").write_text(json.dumps(from_this_chrome({"result": "applied"})))
     sites = Sites(project)
     apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert sites.ran == []
@@ -475,6 +487,21 @@ def test_a_job_left_applying_by_a_run_that_stopped_is_not_applied_to_again(proje
     stopped = jobs.get(left)
     assert stopped.state == "paused"
     assert "whether it was sent" in stopped.state_reason
+
+
+def test_a_report_a_stopped_run_left_without_this_computers_chrome_pauses_for_a_look(
+    project: Path, jobs: JobsList
+) -> None:
+    job = _picked(jobs, 1)
+    jobs.move(job, "resume_ready")
+    jobs.move(job, "applying")
+    (project / "jobs" / str(job)).mkdir()
+    (project / "jobs" / str(job) / "report.json").write_text('{"result": "applied"}')
+    sites = Sites(project)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
+    assert sites.ran == []
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
+    assert "whether it was sent" in (jobs.get(job).state_reason or "")
 
 
 def test_two_apply_runs_never_run_at_once(project: Path, jobs: JobsList) -> None:
@@ -663,6 +690,8 @@ def test_every_report_a_stopped_run_left_is_saved_and_a_broken_one_pauses(
     jobs.move(job, "applying")
     (project / "jobs" / str(job)).mkdir()
     report = project / "jobs" / str(job) / "report.json"
+    if isinstance(left, str) and left.startswith("{\""):
+        left = json.dumps(from_this_chrome(json.loads(left)))
     report.write_bytes(left) if isinstance(left, bytes) else report.write_text(left)
     sites = Sites(project)
     apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
@@ -868,6 +897,63 @@ def test_chrome_out_of_reach_pauses_every_job_and_costs_none_a_try(
     resume_job(hunt, picked[0])
     apply(hunt, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project))
     assert hunt.get(picked[0]).state == "applied"
+
+
+@pytest.mark.parametrize("browser", [
+    None, {**THIS_CHROME, "on_this_computer": False}, {"name": "Browser 1", "system": "macOS"},
+    {**THIS_CHROME, "name": " "}, {**THIS_CHROME, "on_this_computer": "true"}, "Browser 3 (Linux)",
+])
+def test_a_report_that_does_not_say_it_used_this_computers_chrome_pauses_the_job_for_a_look(
+    project: Path, jobs: JobsList, browser: object
+) -> None:
+    job = _picked(jobs, 1)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project),
+          run_site=Sites(project, {job: [{"result": "applied", "browser": browser}]}))
+    # It may have applied in another computer's Chrome: never tried again on its own, no try spent.
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
+    assert jobs.get(job).state_reason == UNSURE + "the apply-site run did not say it used this computer's Chrome"
+
+
+def test_a_worker_that_wrote_a_report_without_this_computers_chrome_then_stopped_pauses_for_a_look(
+    project: Path, jobs: JobsList
+) -> None:
+    job = _picked(jobs, 1)
+
+    def wrote_then_stopped(command: list[str]) -> None:
+        (project / "jobs" / str(job) / "report.json").write_text('{"result": "applied"}')
+        raise ApplyError("the apply-site run failed (1): no message")
+
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=wrote_then_stopped)
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
+    assert jobs.get(job).state_reason == UNSURE + "the apply-site run failed (1): no message"
+
+
+@pytest.mark.parametrize("result", [
+    {"result": "applied"}, {"result": "failed", "reason": "The job is closed."},
+    {"result": "paused", "needs": "captcha", "tab": "Apply", "tab_id": 3},
+])
+def test_every_report_but_chrome_out_of_reach_names_this_computers_chrome(tmp_path: Path, result: dict) -> None:
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps(result))
+    # Read back later (an answer, a tab to go on in), an earlier report is taken as it is.
+    assert read_report(report).result == result["result"]
+    with pytest.raises(ApplyError, match="did not say it used this computer's Chrome"):
+        read_report(report, worker=True)
+    report.write_text(json.dumps({**result, "browser": THIS_CHROME}))
+    assert read_report(report, worker=True).result == result["result"]
+
+
+def test_only_other_computers_chrome_connected_pauses_with_their_names_and_costs_no_try(
+    project: Path, jobs: JobsList
+) -> None:
+    job = _picked(jobs, 1)
+    elsewhere = {"result": "paused", "needs": "chrome", "connected": "Browser 1 (macOS), Browser 2 (macOS)"}
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project, {job: [elsewhere]}))
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
+    # Still a pause for Chrome: "done" puts it back, and the day's plan counts it as waiting for Chrome.
+    assert jobs.get(job).state_reason == (
+        "Chrome open, with the Claude extension connected, on this computer"
+        " (connected now: Browser 1 (macOS), Browser 2 (macOS); workers never use them)")
 
 
 def test_a_job_resumed_after_chrome_was_out_of_reach_starts_in_a_new_tab(project: Path, jobs: JobsList) -> None:
@@ -1282,3 +1368,64 @@ def test_with_captcha_skip_hunt_status_fails_the_captchas_already_waiting_too(
     assert cli.main(["status"]) == 0
     assert (hunt.get(job).state, hunt.get(job).state_reason) == ("failed", "the site asks for a CAPTCHA")
     assert "Paused" not in capsys.readouterr().out
+
+
+BROWSER_SKILLS = ("apply-site", "apply-linkedin", "read-linkedin-messages", "send-note", "send-reply")
+
+
+@pytest.mark.parametrize("skill", BROWSER_SKILLS)
+def test_each_browser_skill_starts_by_selecting_this_computers_chrome(skill: str) -> None:
+    text = (Path(__file__).parents[1] / ".claude" / "skills" / skill / "SKILL.md").read_text()
+    body = text.split("\n---\n", 1)[1]
+    sections = [line for line in body.splitlines() if line.startswith("## ")]
+    # Its first step, before any other in Chrome.
+    assert sections[0] == "## This computer's Chrome first"
+    first = body.split("## This computer's Chrome first", 1)[1].split("\n## ", 1)[0]
+    assert "list_connected_browsers" in first and "select_browser" in first
+    assert "`onThisComputer: true`" in first and "`isLocal: true`" in first
+    assert "no other browser could be this computer's" in first
+    assert "Never use switch_browser, never select another computer's browser" in first
+    # With none here, or several, it does nothing in any browser and says what is connected.
+    assert "do nothing in any\n   browser" in first
+    if skill.startswith("apply-"):
+        assert '{"result": "paused", "needs": "chrome", "connected": "<each connected browser\'s name and system' in first
+    else:
+        assert "Chrome on this computer is not connected (connected: <each connected browser's name and system" in first
+
+
+@pytest.mark.parametrize("skill", ["apply-site", "apply-linkedin"])
+def test_each_apply_skills_report_names_the_browser_it_used(skill: str) -> None:
+    text = (Path(__file__).parents[1] / ".claude" / "skills" / skill / "SKILL.md").read_text()
+    report = text.split("## Report", 1)[1]
+    assert '`{"name": "<its name>", "system": "<its system>", "on_this_computer": true}`' in report
+    examples = report.split("```json\n", 1)[1].split("```", 1)[0].splitlines()
+    assert all(('"browser": <the browser>' in line) != ('"needs": "chrome"' in line) for line in examples), examples
+
+
+def test_every_chrome_worker_may_select_a_browser_but_never_ask_every_browser() -> None:
+    from job_hunt.apply import CHROME_TOOLS
+    from job_hunt.notes import SEND_TOOLS
+    from job_hunt.replies import READ_CHROME_TOOLS, SEND_CHROME_TOOLS
+
+    for tools in (CHROME_TOOLS, SEND_TOOLS, READ_CHROME_TOOLS, SEND_CHROME_TOOLS):
+        assert "mcp__claude-in-chrome__list_connected_browsers" in tools
+        assert "mcp__claude-in-chrome__select_browser" in tools
+        assert "mcp__claude-in-chrome__switch_browser" not in tools
+
+
+def test_no_browser_connected_anywhere_pauses_for_chrome_without_naming_any(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1)
+    nowhere = {"result": "paused", "needs": "chrome", "connected": "none"}
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project, {job: [nowhere]}))
+    assert (jobs.get(job).state, jobs.get(job).failures) == ("paused", 0)
+    assert jobs.get(job).state_reason == "Chrome open, with the Claude extension connected"
+
+
+THE_BROWSER = '"browser": {"name": "<its name>", "system": "<its system>", "on_this_computer": true}'
+
+
+@pytest.mark.parametrize("skill", ["read-linkedin-messages", "send-note", "send-reply"])
+def test_the_other_browser_workers_name_the_browser_they_used_too(skill: str) -> None:
+    text = (Path(__file__).parents[1] / ".claude" / "skills" / skill / "SKILL.md").read_text()
+    # Not checked by the code that reads them: named so the person can see which Chrome sent it.
+    assert THE_BROWSER in text

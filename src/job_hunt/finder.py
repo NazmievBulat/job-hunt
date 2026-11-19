@@ -335,22 +335,24 @@ def run_folder(root: Path) -> Path:
 
 
 def run_claude(
-    command: list[str], folder: Path, *, skill: str = SKILL, error: type[RuntimeError] = FinderError
-) -> None:
+    command: list[str], folder: Path, *, skill: str = SKILL, error: type[RuntimeError] = FinderError,
+    minutes: int = SKILL_MINUTES,
+) -> subprocess.CompletedProcess[str]:
     """Run a skill in the project `folder`'s run folder; a run that fails raises `error` saying why."""
     here = run_folder(folder)
     # A file left there could be read by every run without a rule: nothing starts until it is gone.
     if left := sorted(path.name for path in here.iterdir()):
         raise error(f"the {skill} run did not start: {here} holds {', '.join(left)}, and it must be empty")
     try:
-        done = subprocess.run(command, cwd=here, capture_output=True, text=True, timeout=SKILL_MINUTES * 60)
+        done = subprocess.run(command, cwd=here, capture_output=True, text=True, timeout=minutes * 60)
     except subprocess.TimeoutExpired as timeout:
-        raise error(f"the {skill} run did not finish in {SKILL_MINUTES} minutes") from timeout
+        raise error(f"the {skill} run did not finish in {minutes} minutes") from timeout
     except FileNotFoundError as missing:
         raise error("claude is not installed or not on the PATH") from missing
     if done.returncode != 0:
         said = (done.stderr.strip() or done.stdout.strip()).splitlines()
         raise error(f"the {skill} run failed ({done.returncode}): {said[-1] if said else 'no message'}")
+    return done
 
 
 def _posting(job: Job) -> str:

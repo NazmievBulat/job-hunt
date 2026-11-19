@@ -768,6 +768,15 @@ def _run_quietly(command: list[str]) -> subprocess.CompletedProcess[str] | None:
         return None
 
 
+def run_browsers(command: list[str]) -> subprocess.CompletedProcess[str] | None:
+    """The doctor's listing of the connected browsers, a background run as any other; None when
+    it could not run or failed."""
+    try:
+        return run_claude(command, ROOT, skill="browser listing", minutes=2)
+    except FinderError:
+        return None
+
+
 def _timer_status() -> str:
     try:
         hour = read_settings(DATA / "settings.json").morning_hour
@@ -779,7 +788,8 @@ def _timer_status() -> str:
 
 def this_machine() -> Machine:
     return Machine(system=platform.system(), home=Path.home(), root=Path("/"), data=DATA,
-                   python=sys.version_info[:2], run=_run_quietly, which=shutil.which, timer_status=_timer_status)
+                   python=sys.version_info[:2], run=_run_quietly, run_background=run_browsers, which=shutil.which,
+                   timer_status=_timer_status)
 
 
 def _settings(args: argparse.Namespace) -> int:

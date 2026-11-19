@@ -8,6 +8,7 @@ No model, no Gmail and no browser: the skill runs are stand-ins that write the f
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -979,3 +980,50 @@ def test_a_notification_noted_while_linkedin_is_read_is_still_owed_after_it(
     again = Watch(project, threads, jobs)
     again(clock)
     assert again.linkedin_reads == 1
+
+
+class _ReadsThenWaits:
+    """A connection whose first read in `save` lets another run save before this one goes on."""
+
+    def __init__(self, db: object, meanwhile: object) -> None:
+        self.db, self.meanwhile = db, meanwhile
+
+    def __enter__(self) -> _ReadsThenWaits:
+        self.db.__enter__()  # type: ignore[attr-defined]
+        return self
+
+    def __exit__(self, *args: object) -> object:
+        return self.db.__exit__(*args)  # type: ignore[attr-defined]
+
+    def execute(self, sql: str, *args: object) -> object:
+        result = self.db.execute(sql, *args)  # type: ignore[attr-defined]
+        if sql.startswith("SELECT sent_at FROM threads") and self.meanwhile is not None:
+            other, self.meanwhile = threading.Thread(target=self.meanwhile), None  # type: ignore[arg-type]
+            other.start()
+            other.join(timeout=0.3)
+        return result
+
+
+def test_two_runs_saving_at_once_keep_the_newest_message_open(project: Path, jobs: JobsList) -> None:
+    # The morning's find and the 07:00 watch read the mail at the same time.
+    path = project / "data" / "jobs.db"
+    older, = read_messages({"recruiter_emails": [_email(1, date="2026-11-18T08:00:00-05:00")]})[0]
+    newer, = read_messages({"recruiter_emails": [_email(2, thread_id="t1", date="2026-11-18T09:00:00-05:00")]})[0]
+    errors: list[BaseException] = []
+
+    def the_watch_saves_the_newer() -> None:
+        try:
+            Threads(path).save(newer, JobsList(path))
+        except BaseException as error:  # noqa: BLE001 - told by the assertion below
+            errors.append(error)
+
+    finder = Threads(path)
+    finder._db = _ReadsThenWaits(finder._db, the_watch_saves_the_newer)  # type: ignore[assignment]
+    finder.save(older, jobs)
+    for each in threading.enumerate():
+        if each is not threading.current_thread():
+            each.join(timeout=10)
+
+    assert errors == []
+    states = {thread.email_id: thread.state for thread in Threads(path).in_states("new", "replaced")}
+    assert states == {"m1": "replaced", "m2": "new"}

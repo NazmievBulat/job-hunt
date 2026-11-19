@@ -303,6 +303,8 @@ class Threads:
         job = job_of(jobs, message)
         now = self._stamp()
         with self._db:
+            # Written before read: the morning's find and a watch may save at once.
+            self._db.execute("BEGIN IMMEDIATE")
             if self._db.execute("SELECT 1 FROM threads WHERE source = ? AND key = ?",
                                 (message.source, message.key)).fetchone():
                 return None

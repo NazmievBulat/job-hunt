@@ -47,10 +47,12 @@ class Runner:
     """Answers each command by its first two words; a command it has no answer for is not installed."""
 
     def __init__(self, **answers: tuple[int, str]) -> None:
-        self.answers, self.commands = answers, []
+        self.answers, self.commands, self.background = answers, [], []
 
-    def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str] | None:
+    def __call__(self, command: list[str], background: bool = False) -> subprocess.CompletedProcess[str] | None:
         self.commands.append(command)
+        if background:
+            self.background.append(command)
         answer = self.answers.get("_".join(command[:2]).replace("-", "_"))
         return None if answer is None else subprocess.CompletedProcess(command, answer[0], answer[1], "")
 
@@ -75,6 +77,7 @@ def everything_ready(tmp_path: Path, system: str = "Linux") -> tuple[Machine, Ru
                     claude___chrome=listed(this_computers(system)))
     machine = Machine(
         system=system, home=home, root=root, data=data, python=(3, 14), run=runner,
+        run_background=lambda command: runner(command, background=True),
         which=lambda name: f"/usr/bin/{name}" if name in ("claude", "uv") else None,
         timer_status=lambda: "the morning run is on, every day at 07:00",
     )
@@ -264,6 +267,19 @@ def test_the_listing_runs_on_haiku_allowed_only_the_listing_tool(tmp_path: Path)
     assert command[command.index("--allowedTools") + 1] == LIST_BROWSERS
     assert LIST_BROWSERS == "mcp__claude-in-chrome__list_connected_browsers"
     assert command[command.index("--permission-mode") + 1] == "dontAsk"
+    # In the empty run folder, as every background run: it may read its working folder.
+    assert runner.background == [command]
+
+
+def test_the_doctors_claude_run_fails_quietly_as_a_missing_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+    from job_hunt.finder import FinderError
+
+    def refused(command: list[str], root: Path, **named: object) -> None:
+        raise FinderError("the browser listing run did not start: .background holds career.json, and it must be empty")
+
+    monkeypatch.setattr(cli, "run_claude", refused)
+    assert cli.run_browsers(["claude", "-p", "x"]) is None
 
 
 def test_the_listing_is_not_run_while_the_native_host_is_not_running(tmp_path: Path) -> None:

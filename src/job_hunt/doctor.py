@@ -46,7 +46,9 @@ State = Literal["ok", "missing", "optional"]
 
 @dataclass(frozen=True)
 class Machine:
-    """What the checks look at. `run` gives None for a command not installed or that hung."""
+    """What the checks look at. `run` gives None for a command not installed or that hung;
+    `run_background` the same for a Claude run, which starts in the project's empty run folder,
+    as every background run does, and gives None when that folder holds anything."""
 
     system: str
     home: Path
@@ -54,6 +56,7 @@ class Machine:
     data: Path
     python: tuple[int, int]
     run: Run
+    run_background: Run
     which: Callable[[str], str | None]
     timer_status: Callable[[], str]
 
@@ -139,7 +142,7 @@ def _chrome(machine: Machine) -> Line:
 
 def _connected_browsers(machine: Machine) -> list[dict] | None:
     """The account's connected browsers, or None when the listing cannot be read."""
-    done = machine.run(["claude", "--chrome", "-p", LIST_PROMPT, "--model", BROWSER_MODEL, *ONLY_NAMED_TOOLS,
+    done = machine.run_background(["claude", "--chrome", "-p", LIST_PROMPT, "--model", BROWSER_MODEL, *ONLY_NAMED_TOOLS,
                         "--allowedTools", LIST_BROWSERS])
     if done is None or done.returncode != 0:
         return None

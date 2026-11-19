@@ -82,6 +82,9 @@ SEND_GMAIL_TOOLS = (GMAIL_THREAD, "mcp__claude_ai_Gmail__reply", "mcp__claude_ai
 # Reading LinkedIn types and clicks nothing: no computer (it types and clicks too), no form_input, no
 # file_upload. A stranger's message, read with nobody watching, cannot make it send.
 READ_CHROME_TOOLS = tuple(tool for tool in CHROME_TOOLS if not tool.endswith(("computer", "form_input", "file_upload")))
+# Sending types and clicks; it uploads only the resume a reply offering times goes out with.
+SEND_CHROME_TOOLS = tuple(tool for tool in CHROME_TOOLS if not tool.endswith("file_upload"))
+UPLOAD_TOOL = "mcp__claude-in-chrome__file_upload"
 
 Source = Literal["email", "linkedin"]
 State = Literal["new", "drafted", "sending", "sent", "skipped", "unsure", "failed", "replaced"]
@@ -786,10 +789,11 @@ def send_command(thread: Thread, reply: str, root: Path) -> list[str]:
     tools = [f"Edit({_rule(here)}/sent.json)"]
     if (resume := resume_of(thread, root)) is not None:
         arguments["resume"] = str(resume)
+        tools.append(UPLOAD_TOOL)
     prompt = f"/{SEND_SKILL} {json.dumps(arguments, ensure_ascii=False)}"
     if thread.source == "email":
         return ["claude", "-p", prompt, "--model", MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join([*SEND_GMAIL_TOOLS, *tools])]
-    return ["claude", "--chrome", "-p", prompt, "--model", MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join([*CHROME_TOOLS, *tools])]
+    return ["claude", "--chrome", "-p", prompt, "--model", MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join([*SEND_CHROME_TOOLS, *tools])]
 
 
 def _read_sent(path: Path) -> tuple[bool, str | None]:

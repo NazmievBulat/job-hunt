@@ -44,6 +44,8 @@ class Steps:
                  score_error: Exception | None = None) -> None:
         self.jobs, self.finds, self.find_error, self.score_error = jobs, finds, find_error, score_error
         self.ran: list[str] = []
+        # Whether the day's session runs, as tmux would say.
+        self.running = False
 
     def find(self) -> None:
         self.ran.append("find")
@@ -64,7 +66,46 @@ class Steps:
 
 
 def _morning(steps: Steps, jobs: JobsList, data: Path, clock: MovableClock) -> str:
-    return morning(jobs, data, find=steps.find, score=steps.score, start=steps.start, clock=clock)
+    return morning(jobs, data, find=steps.find, score=steps.score, start=steps.start,
+                   running=lambda: steps.running, clock=clock)
+
+
+def test_a_later_run_of_the_day_leaves_the_running_session_alone(
+    jobs: JobsList, tmp_path: Path, clock: MovableClock
+) -> None:
+    _morning(Steps(jobs, finds=1), jobs, tmp_path / "data", clock)
+    clock.advance(hours=5)
+    later = Steps(jobs, finds=3)
+    later.running = True
+
+    said = _morning(later, jobs, tmp_path / "data", clock)
+
+    # The new jobs are found and scored; the chat asks for them at its next hunt questions.
+    assert later.ran == ["find", "score"]
+    assert "already runs" in said
+
+
+def test_a_later_run_starts_the_session_when_none_runs(jobs: JobsList, tmp_path: Path, clock: MovableClock) -> None:
+    _morning(Steps(jobs), jobs, tmp_path / "data", clock)
+    clock.advance(hours=5)
+    later = Steps(jobs, finds=1)
+
+    _morning(later, jobs, tmp_path / "data", clock)
+
+    assert later.ran == ["find", "score", "start"]
+
+
+def test_the_first_run_of_the_next_day_starts_a_fresh_session(
+    jobs: JobsList, tmp_path: Path, clock: MovableClock
+) -> None:
+    _morning(Steps(jobs, finds=1), jobs, tmp_path / "data", clock)
+    clock.advance(days=1)
+    tomorrow = Steps(jobs)
+    tomorrow.running = True
+
+    _morning(tomorrow, jobs, tmp_path / "data", clock)
+
+    assert tomorrow.ran == ["find", "start"]
 
 
 def test_nothing_new_starts_nothing(jobs: JobsList, tmp_path: Path, clock: MovableClock) -> None:
@@ -317,3 +358,19 @@ def test_jobs_the_finder_left_out_are_logged(tmp_path: Path, monkeypatch: pytest
 
     assert "hunt find: left out entry 1: no title" in (data / "morning.log").read_text()
     assert started == [tmp_path]
+
+
+def test_the_session_runs_when_tmux_has_it_by_its_exact_name() -> None:
+    from job_hunt.morning import session_running
+
+    asked: list[list[str]] = []
+
+    def answer(code: int):
+        def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+            asked.append(command)
+            return subprocess.CompletedProcess(command, code, "", "")
+        return run
+
+    assert session_running(run=answer(0)) is True
+    assert session_running(run=answer(1)) is False
+    assert asked[0] == ["tmux", "has-session", "-t", f"={SESSION}"]

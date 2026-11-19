@@ -1,4 +1,6 @@
-"""`hunt timer on|off`, `hunt timer`: `hunt morning` every day at the settings' morning hour.
+"""`hunt timer on|off`, `hunt timer`: `hunt morning` every day at the settings' morning hour,
+and again at 12:00 and at 16:00 when those come after it (`hours`), so a day's new jobs are
+found three times; `hunt morning` itself tells the day's first run from the later ones.
 
 On Linux a systemd user timer (`~/.config/systemd/user/job-hunt-morning.{service,timer}`), on
 macOS a launchd agent (`~/Library/LaunchAgents/com.job-hunt.morning.plist`). Both run the
@@ -19,6 +21,7 @@ from pathlib import Path
 
 UNIT = "job-hunt-morning"
 LABEL = "com.job-hunt.morning"
+LATER = (12, 16)
 
 Run = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
@@ -42,6 +45,16 @@ def _word(value: object) -> str:
     return _quoted(value).replace("$", "$$")
 
 
+def hours(morning: int) -> list[int]:
+    """The hours of the day's runs: the morning, then the later hours after it."""
+    return [morning, *(hour for hour in LATER if hour > morning)]
+
+
+def _said(hour: int) -> str:
+    later = [f"{each:02d}:00" for each in hours(hour)[1:]]
+    return f"every day at {hour:02d}:00" + (f", then at {' and '.join(later)}" if later else "")
+
+
 def systemd_units(root: Path, hour: int, uv: str, path: str) -> tuple[str, str]:
     service = f"""[Unit]
 Description=The job hunt's morning run
@@ -54,11 +67,10 @@ ExecStart={_word(uv)} run --project {_word(root)} hunt morning
 KillMode=process
 """
     timer = f"""[Unit]
-Description=The job hunt's morning run at {hour:02d}:00
+Description=The job hunt's runs, {_said(hour)}
 
 [Timer]
-OnCalendar=*-*-* {hour:02d}:00:00
-Persistent=true
+{"".join(f"OnCalendar=*-*-* {each:02d}:00:00{chr(10)}" for each in hours(hour))}Persistent=true
 Unit={UNIT}.service
 
 [Install]
@@ -73,7 +85,7 @@ def launchd_plist(root: Path, hour: int, uv: str, path: str) -> str:
         "ProgramArguments": [uv, "run", "--project", str(root), "hunt", "morning"],
         "WorkingDirectory": str(root),
         "EnvironmentVariables": {"PATH": path},
-        "StartCalendarInterval": {"Hour": hour, "Minute": 0},
+        "StartCalendarInterval": [{"Hour": each, "Minute": 0} for each in hours(hour)],
         "AbandonProcessGroup": True,
         "StandardOutPath": str(root / "data" / "morning.out"),
         "StandardErrorPath": str(root / "data" / "morning.out"),
@@ -98,10 +110,15 @@ def _must(run: Run, command: list[str]) -> None:
 def _written_hour(system: str, home: Path) -> int | None:
     if system == "Linux":
         timer = _units(home) / f"{UNIT}.timer"
+        # The first run is the morning's.
         found = re.search(r"^OnCalendar=\*-\*-\* (\d\d):", timer.read_text(), re.M) if timer.exists() else None
         return int(found.group(1)) if found else None
     agent = _agent(home)
-    return plistlib.loads(agent.read_bytes())["StartCalendarInterval"]["Hour"] if agent.exists() else None
+    if not agent.exists():
+        return None
+    runs = plistlib.loads(agent.read_bytes())["StartCalendarInterval"]
+    # An agent written before the later runs has one run, not a list of them.
+    return (runs[0] if isinstance(runs, list) else runs)["Hour"]
 
 
 def timer(
@@ -140,7 +157,7 @@ def timer(
             _must(run, ["launchctl", "bootstrap", f"gui/{uid}", str(agent)])
         else:
             agent.unlink(missing_ok=True)
-    return f"the morning run is on, every day at {hour:02d}:00" if action == "on" else "the morning run is off"
+    return f"the morning run is on, {_said(hour)}" if action == "on" else "the morning run is off"
 
 
 def _status(system: str, home: Path, hour: int, run: Run, uid: int) -> str:
@@ -151,7 +168,7 @@ def _status(system: str, home: Path, hour: int, run: Run, uid: int) -> str:
         active = run(["systemctl", "--user", "is-active", f"{UNIT}.timer"]).stdout.strip() == "active"
     else:
         active = run(["launchctl", "print", f"gui/{uid}/{LABEL}"]).returncode == 0
-    said = f"the morning run is {'on' if active else 'written but not running'}, every day at {written:02d}:00"
+    said = f"the morning run is {'on' if active else 'written but not running'}, {_said(written)}"
     if written != hour or not active:
         said += f"; hunt timer on sets it to the settings' {hour:02d}:00 and turns it on"
     return said

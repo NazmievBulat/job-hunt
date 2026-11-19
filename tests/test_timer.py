@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from job_hunt.timer import LABEL, UNIT, TimerError, launchd_plist, systemd_units, timer
+from job_hunt.timer import LABEL, UNIT, TimerError, hours, launchd_plist, systemd_units, timer
 
 
 class Runner:
@@ -30,7 +30,9 @@ def test_the_systemd_timer_runs_the_morning_at_the_hour(tmp_path: Path) -> None:
     assert 'Environment="PATH=/usr/local/bin:/usr/bin"' in service
     # The tmux server it starts must outlive the run.
     assert "KillMode=process" in service
-    assert "OnCalendar=*-*-* 07:00:00" in timer_unit
+    # The morning, then two more runs: at noon and at four.
+    assert [line for line in timer_unit.splitlines() if line.startswith("OnCalendar=")] == [
+        "OnCalendar=*-*-* 07:00:00", "OnCalendar=*-*-* 12:00:00", "OnCalendar=*-*-* 16:00:00"]
     assert "Persistent=true" in timer_unit
     assert f"Unit={UNIT}.service" in timer_unit
 
@@ -41,9 +43,19 @@ def test_the_launchd_agent_runs_the_morning_at_the_hour(tmp_path: Path) -> None:
     assert agent["Label"] == LABEL
     assert agent["ProgramArguments"] == ["/opt/homebrew/bin/uv", "run", "--project", str(tmp_path), "hunt", "morning"]
     assert agent["WorkingDirectory"] == str(tmp_path)
-    assert agent["StartCalendarInterval"] == {"Hour": 18, "Minute": 0}
+    # A morning after four has no later runs.
+    assert agent["StartCalendarInterval"] == [{"Hour": 18, "Minute": 0}]
     assert agent["EnvironmentVariables"] == {"PATH": "/opt/homebrew/bin:/usr/bin"}
     assert agent["AbandonProcessGroup"] is True
+    seven = plistlib.loads(launchd_plist(tmp_path, 7, "uv", "/usr/bin").encode())
+    assert seven["StartCalendarInterval"] == [{"Hour": 7, "Minute": 0}, {"Hour": 12, "Minute": 0},
+                                              {"Hour": 16, "Minute": 0}]
+
+
+@pytest.mark.parametrize(("morning", "runs"), [(7, [7, 12, 16]), (0, [0, 12, 16]), (12, [12, 16]), (13, [13, 16]),
+                                               (16, [16]), (23, [23])])
+def test_the_runs_are_the_morning_and_the_later_hours_after_it(morning: int, runs: list[int]) -> None:
+    assert hours(morning) == runs
 
 
 def test_on_writes_the_linux_units_and_turns_the_timer_on(tmp_path: Path) -> None:
@@ -124,7 +136,7 @@ def test_the_macos_state_reads_the_agents_hour(tmp_path: Path) -> None:
             return subprocess.CompletedProcess(command, 113, "", "Could not find service")
 
     unloaded = timer("status", "Darwin", home, root, 6, run=Unloaded(), uv="uv", path="/usr/bin", uid=501)
-    assert loaded == "the morning run is on, every day at 06:00"
+    assert loaded == "the morning run is on, every day at 06:00, then at 12:00 and 16:00"
     assert "written but not running" in unloaded and "hunt timer on" in unloaded
 
 
@@ -237,3 +249,14 @@ def test_hunt_timer_off_needs_no_settings(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(cli, "run_command", Runner())
 
     assert cli.main(["timer", "off"]) == 0
+
+
+def test_an_agent_written_before_the_later_runs_still_says_its_hour(tmp_path: Path) -> None:
+    home, root = tmp_path / "home", tmp_path / "project"
+    agent = home / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+    agent.parent.mkdir(parents=True)
+    agent.write_bytes(plistlib.dumps({"Label": LABEL, "StartCalendarInterval": {"Hour": 6, "Minute": 0}}))
+
+    said = timer("status", "Darwin", home, root, 7, run=Runner(), uv="uv", path="/usr/bin", uid=501)
+
+    assert "06:00" in said and "hunt timer on" in said

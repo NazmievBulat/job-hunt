@@ -25,6 +25,7 @@ from job_hunt.career import Career, read_career, write_career
 from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.linkedin_lock import LinkedInLock
 from movable_clock import MovableClock
+from only_named_tools import assert_only_named_tools
 
 
 def _found(number: int, **change: object) -> FoundJob:
@@ -127,6 +128,7 @@ def test_a_resume_worker_reads_only_its_folder_and_the_career_and_runs_only_the_
     assert json.loads(command[2].removeprefix(f"/{RESUME_SKILL} ")) == {"job": 12, "folder": "jobs/12"}
     assert command[command.index("--model") + 1] == MODEL
     folder, career = project / "jobs" / "12", project / "data" / "career.json"
+    assert_only_named_tools(command)
     assert command[command.index("--allowedTools") + 1].split(",") == [
         f"Read(/{folder}/**)", f"Read(/{career})",
         f"Edit(/{folder}/resume-content.json)", "Bash(uv run hunt resume jobs/12)",
@@ -148,6 +150,7 @@ def test_a_site_worker_drives_chrome_reads_its_folder_and_the_career_and_writes_
     }
     tools = command[command.index("--allowedTools") + 1].split(",")
     assert tools[:3] == [f"Read(/{folder}/**)", f"Read(/{project}/data/career.json)", f"Edit(/{folder}/report.json)"]
+    assert_only_named_tools(command)
     # The rest drive the browser; nothing runs a command or reads another folder.
     assert all(tool.startswith("mcp__claude-in-chrome__") for tool in tools[3:])
     assert "mcp__claude-in-chrome__file_upload" in tools

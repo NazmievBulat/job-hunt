@@ -56,7 +56,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from job_hunt.apply import CHROME_TOOLS
-from job_hunt.finder import PageError, page_text_and_kind
+from job_hunt.finder import ONLY_NAMED_TOOLS, PageError, page_text_and_kind
 from job_hunt.jobs import JobsList, clean_link
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.questions import log_failure
@@ -538,7 +538,7 @@ def draft_command(thread: Thread, root: Path, offered: list[datetime] | None = N
     if thread.source == "email":
         tools += DRAFT_GMAIL_TOOLS
     return ["claude", "-p", f"/{DRAFT_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
-            "--model", DRAFT_MODEL, "--allowedTools", ",".join(tools)]
+            "--model", DRAFT_MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join(tools)]
 
 
 def talk_title(thread: Thread, jobs: JobsList) -> str:
@@ -788,8 +788,8 @@ def send_command(thread: Thread, reply: str, root: Path) -> list[str]:
         arguments["resume"] = str(resume)
     prompt = f"/{SEND_SKILL} {json.dumps(arguments, ensure_ascii=False)}"
     if thread.source == "email":
-        return ["claude", "-p", prompt, "--model", MODEL, "--allowedTools", ",".join([*SEND_GMAIL_TOOLS, *tools])]
-    return ["claude", "--chrome", "-p", prompt, "--model", MODEL, "--allowedTools", ",".join([*CHROME_TOOLS, *tools])]
+        return ["claude", "-p", prompt, "--model", MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join([*SEND_GMAIL_TOOLS, *tools])]
+    return ["claude", "--chrome", "-p", prompt, "--model", MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join([*CHROME_TOOLS, *tools])]
 
 
 def _read_sent(path: Path) -> tuple[bool, str | None]:
@@ -872,7 +872,7 @@ def _send_reply(threads: Threads, root: Path, thread: int, run: Run, lock: Linke
 
 def read_command(after: datetime, out: Path) -> list[str]:
     arguments = {"after": after.isoformat(), "out": str(out)}
-    return ["claude", "--chrome", "-p", f"/{READ_SKILL} {json.dumps(arguments)}", "--model", MODEL,
+    return ["claude", "--chrome", "-p", f"/{READ_SKILL} {json.dumps(arguments)}", "--model", MODEL, *ONLY_NAMED_TOOLS,
             "--allowedTools", ",".join([*READ_CHROME_TOOLS, f"Edit({_rule(out)})"])]
 
 

@@ -606,3 +606,13 @@ def test_hunt_find_saves_one_job_for_two_links_to_one_page_and_a_job_whose_page_
     assert (sdet.page_problem, sdet.kind) == ("ValueError: a bug in reading pages", None)
     posting = (fake_claude / "jobs" / str(sdet.id) / "posting.md").read_text()
     assert "could not be read (ValueError: a bug in reading pages)" in posting
+
+
+def test_hunt_find_starts_no_run_while_the_run_folder_holds_a_file(
+    fake_claude: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (fake_claude / ".background").mkdir()
+    (fake_claude / ".background" / "career.json").write_text("{}")
+    assert cli.main(["find"]) == 1
+    assert "holds career.json, and it must be empty" in capsys.readouterr().err
+    assert not (tmp_path / "claude.json").exists()

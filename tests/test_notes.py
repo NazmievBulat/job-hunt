@@ -214,10 +214,12 @@ def test_the_drafter_is_given_the_job_the_poster_and_the_limit_and_may_read_only
     job = _applied(jobs, project, 1, _poster())
     collect(notes, jobs, project)
     [note] = notes.all()
+    (project / "jobs" / str(job) / "posting.md").write_text("# QA Engineer 1\n")
 
     command = draft_command(note, jobs.get(job), project)
 
     arguments = _prompt(command, DRAFT_SKILL)
+    assert arguments["posting"] == str(project / "jobs" / str(job) / "posting.md")
     assert (arguments["title"], arguments["company"], arguments["poster"], arguments["limit"]) == (
         "QA Engineer 1", "Example Co 1", {"name": "Jane Doe 1", "title": "Engineering Manager"}, LIMIT)
     tools = command[command.index("--allowedTools") + 1].split(",")

@@ -18,5 +18,18 @@ def assert_only_named_tools(command: list[str]) -> None:
     assert paths and all(path.startswith("//") for path in paths)
     prompt = command[command.index("-p") + 1]
     arguments = json.loads(prompt[prompt.index(" ") + 1:])
-    given = [arguments.get(name) for name in PATHS] + [job.get("posting") for job in arguments.get("jobs", [])]
-    assert all(path.startswith("/") for path in given if isinstance(path, str))
+    relative = [value for key, value in _strings(arguments)
+                if (key in PATHS or value.endswith(FILES)) and not value.startswith("/")]
+    assert relative == []
+
+
+FILES = (".json", ".md", ".pdf", ".docx")
+
+
+def _strings(value: object, key: str | None = None) -> list[tuple[str | None, str]]:
+    """Every text in the arguments, nested ones too, with the name it is given under."""
+    if isinstance(value, dict):
+        return [found for name, each in value.items() for found in _strings(each, name)]
+    if isinstance(value, list):
+        return [found for each in value for found in _strings(each, key)]
+    return [(key, value)] if isinstance(value, str) else []

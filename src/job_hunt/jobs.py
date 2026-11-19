@@ -331,11 +331,14 @@ class JobsList:
                 f"moving to {state} needs a reason" if state in WITH_REASON else f"moving to {state} takes no reason"
             )
         decision = ", decision = ?" if state in ("picked", "skipped") else ""
-        decision += ", picked_at = updated_at" if state == "picked" else ""
+        # Bound, not `picked_at = updated_at`, which reads the row as it was before this update.
+        decision += ", picked_at = ?" if state == "picked" else ""
+        now = self._stamp()
         self._db.execute(
             f"UPDATE jobs SET state = ?, state_reason = ?, updated_at = ?, not_before = NULL, asked = 0{decision}"
             " WHERE id = ?",
-            (state, reason, self._stamp(), *((state,) if state in ("picked", "skipped") else ()), job),
+            (state, reason, now, *((state,) if state in ("picked", "skipped") else ()),
+             *((now,) if state == "picked" else ()), job),
         )
 
     def fail(self, job: int, reason: str) -> State:

@@ -88,7 +88,8 @@ def test_the_days_number_counts_the_jobs_started_today_and_the_picks_waiting(job
     jobs.later(held, MORNING + timedelta(days=1))
     # The pick held for tomorrow is tomorrow's.
     assert room(jobs, Plan(daily=5), jobs.now()) == 3
-    _scored(jobs, 4, 9), _scored(jobs, 5, 8), _scored(jobs, 6, 7), _scored(jobs, 7, 7)
+    for number, score in ((4, 9), (5, 8), (6, 7), (7, 7)):
+        _scored(jobs, number, score)
     assert len(auto_pick(jobs, Plan(daily=5, auto_from=7)).picked) == 3
     assert waiting in {job.id for job in jobs.in_states("picked")}
 
@@ -253,7 +254,7 @@ def test_a_job_picked_while_the_run_waits_gets_its_resume_and_is_applied_in_the_
         sites(command)
         if _job_of(command, SITE_SKILL) == first:
             # The noon morning run picks it by its score, with its own connection.
-            JobsList(project / "data" / "jobs.db").move(later, "picked")
+            JobsList(project / "data" / "jobs.db", clock=_clock(jobs)).move(later, "picked")
 
     resumes = Resumes(project)
     _apply(jobs, project, Plan(), site=run, resumes=resumes)
@@ -261,6 +262,52 @@ def test_a_job_picked_while_the_run_waits_gets_its_resume_and_is_applied_in_the_
     assert sites.ran == [first, later, second]
     assert resumes.ran == [first, second, later]
     assert jobs.get(later).state == "applied"
+
+
+def test_nothing_starts_before_the_morning_hour_and_it_waits_for_this_morning(
+        jobs: JobsList, project: Path) -> None:
+    job = _picked(jobs, 1)
+    _clock(jobs).now = MORNING.replace(hour=1)
+    _apply(jobs, project, Plan(morning_hour=7))
+    assert (jobs.get(job).state, jobs.get(job).not_before) == ("resume_ready", MORNING.isoformat())
+
+
+def _started(clock: MovableClock, worker: Sites, times: dict[int, datetime], skill: str):  # type: ignore[no-untyped-def]
+    def run(command: list[str]) -> None:
+        times[_job_of(command, skill)] = clock.now
+        worker(command)
+    return run
+
+
+def test_linkedin_and_the_company_sites_share_one_spread(jobs: JobsList, project: Path) -> None:
+    clock = _clock(jobs)
+    easy = [_picked(jobs, number, kind="easy_apply") for number in (1, 2)]
+    site = _picked(jobs, 3)
+    times: dict[int, datetime] = {}
+    _apply(jobs, project, Plan(), site=_started(clock, Sites(project), times, SITE_SKILL),
+           linkedin=_started(clock, Sites(project, skill=LINKEDIN_SKILL), times, LINKEDIN_SKILL))
+    assert sorted(times.values()) == [MORNING, MORNING + MOST_GAP, MORNING + 2 * MOST_GAP]
+    assert set(times) == {*easy, site}
+
+
+def test_a_linkedin_leftover_goes_before_a_better_company_site_pick_of_today(
+        jobs: JobsList, project: Path) -> None:
+    clock = _clock(jobs)
+    left = _picked(jobs, 1, kind="easy_apply")
+    clock.advance(days=1)
+    better = _scored(jobs, 2, 10)
+    jobs.move(better, "picked")
+    linkedin = Sites(project, skill=LINKEDIN_SKILL)
+    sites = Sites(project)
+    _apply(jobs, project, Plan(daily=1), site=sites, linkedin=linkedin)
+    assert (linkedin.ran, sites.ran) == ([left], [])
+
+
+def test_a_pick_keeps_the_time_it_was_picked_not_when_it_was_scored(jobs: JobsList) -> None:
+    job = _scored(jobs, 1, 9)
+    _clock(jobs).advance(days=3)
+    jobs.move(job, "picked")
+    assert jobs.get(job).picked_at == (MORNING + timedelta(days=3)).isoformat()
 
 
 def test_the_spread_is_at_most_fifteen_minutes() -> None:
@@ -332,6 +379,32 @@ def test_two_picks_of_one_title_at_one_company_apply_once(jobs: JobsList, projec
     assert (jobs.get(one).state, jobs.get(two).state) == ("applied", "skipped")
 
 
+def test_a_paused_application_of_the_title_holds_and_a_failed_one_does_not(jobs: JobsList, project: Path) -> None:
+    from job_hunt.plan import applied_lately
+
+    paused, failed = _picked(jobs, 1), _picked(jobs, 2)
+    _apply(jobs, project, Plan(), site=Sites(project, {
+        paused: [{"result": "paused", "needs": "question", "question": "Visa?", "tab": "Acme"}],
+        failed: [{"result": "failed", "reason": "closed"}]}))
+    assert (jobs.get(paused).state, jobs.get(failed).state) == ("paused", "failed")
+    same_as_paused = jobs.add(_found(1, link="https://jobs.example.com/p"), kind="company_site")
+    same_as_failed = jobs.add(_found(2, link="https://jobs.example.com/f"), kind="company_site")
+    assert same_as_paused is not None and same_as_failed is not None
+    now = jobs.now()
+    assert applied_lately(jobs, jobs.get(same_as_paused), now).id == paused  # type: ignore[union-attr]
+    assert applied_lately(jobs, jobs.get(same_as_failed), now) is None
+
+
+def test_two_scored_jobs_of_one_title_at_one_company_are_picked_once(jobs: JobsList) -> None:
+    one = _scored(jobs, 1, 9)
+    two = jobs.add(_found(1, link="https://jobs.example.com/same"), kind="company_site")
+    assert two is not None
+    jobs.score(two, 8, "Fits.")
+    picked = auto_pick(jobs, Plan(auto_from=7))
+    assert ([job.id for job in picked.picked], picked.same) == ([one], 1)
+    assert jobs.get(two).state == "skipped"
+
+
 # The day's summary.
 
 def test_the_day_is_counted_by_kind_by_what_waits_and_by_failure(jobs: JobsList, project: Path) -> None:
@@ -389,6 +462,114 @@ def test_hunt_status_today_prints_the_days_summary(
         f'  {paused}. QA Engineer 2 at Example Co 2: needs an answer to "Visa?", in the Chrome tab "Acme" '
         f'(then: hunt answer {paused} "<the answer>")\n')
     assert hunt.get(sent).state == "applied"
+
+
+# Told in the morning, asking nothing.
+
+def test_the_picks_by_score_are_told_once_numbered_for_skip_and_ask_nothing(jobs: JobsList, project: Path) -> None:
+    from job_hunt.questions import anything_waiting, questions
+
+    data = project / "data"
+    one, two, low = _scored(jobs, 1, 9), _scored(jobs, 2, 7), _scored(jobs, 3, 5)
+    auto_pick(jobs, Plan(auto_from=7))
+    said = questions(jobs, data, auto_from=7)
+    assert "Applying to 2 jobs today (score 7 and up). Reply skip 3 12 to leave some out.\n 1.  9  QA Engineer 1" in said
+    assert "New jobs" not in said
+    # Told once; the job below the score was skipped and is not asked about.
+    assert "Applying to" not in questions(jobs, data, auto_from=7)
+    assert jobs.get(low).state == "skipped"
+    jobs.decide([2], "skipped")
+    assert jobs.get(two).state == "skipped"
+    # One more picked later in the day tells them again, numbered anew.
+    _scored(jobs, 4, 10)
+    auto_pick(jobs, Plan(auto_from=7))
+    assert "Applying to 2 jobs today" in questions(jobs, data, auto_from=7)
+    assert jobs.get(one).state == "picked"
+    # A scored job above the score left for the next day waits for no one.
+    jobs.move(one, "skipped")
+    jobs.move(4, "skipped")
+    _scored(jobs, 5, 8)
+    assert anything_waiting(jobs, data, auto_from=7) is False
+    assert anything_waiting(jobs, data) is True
+
+
+def test_the_morning_run_picks_by_score_also_with_nothing_new(jobs: JobsList, project: Path) -> None:
+    from job_hunt.morning import morning
+
+    data = project / "data"
+    left = _scored(jobs, 1, 9)
+    picks: list[str] = []
+    said = morning(jobs, data, find=lambda: None, score=lambda: None, start=lambda: None, running=lambda: False,
+                   clock=_clock(jobs), pick=lambda: picks.append(str(auto_pick(jobs, Plan(auto_from=7)))),
+                   auto_from=7)
+    assert picks == ["1 jobs picked by their score"]
+    assert jobs.get(left).state == "picked"
+    assert said.startswith("Started the job-hunt session")
+
+
+def _settings(project: Path, **plan: object) -> None:
+    import json
+
+    (project / "data" / "settings.json").write_text(json.dumps({
+        "titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 7,
+        **plan}))
+
+
+def test_hunt_apply_keeps_to_the_settings_plan(
+        hunt: JobsList, project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(cli, "JobsList", lambda path: JobsList(path, clock=_clock(hunt)))
+    monkeypatch.setattr(cli, "run_resume", Resumes(project))
+    monkeypatch.setattr(cli, "run_site", Sites(project))
+    _settings(project, daily_applications=1, site_workers=2, linkedin_daily=0, auto_apply_from=8)
+    assert cli.day_plan() == Plan(daily=1, linkedin_daily=0, site_workers=2, morning_hour=7, summary_hour=18,
+                                  auto_from=8)
+    one, two = _picked(hunt, 1), _picked(hunt, 2)
+    assert cli.main(["apply"]) == 0
+    assert capsys.readouterr().out == "2 resumes written; 1 applied, 0 paused, 0 failed, 1 left for later\n"
+    assert (hunt.get(one).state, hunt.get(two).not_before) == ("applied", (MORNING + timedelta(days=1)).isoformat())
+    (project / "data" / "settings.json").write_text("not json")
+    assert cli.day_plan() is None
+
+
+def test_hunt_morning_picks_by_the_settings_score_and_hunt_skip_leaves_one_out(
+        hunt: JobsList, project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(cli, "JobsList", lambda path: JobsList(path, clock=_clock(hunt)))
+    monkeypatch.setattr(cli, "find_step", lambda: None)
+    monkeypatch.setattr(cli, "score_step", lambda: None)
+    monkeypatch.setattr(cli, "verdict", lambda: None)
+    monkeypatch.setattr(cli, "remote_desktop_ready", lambda machine: False)
+    started: list[Path] = []
+    monkeypatch.setattr(cli, "start_session", started.append)
+    _settings(project, auto_apply_from=8)
+    nine, ten, six = _scored(hunt, 1, 9), _scored(hunt, 2, 10), _scored(hunt, 3, 6)
+    assert cli.main(["morning"]) == 0
+    assert [hunt.get(job).state for job in (nine, ten, six)] == ["picked", "picked", "skipped"]
+    assert started == [project]
+    capsys.readouterr()
+    assert cli.main(["questions"]) == 0
+    said = capsys.readouterr().out
+    assert "Applying to 2 jobs today (score 8 and up). Reply skip 3 12 to leave some out." in said
+    assert " 1. 10  QA Engineer 2" in said and " 2.  9  QA Engineer 1" in said
+    assert "New jobs" not in said
+    assert cli.main(["skip", "2"]) == 0
+    assert capsys.readouterr().out == "skipped 2: QA Engineer 1 at Example Co 1\n"
+    assert hunt.get(nine).state == "skipped"
+    assert cli.main(["questions"]) == 0
+    assert "Applying to" not in capsys.readouterr().out
+
+
+def test_hunt_settings_keeps_the_days_plan_it_was_not_given(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from job_hunt.settings import read_settings
+
+    monkeypatch.setattr(cli, "DATA", project / "data")
+    _settings(project, daily_applications=100, auto_apply_from=7, site_workers=5, linkedin_daily=30)
+    given = {"titles": ["SDET"], "areas": [], "remote": "include", "lowest_salary": None, "morning_hour": 7}
+    assert cli.main(["settings", json.dumps(given)]) == 0
+    saved = read_settings(project / "data" / "settings.json")
+    assert (saved.titles, saved.daily_applications, saved.auto_apply_from, saved.site_workers,
+            saved.linkedin_daily) == (["SDET"], 100, 7, 5, 30)
 
 
 # Told in the morning, asking nothing.

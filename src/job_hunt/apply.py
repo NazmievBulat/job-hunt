@@ -36,8 +36,8 @@ apart, and at most `HOST_DAILY` a day; the rest wait for the next day. A job goi
 it paused in is not held: it is the same application.
 
 With the day's plan (`plan`), the jobs start in its order, leftovers of an earlier day first,
-spread over the day, up to its daily numbers and not past the summary hour; the rest wait for
-the next morning. A job whose title was applied to at the same company lately is left out
+spread over the day, up to its daily numbers, from the morning hour to the summary hour; the rest
+wait for the next morning hour. A job whose title was applied to at the same company lately is left out
 (skipped), whatever the plan. A job skipped while the run goes on is not started; one picked
 or put back meanwhile is taken by the same run, its resume written first.
 """
@@ -434,7 +434,7 @@ def _held(this: _Run, job: int, skill: str) -> bool:
     if plan is None:
         return False
     linkedin = jobs.starts_on(LINKEDIN_HOST, midnight(now), but=job)
-    if (now >= plan.day_end(now) or len(started_today(jobs, now) - {job}) >= plan.daily
+    if (not plan.day_start(now) <= now < plan.day_end(now) or len(started_today(jobs, now) - {job}) >= plan.daily
             or (skill == LINKEDIN_SKILL and len(linkedin) >= plan.linkedin_daily)):
         jobs.later(job, plan.next_morning(now))
         this.summary.later += 1
@@ -516,22 +516,24 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
     try:
         workers = this.plan.site_workers if this.plan is not None else SITE_WORKERS
         with ThreadPoolExecutor(max_workers=workers + 1) as pool:
-            gather()
-            while any(waiting.values()) or running:
-                gather()
-                sites = sum(skill == SITE_SKILL for _, skill in running.values())
+            def sites() -> float | None:
+                """Start the company-site jobs that may start now; how long until one may."""
+                busy = sum(skill == SITE_SKILL for _, skill in running.values())
                 site_later = None
-                while waiting[SITE_SKILL] and sites < workers:
+                while waiting[SITE_SKILL] and busy < workers:
                     spread = _spread(this, sum(map(len, waiting.values())))
                     chosen, site_later = _next_site(this, waiting[SITE_SKILL], spread)
                     if chosen is None:
                         break
                     waiting[SITE_SKILL].remove(chosen)
                     start(chosen, run_site)
-                    sites += 1
-                # How long until the LinkedIn worker may start, when it waits for the lock or the
-                # spread. The lock alone keeps it to one; while this run's own applies, it is not asked.
-                later = None
+                    busy += 1
+                return site_later
+
+            def linkedin_one() -> float | None:
+                """Start the next LinkedIn job when it may; how long until it may, when it waits for
+                the lock or the spread. The lock alone keeps it to one; while this run's own
+                applies, it is not asked."""
                 in_line = waiting[LINKEDIN_SKILL]
                 while in_line and all(skill != LINKEDIN_SKILL for _, skill in running.values()):
                     if _held(this, in_line[0], LINKEDIN_SKILL):
@@ -539,12 +541,26 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
                         continue
                     if not _continues(this, in_line[0]) and (
                             later := _spread(this, sum(map(len, waiting.values())))) is not None:
-                        break
+                        return later
                     later = linkedin.take(in_line[0])
                     if later is None:
                         start(in_line.pop(0), run_linkedin)
-                    break
-                later = min((each for each in (later, site_later) if each is not None), default=None)
+                    return later
+                return None
+
+            gather()
+            while any(waiting.values()) or running:
+                gather()
+                # The next start, of the spread or the day's number, goes to the job first in the
+                # plan's order, of either kind: the LinkedIn worker first when its job comes first.
+                first = [jobs.get(line[0]) for line in waiting.values() if line]
+                if len(first) == 2 and order(first)[0].id == waiting[LINKEDIN_SKILL][0]:
+                    linkedin_later = linkedin_one()
+                    site_later = sites()
+                else:
+                    site_later = sites()
+                    linkedin_later = linkedin_one()
+                later = min((each for each in (linkedin_later, site_later) if each is not None), default=None)
                 if not running:
                     if jobs.in_states("picked"):
                         return True

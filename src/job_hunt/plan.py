@@ -4,7 +4,8 @@ what the day came to.
 The settings give the day's number (`daily_applications`), how many company-site applications
 run at once (`site_workers`) and how many LinkedIn Easy Apply ones start a day
 (`linkedin_daily`). `hunt apply` keeps to them (`apply`): no application starts past the day's
-number, or past the summary hour, and the jobs left over wait for the next morning, where they
+number, before the morning hour or past the summary hour, and the jobs left over wait for the
+next morning hour, where they
 go first (`order`). The starts are spread over what is left of the day, never more than
 `MOST_GAP` apart, so a hundred do not all go in the first hour and three picks are not held for
 hours (`gap`). A job resumed in the tab it paused in is the same application and is never held.
@@ -56,11 +57,16 @@ class Plan:
                    site_workers=settings.site_workers, morning_hour=settings.morning_hour,
                    summary_hour=settings.summary_hour, auto_from=settings.auto_apply_from)
 
+    def day_start(self, now: datetime) -> datetime:
+        return at_hour(now, self.morning_hour)
+
     def day_end(self, now: datetime) -> datetime:
         return at_hour(now, self.summary_hour)
 
     def next_morning(self, now: datetime) -> datetime:
-        return at_hour(now, self.morning_hour, days=1)
+        """This morning's hour while it has not come, else the next day's."""
+        today = self.day_start(now)
+        return today if now < today else at_hour(now, self.morning_hour, days=1)
 
 
 def at_hour(now: datetime, hour: int, days: int = 0) -> datetime:

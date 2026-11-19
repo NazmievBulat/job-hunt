@@ -86,7 +86,7 @@ WRAPPERS = {
     "run_skill": "read-job-alerts", "run_scoring": "score-jobs", "run_resume": "write-resume",
     "run_site": "apply-site", "run_linkedin": "apply-linkedin", "run_note_draft": "draft-note",
     "run_note_send": "send-note", "run_check": "read-job-alerts", "run_draft": "draft-reply",
-    "run_read": "read-linkedin-messages", "run_send": "send-reply",
+    "run_read": "read-linkedin-messages", "run_send": "send-reply", "run_browsers": "browser listing",
 }
 
 

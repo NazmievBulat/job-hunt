@@ -768,6 +768,15 @@ def _run_quietly(command: list[str]) -> subprocess.CompletedProcess[str] | None:
         return None
 
 
+def run_browsers(command: list[str]) -> subprocess.CompletedProcess[str] | None:
+    """The doctor's listing of the connected browsers, a background run as any other; None when
+    it could not run or failed."""
+    try:
+        return run_claude(command, ROOT, skill="browser listing", minutes=2)
+    except FinderError:
+        return None
+
+
 def _timer_status() -> str:
     try:
         hour = read_settings(DATA / "settings.json").morning_hour
@@ -779,7 +788,8 @@ def _timer_status() -> str:
 
 def this_machine() -> Machine:
     return Machine(system=platform.system(), home=Path.home(), root=Path("/"), data=DATA,
-                   python=sys.version_info[:2], run=_run_quietly, which=shutil.which, timer_status=_timer_status)
+                   python=sys.version_info[:2], run=_run_quietly, run_background=run_browsers, which=shutil.which,
+                   timer_status=_timer_status)
 
 
 def _settings(args: argparse.Namespace) -> int:
@@ -856,14 +866,22 @@ def main(argv: list[str] | None = None) -> int:
         "in data/companies.db (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable), read the public job "
         "feeds (Remotive, RemoteOK, Arbeitnow, Hacker News' Who is hiring; USAJobs, Adzuna and Jooble with a free key "
         "in data/settings.json's keys), save each new job's page in jobs/<id>/posting.md and print, for each source, "
-        "how many jobs it found and how many were new",
-        description="Every source in turn; one that fails is named and the others go on. The alert emails and "
+        "how many jobs it found and how many were new, how many were the same job from two sources and how long "
+        "each source took",
+        description="The sources run at once, each on its own: one that fails, waits on its pauses or is told to "
+        "stop by LinkedIn is named and the others go on, and hunt find ends when all have. A job is listed once: "
+        "by its link, or as the same job when its company and title are the same, after folding case, punctuation "
+        "and endings (Inc, LLC, Ltd, Corp, Co, GmbH, The), it was found in the last 30 days and it is in the same "
+        "area unless one of the two is remote; its link is kept as another link of the first, and a company "
+        "board's link is applied through in place of a LinkedIn job without Easy Apply. The alert emails and "
         "LinkedIn's search (each title in each area, and once remote unless the settings exclude it; at most 5 pages "
         "a search, 2 to 5 seconds apart, a 429 or 999 ends LinkedIn for the run) read what came since their own "
         "last run. Every company's public board (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable) is "
         "read in the first run of a day, and in the later runs only the boards that posted in the last week; at "
         "most 4 requests at a time to one host. Once a week the company index is filled from Common Crawl first "
-        "(hunt companies), and a board an alert's link leads to joins it. The public feeds are read side by side, "
+        "(hunt companies), and a board an alert's or LinkedIn's link leads to joins it and is swept once those "
+        "sources ended, in the same run. LinkedIn's job pages share its pace with its searches, one request at a "
+        "time. The public feeds are read side by side, "
         "one request at a time to each: Remotive and RemoteOK (remote jobs only, skipped when the settings exclude "
         "remote jobs), Arbeitnow, and the latest monthly Hacker News \"Who is hiring?\" thread, one comment a job, "
         "need no key; USAJobs (each title), Adzuna's US jobs and Jooble (each title in each area, and once remote) "

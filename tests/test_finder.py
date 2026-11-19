@@ -226,7 +226,7 @@ def test_find_saves_the_new_jobs_with_their_pages_and_says_how_many(
     skill = FakeSkill(tmp_path / "data" / "found-jobs.json")
     summary = find(settings, jobs, tmp_path / "jobs", skill.found, run=skill, fetch=_fetch, clock=clock)
     assert (summary.emails, summary.jobs, summary.new) == (4, 8, 4)
-    assert str(summary) == "alert: 4 emails, 8 jobs, 4 new"
+    assert str(summary) == "alert: 4 emails, 8 jobs, 4 new\nsame job from two sources: 0\ntook: alert 0s"
     saved = {job.title: job for job in jobs.all()}
     # Left out: the product manager and the engineer in test (titles), Austin (no area, on site),
     # and the second alert's copy of the Example Labs job.
@@ -295,7 +295,8 @@ def test_a_run_that_writes_no_file_fails_and_the_next_run_reads_from_the_same_ti
     found.write_text((HERE / "found-jobs.json").read_text())
     summary = find(settings, jobs, tmp_path / "jobs", found, run=lambda command: None, fetch=_fetch, clock=clock)
     assert len(summary.failed) == 1 and summary.failed[0].startswith("alert: the read-job-alerts run wrote no")
-    assert (summary.lines, jobs.last_run(), jobs.all()) == ([], None, [])
+    assert (summary.lines, jobs.last_run(), jobs.all()) == (
+        ["same job from two sources: 0", "took: alert 0s"], None, [])
 
 
 def test_hunt_find_prints_one_line_and_a_missing_settings_file_names_setup(
@@ -311,7 +312,7 @@ def test_hunt_find_prints_one_line_and_a_missing_settings_file_names_setup(
     monkeypatch.setattr(cli, "run_skill", FakeSkill(tmp_path / "data" / "found-jobs.json"))
     monkeypatch.setattr(cli, "fetch_page", _fetch)
     assert cli.main(["find"]) == 0
-    assert capsys.readouterr().out == "alert: 4 emails, 8 jobs, 4 new\n"
+    assert capsys.readouterr().out == "alert: 4 emails, 8 jobs, 4 new\nsame job from two sources: 0\ntook: alert 0s\n"
     assert (tmp_path / "jobs").is_dir()
 
 
@@ -460,7 +461,7 @@ def test_hunt_find_starts_claude_on_haiku_in_the_run_folder_with_only_gmail_read
     fake_claude: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert cli.main(["find"]) == 0
-    assert capsys.readouterr().out == "alert: 4 emails, 8 jobs, 4 new\n"
+    assert capsys.readouterr().out == "alert: 4 emails, 8 jobs, 4 new\nsame job from two sources: 0\ntook: alert 0s\n"
     started = json.loads((tmp_path / "claude.json").read_text())
     argv = started["argv"]
     assert Path(started["cwd"]) == fake_claude / ".background"
@@ -477,7 +478,7 @@ def test_hunt_find_says_why_the_skill_run_failed_and_reads_from_the_same_time_ne
     monkeypatch.setenv("FAKE_CLAUDE_FAIL", "1")
     assert cli.main(["find"]) == 1
     printed = capsys.readouterr()
-    assert printed.out == ""
+    assert printed.out == "same job from two sources: 0\ntook: alert 0s\n"
     assert printed.err == "hunt find: alert: the read-job-alerts run failed (1): Not logged in. Run claude to sign in.\n"
     assert JobsList(fake_claude / "data" / "jobs.db").last_run() is None
 
@@ -492,7 +493,7 @@ def test_hunt_find_names_what_it_left_out_apart_from_its_one_line(
     monkeypatch.setenv("FAKE_CLAUDE_FOUND", str(bad))
     assert cli.main(["find"]) == 0
     printed = capsys.readouterr()
-    assert printed.out == "alert: 4 emails, 7 jobs, 3 new\n"
+    assert printed.out == "alert: 4 emails, 7 jobs, 3 new\nsame job from two sources: 0\ntook: alert 0s\n"
     assert printed.err == "hunt find: left out job 2 (SDET II) has remote 'maybe', not one of remote, hybrid, on_site\n"
 
 
@@ -599,7 +600,7 @@ def test_hunt_find_saves_one_job_for_two_links_to_one_page_and_a_job_whose_page_
 
     monkeypatch.setattr(cli, "fetch_page", fetch)
     assert cli.main(["find"]) == 0
-    assert capsys.readouterr().out == "alert: 4 emails, 9 jobs, 4 new\n"
+    assert capsys.readouterr().out == "alert: 4 emails, 9 jobs, 4 new\nsame job from two sources: 1\ntook: alert 0s\n"
     saved = {job.title: job for job in JobsList(fake_claude / "data" / "jobs.db").all()}
     assert len(saved) == 4
     sdet = saved["SDET II"]
@@ -616,3 +617,10 @@ def test_hunt_find_starts_no_run_while_the_run_folder_holds_a_file(
     assert cli.main(["find"]) == 1
     assert "holds career.json, and it must be empty" in capsys.readouterr().err
     assert not (tmp_path / "claude.json").exists()
+
+
+@pytest.mark.parametrize(("seconds", "said"), [(0, "0s"), (-1, "0s"), (45, "45s"), (250, "4m 10s"), (3720, "1h 2m")])
+def test_how_long_a_source_took_is_said_in_hours_minutes_or_seconds(seconds: float, said: str) -> None:
+    from job_hunt.finder import took
+
+    assert took(seconds) == said

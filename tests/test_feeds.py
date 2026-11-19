@@ -9,7 +9,10 @@ served by `Feeds` in place of `http_get`.
 from __future__ import annotations
 
 import json
+import sqlite3
 import shutil
+import time
+from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -101,7 +104,7 @@ def _jobs(read) -> list[tuple[str, str, str, str, str | None]]:
 def test_remotive_gives_its_wanted_remote_jobs_with_their_descriptions(settings: Settings) -> None:
     read = _read("remotive", settings)
     assert _jobs(read) == [
-        ("Senior QA Automation Engineer", "Example Labs", "USA", "remote", None),
+        ("Senior QA Automation Engineer", "Massive Dynamic Example", "USA", "remote", None),
         ("SDET & Test Lead", "Sample Co", "Worldwide", "remote", None),
     ]
     job, description = read.jobs[0]
@@ -371,19 +374,33 @@ class Skill:
         shutil.copy(FINDER / "found-jobs.json", out)
 
 
-def _fetch(link: str) -> tuple[str, str]:
-    # Jooble's Durham job is the alert's LinkedIn job: its page ends there.
+def _fetch(link: str, db: Path | None = None) -> tuple[str, str]:
+    # Jooble's Durham job is the alert's LinkedIn job: its page ends there. The sources run at once,
+    # so its page is read once the alert's job is saved, as a slower feed would be.
     if link == "https://jooble.org/desc/5551":
+        _saved_by_then(db, "https://www.linkedin.com/jobs/view/4012345678")
         return "https://www.linkedin.com/jobs/view/4012345678", (FINDER / "pages" / "linkedin-easy-apply.html").read_text()
     page = "linkedin-easy-apply.html" if "linkedin.com" in link else "company.html"
     return link, (FINDER / "pages" / page).read_text()
 
 
+def _saved_by_then(db: Path | None, link: str) -> None:
+    if db is None:
+        return
+    give_up = time.monotonic() + 5
+    while time.monotonic() < give_up:
+        with closing(sqlite3.connect(db)) as reading:
+            if reading.execute("SELECT 1 FROM jobs WHERE link = ?", (link,)).fetchone():
+                return
+        time.sleep(0.01)
+    raise AssertionError(f"{link} was not saved in 5 seconds")
+
+
 def _find(tmp_path: Path, settings: Settings, clock: MovableClock, sites: Sites, jobs: JobsList | None = None):
     jobs = jobs or JobsList(tmp_path / "jobs.db", clock=clock)
     feeds = Feeds(get=sites, sleep=lambda seconds: None)
-    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=Skill(), fetch=_fetch,
-                   clock=clock, feeds=feeds)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=Skill(),
+                   fetch=lambda link: _fetch(link, tmp_path / "jobs.db"), clock=clock, feeds=feeds)
     return summary, jobs
 
 
@@ -402,6 +419,8 @@ def test_find_saves_every_feeds_jobs_once_with_a_line_for_each(
         "adzuna: 1 found, 1 new",
         # The Durham job is the alert's LinkedIn job, saved once.
         "jooble: 2 found, 1 new",
+        "same job from two sources: 1",
+        "took: alert 0s, feeds 0s",
     ]
     assert summary.failed == []
     linkedin = [job for job in jobs.all() if job.link == "https://www.linkedin.com/jobs/view/4012345678"]
@@ -426,7 +445,8 @@ def test_find_again_lists_no_feed_job_twice(tmp_path: Path, settings: Settings, 
     clock.now += timedelta(days=1)
     summary, _ = _find(tmp_path, settings, clock, _sites(), jobs)
     assert len(jobs.all()) == count
-    assert all(line.endswith(" 0 new") for line in str(summary).splitlines())
+    assert all(line.endswith(" 0 new") for line in str(summary).splitlines()[:-2])
+    assert str(summary).splitlines()[-2] == "same job from two sources: 0"
 
 
 def test_a_failing_feed_is_named_and_the_others_are_saved(
@@ -509,7 +529,7 @@ def test_without_keys_hunt_find_says_each_keyed_feed_is_skipped_and_exits_0(
     monkeypatch.setattr(cli, "public_feeds", lambda: Feeds(get=_sites(), sleep=lambda seconds: None))
     assert cli.main(["find"]) == 0
     printed = capsys.readouterr()
-    assert printed.out.splitlines()[-3:] == [
+    assert printed.out.splitlines()[-5:-2] == [
         "usajobs: skipped, no key in data/settings.json (keys.usajobs)",
         "adzuna: skipped, no key in data/settings.json (keys.adzuna)",
         "jooble: skipped, no key in data/settings.json (keys.jooble)",

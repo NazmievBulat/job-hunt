@@ -57,7 +57,7 @@ from urllib.parse import urlsplit
 
 from job_hunt.apply import CHROME_TOOLS
 from job_hunt.finder import ONLY_NAMED_TOOLS, PageError, page_text_and_kind
-from job_hunt.jobs import JobsList, clean_link
+from job_hunt.jobs import JobsList
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.questions import log_failure
 from job_hunt.settings import SettingsError, read_settings
@@ -263,17 +263,15 @@ def _locked(path: Path, *, wait: bool = True) -> Iterator[bool]:
 
 def job_of(jobs: JobsList, message: Message) -> int | None:
     """The job the message is about: the one of its posting link, else the one job of its company."""
-    every = jobs.all()
     if message.job_link:
         try:
-            link = clean_link(message.job_link)
+            job = jobs.job_of_link(message.job_link)
         except ValueError:
-            link = None
-        for job in every:
-            if link in (job.link, job.page_link):
-                return job.id
+            job = None
+        if job is not None:
+            return job
     if message.company:
-        same = [job.id for job in every if job.company.casefold() == message.company.casefold()]
+        same = [job.id for job in jobs.all() if job.company.casefold() == message.company.casefold()]
         if len(same) == 1:
             return same[0]
     return None

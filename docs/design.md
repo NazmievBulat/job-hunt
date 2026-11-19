@@ -113,20 +113,27 @@ Without it the job waits until the user is at the computer, and the other jobs g
 ## How a day goes
 
 1. **Finder (on a timer).** At the chosen hour, and again at 12:00 and 16:00, `hunt find`
-   gathers the new jobs from every source; a source that fails is named and the others go on.
+   gathers the new jobs from every source. The sources run at once, each in a thread of its
+   own (the alerts, LinkedIn, the boards with the index fill when due, the feeds), and the run
+   ends when all have ended; a source that fails, waits on its own pauses or is told to stop by
+   LinkedIn never holds back another, and is named while the others go on. Each source's line
+   says how many jobs it found and how many were new, and one more line how long each took.
    - **Alerts.** One `claude -p` on Claude Haiku reads the job alert emails through the Gmail
      connector and writes each job's link, title, company and place, and which of the user's
      areas each job is in.
    - **LinkedIn, signed out.** Its public guest search, plain HTTP with no cookies and never the
      user's account: each title in each area, and once per title for remote jobs, over the time
      since its last run; at most 5 pages a search, 2 to 5 seconds between requests, and a 429
-     or 999 ends LinkedIn for that run.
+     or 999 ends LinkedIn for that run. The LinkedIn job pages the alerts lead to share that
+     pace: one LinkedIn request at a time, whichever source makes it, with the pause between.
    - **Every company's job board.** `data/companies.db` indexes the companies on Greenhouse,
      Lever, Ashby, Workday, SmartRecruiters and Workable: filled once a week from Common Crawl's
      public URL index (`hunt companies`), from every link a job leads to a board by, and from
      the settings' `companies`. The first run of a day reads every board's public JSON, the
      later runs only the boards that posted in the last week; at most 4 requests at a time to
-     one host. A board that answers 404 twice is dropped.
+     one host. A board that answers 404 twice is dropped. The boards the alerts' and LinkedIn's
+     links led to are swept in a short second pass once those have ended, so their jobs come in
+     the same run.
    - **Public job feeds** (`feeds.py`), the APIs meant to be read by programs, side by side and
      one request at a time to each. No key: Remotive and RemoteOK (remote jobs only, skipped
      when the settings exclude them), Arbeitnow, and the latest monthly Hacker News "Who is
@@ -135,8 +142,15 @@ Without it the job waits until the user is at the computer, and the other jobs g
      user's own under `keys` in the settings, skipped with one line without it: USAJobs,
      Adzuna's US jobs and Jooble, the last two each title in each area and once remote, with
      their job pages read since they give only a snippet.
-   A script drops jobs already in the list (one link is one job, whichever source found it),
-   wrong titles, and jobs outside the areas or the remote setting; a board's or LinkedIn's job
+   A script drops jobs already in the list, wrong titles, and jobs outside the areas or the
+   remote setting, through one save that holds a lock around the check and the insert, so two
+   sources saving one job at once save it once. A job is already in the list by any of its
+   links, or as the same job: the same company and title, after folding case, punctuation and
+   the company's endings (Inc, LLC, Ltd, Corp, Co, GmbH, a leading "The"), found in the last 30
+   days, and in the same area unless one of the two is remote. That second one is not listed
+   again: its link is kept as another link of the first, so a later find of either is known, a
+   LinkedIn job without Easy Apply is then applied to through the company board's link, and the
+   run says how many there were (`same job from two sources: N`). A board's or LinkedIn's job
    gets its area from a table of the cities in each area. For each job left it saves the full
    description (from the job page, or from the board's answer) and notes whether it is a
    LinkedIn Easy Apply or a company site, and which source found it.
@@ -260,6 +274,15 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 
 - The workers use the user's own Chrome through the Claude in Chrome extension. The user signs
   in to LinkedIn and to company sites there, and the browser stays signed in.
+- The workers use only the Chrome on the computer the hunt runs on, never another computer's,
+  whatever else the Claude account has connected. Each browser worker first lists the
+  connected browsers and selects the one the tool says is on this computer (`onThisComputer`;
+  without that, `isLocal` with this computer's system, when only one matches). With none, or
+  more than one that could be, it does nothing in any browser: an application pauses for
+  Chrome, naming the browsers connected, at no cost of a try. An application's report names
+  the browser it used, and `hunt apply` takes no report without it: the job pauses for the user
+  to look. `hunt doctor` checks the same thing with one short run on Haiku allowed only the
+  listing tool, and names the other computers' browsers, which the workers never use.
 - Several `claude -p --chrome` workers can each drive a tab of their own in one Chrome at the
   same time (checked on 2026-11-18 with three).
 - Only one worker at a time may use LinkedIn: a lock file the LinkedIn worker holds for each

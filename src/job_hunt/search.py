@@ -4,9 +4,12 @@ out, and the public job boards of every company in the company index (`companies
 Plain HTTP with `urllib`, no cookies and no sign-in. LinkedIn is searched for each title in
 each area, and once per title for remote jobs unless the settings exclude them, over the time
 since its last run, at most `LINKEDIN_PAGES` pages a search and 2 to 5 seconds between its
-requests (`Pace`); a 429 or 999 ends LinkedIn for the run. The boards are read through their
+requests (`Pace`), the job pages the alerts lead to included, one at a time whichever thread
+makes them; a 429 or 999 ends LinkedIn for the run. The boards are read through their
 public JSON, in parallel across hosts and at most `HOST_LIMIT` at a time on one host
-(`by_host`); they give each job's description, so no page is read for them.
+(`by_host`); they give each job's description, so no page is read for them. LinkedIn
+(`Search.linkedin`) and the boards (`Search.sweep`) run at once with the finder's other sources;
+the boards the other sources' links led to are swept once they ended (`Search.sweep_met`).
 
 A job's area is its place matched against the settings' areas (`area_of`): by `AREAS`, the
 city names in each area this code knows, or the area's own name. A LinkedIn job found in an
@@ -20,10 +23,12 @@ import http.client
 import json
 import random
 import re
+import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
@@ -100,9 +105,10 @@ def http_get(url: str, body: Any = None, headers: dict[str, str] | None = None) 
 
 
 class Pace:
-    """A pause of 2 to 5 seconds before each LinkedIn request but the first, pages included; and
-    why LinkedIn said stop this run, after which no LinkedIn request is made. The searches run
-    in a new order each run (`order`), so a stop does not keep the same ones from ever running."""
+    """A pause of 2 to 5 seconds before each LinkedIn request but the first, pages included, and
+    one request at a time, whichever thread makes it (`turn`); and why LinkedIn said stop this
+    run, after which no LinkedIn request is made. The searches run in a new order each run
+    (`order`), so a stop does not keep the same ones from ever running."""
 
     def __init__(self, sleep: Callable[[float], None] = time.sleep, between: Callable[[], float] | None = None,
                  order: Callable[[list[Any]], None] = random.shuffle) -> None:
@@ -110,15 +116,38 @@ class Pace:
         self.between = between or (lambda: random.uniform(*PAUSE_SECONDS))
         self.order = order
         self._first = True
+        self._turn = threading.Lock()
         self.stopped: str | None = None
 
     def stop(self, status: int | str) -> None:
         self.stopped = f"LinkedIn answered {status}, so it is not searched again this run"
 
-    def wait(self) -> None:
-        if not self._first:
-            self.sleep(self.between())
-        self._first = False
+    @contextmanager
+    def turn(self) -> Iterator[None]:
+        """Hold LinkedIn for one request, after the pause; the caller checks `stopped` inside, as
+        another thread may have been told to stop while this one waited."""
+        with self._turn:
+            if not self._first and not self.stopped:
+                self.sleep(self.between())
+            self._first = False
+            yield
+
+
+class Hosts:
+    """At most `HOST_LIMIT` requests at a time to one host, whichever thread makes them: the
+    boards' and the job pages the alerts and the feeds lead to."""
+
+    def __init__(self, limit: int = HOST_LIMIT) -> None:
+        self.limit = limit
+        self._slots: dict[str, threading.BoundedSemaphore] = {}
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def slot(self, host: str) -> Iterator[None]:
+        with self._lock:
+            slot = self._slots.setdefault(host.lower(), threading.BoundedSemaphore(self.limit))
+        with slot:
+            yield
 
 
 # Areas
@@ -313,14 +342,15 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
             where = {"location": area, **({"f_WT": "1,3"} if settings.remote == "exclude" else {})} if area else {
                 "f_WT": "2"}
             query = urlencode({"keywords": title, **where, "f_TPR": f"r{seconds}", "start": page * LINKEDIN_PAGE_SIZE})
-            pace.wait()
-            try:
-                answer = get(f"{LINKEDIN_SEARCH}?{query}")
-            except SearchError as error:
-                result.problems.append(f"{named}: {error}")
+            with pace.turn():
+                # A job page the alerts led to may have been told to stop meanwhile.
+                answer = None if pace.stopped else _linkedin_get(get, f"{LINKEDIN_SEARCH}?{query}")
+                if isinstance(answer, Answer) and answer.status in LINKEDIN_STOPS:
+                    pace.stop(answer.status)
+            if isinstance(answer, SearchError):
+                result.problems.append(f"{named}: {answer}")
                 break
-            if answer.status in LINKEDIN_STOPS:
-                pace.stop(answer.status)
+            if answer is None or answer.status in LINKEDIN_STOPS:
                 result.stopped = pace.stopped
                 result.jobs = list(found.values())
                 return result
@@ -341,6 +371,13 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
                 break
     result.jobs = list(found.values())
     return result
+
+
+def _linkedin_get(get: Get, url: str) -> Answer | SearchError:
+    try:
+        return get(url)
+    except SearchError as error:
+        return error
 
 
 # Boards
@@ -637,6 +674,18 @@ class _Tally:
 
 
 @dataclass
+class Sweep:
+    """A sweep of the boards so far: whether it is the day's whole one, the boards it read, each
+    system's count, and the index's line when it was filled first."""
+
+    full: bool
+    swept: set[Board]
+    tally: dict[str, _Tally]
+    lines: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Search:
     get: Get
     pace: Pace
@@ -644,12 +693,26 @@ class Search:
     sleep: Callable[[float], None] = time.sleep
     # The time LinkedIn's searches start at; None for the run's start (tests).
     clock: Callable[[], datetime] | None = None
+    # Each host's requests at once, shared with the job pages the other sources read.
+    hosts: Hosts = field(default_factory=Hosts)
 
-    def run(self, settings: Settings, jobs: JobsList, started: datetime, save: Save, met: list[str]
-            ) -> tuple[list[str], list[str]]:
-        """Search LinkedIn and sweep the boards, saving each job through `save` (the finder's
-        filters and saving); return a line per source and what failed. `met` are the links the
-        alerts led to, whose boards join the index."""
+    def linkedin(self, settings: Settings, jobs: JobsList, started: datetime, save: Save
+                 ) -> tuple[list[str], list[str]]:
+        """Search LinkedIn, saving each job through `save` (the finder's filters and saving);
+        return its line and what failed. A stop LinkedIn said, here or to a job page another
+        source read, is the finder's to tell, once."""
+        since = jobs.last_run("linkedin_search") or started - FIRST_RUN
+        now = self.clock() if self.clock else started
+        linkedin = linkedin_search(settings, since - LINKEDIN_OVERLAP, now, self.get, self.pace)
+        new = sum(save(job, None) for job in linkedin.jobs)
+        if not self.pace.stopped and not linkedin.problems:
+            jobs.finished_run(started, "linkedin_search")
+        return [f"linkedin_search: {len(linkedin.jobs)} found, {new} new"], [
+            f"linkedin_search: {problem}" for problem in linkedin.problems]
+
+    def sweep(self, settings: Settings, jobs: JobsList, started: datetime, save: Save) -> Sweep:
+        """Fill the company index when it is due, then sweep the boards, saving each job through
+        `save`."""
         lines: list[str] = []
         failed: list[str] = []
         self.companies.add(wanted_boards(settings))
@@ -657,31 +720,38 @@ class Search:
             line, problems = fill_index(self.companies, self.get, sleep=self.sleep)
             lines.append(line)
             failed += [f"companies: {problem}" for problem in problems]
+        done = Sweep(self.companies.full_due(), set(), {system: _Tally() for system in SYSTEMS}, lines, failed)
+        self._read(self.companies.to_sweep(full=done.full), done, settings, jobs, started, save)
+        return done
 
-        since = jobs.last_run("linkedin_search") or started - FIRST_RUN
-        now = self.clock() if self.clock else started
-        linkedin = linkedin_search(settings, since - LINKEDIN_OVERLAP, now, self.get, self.pace)
-        new = sum(save(job, None) for job in linkedin.jobs)
-        lines.append(f"linkedin_search: {len(linkedin.jobs)} found, {new} new")
-        failed += [f"linkedin_search: {problem}" for problem in linkedin.problems]
-        # LinkedIn may say stop to the searches, or later to a job page the saving read.
-        stopped = linkedin.stopped or self.pace.stopped
-        if stopped:
-            failed.append(f"linkedin_search: {stopped}")
-        if not stopped and not linkedin.problems:
-            jobs.finished_run(started, "linkedin_search")
-
-        # The boards the alerts' and LinkedIn's jobs led to, LinkedIn's saved just above.
+    def sweep_met(self, done: Sweep, settings: Settings, jobs: JobsList, started: datetime, save: Save,
+                  met: list[str]) -> tuple[list[str], list[str]]:
+        """Once the other sources ended: add the boards their links led to, sweep those the sweep
+        would have read and did not, and return a line per system and what failed."""
         self.companies.add([board for link in met if (board := board_of(link)) is not None])
-        full = self.companies.full_due()
-        boards = self.companies.to_sweep(full=full)
+        self._read([board for board in self.companies.to_sweep(full=done.full) if board not in done.swept],
+                   done, settings, jobs, started, save)
+        lines, failed = [], list(done.failed)
+        for system, counted in done.tally.items():
+            lines.append(counted.line(system))
+            if counted.failed and len(counted.failed) == counted.boards:
+                failed.append(f"{system}: no board answered ({counted.failed[0]})")
+        if done.full:
+            self.companies.swept_full()
+        return lines, failed
+
+    def _read(self, boards: list[Board], done: Sweep, settings: Settings, jobs: JobsList, started: datetime,
+              save: Save) -> None:
         known = jobs.known_links()
-        read = by_host([(api_host(board), lambda board=board: read_board(board, settings, self.get, known, now=started,
-                                                                           sleep=self.sleep))
-                        for board in boards])
-        tally = {system: _Tally() for system in SYSTEMS}
+
+        def read(board: Board) -> BoardRead:
+            with self.hosts.slot(api_host(board)):
+                return read_board(board, settings, self.get, known, now=started, sleep=self.sleep)
+
+        read = by_host([(api_host(board), lambda board=board: read(board)) for board in boards])
         for board, result in zip(boards, read):
-            counted = tally[board.system]
+            done.swept.add(board)
+            counted = done.tally[board.system]
             counted.boards += 1
             if isinstance(result, Gone):
                 counted.gone += 1
@@ -692,10 +762,3 @@ class Search:
                 self.companies.answered(board, result.newest)
                 counted.found += len(result.jobs)
                 counted.new += sum(save(each.job, each.description) for each in result.jobs)
-        for system, counted in tally.items():
-            lines.append(counted.line(system))
-            if counted.failed and len(counted.failed) == counted.boards:
-                failed.append(f"{system}: no board answered ({counted.failed[0]})")
-        if full:
-            self.companies.swept_full()
-        return lines, failed

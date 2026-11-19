@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from job_hunt.apply import CHROME_TOOLS
+from job_hunt.apply import CHROME_TOOLS, browser_argument
 from job_hunt.finder import ONLY_NAMED_TOOLS, PageError, page_text_and_kind
 from job_hunt.jobs import JobsList
 from job_hunt.linkedin_lock import LinkedInLock
@@ -779,7 +779,8 @@ def resume_of(thread: Thread, root: Path) -> Path | None:
     return resume if resume.exists() else None
 
 
-def send_command(thread: Thread, reply: str, root: Path) -> list[str]:
+def send_command(thread: Thread, reply: str, root: Path, *, browser: str | None = None) -> list[str]:
+    """With `browser`, the settings' chrome_browser, a LinkedIn reply goes only from that browser."""
     here = folder(root, thread.id)
     arguments: dict[str, Any] = {
         "thread": thread.id, "source": thread.source, "reply": reply, "email_id": thread.email_id,
@@ -788,6 +789,8 @@ def send_command(thread: Thread, reply: str, root: Path) -> list[str]:
     if (resume := resume_of(thread, root)) is not None:
         arguments["resume"] = str(resume)
         tools.append(UPLOAD_TOOL)
+    if thread.source != "email":
+        arguments |= browser_argument(browser)
     prompt = f"/{SEND_SKILL} {json.dumps(arguments, ensure_ascii=False)}"
     if thread.source == "email":
         return ["claude", "-p", prompt, "--model", MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join([*SEND_GMAIL_TOOLS, *tools])]
@@ -827,15 +830,15 @@ def recover_sends(threads: Threads, data: Path) -> None:
 
 
 def send_reply(threads: Threads, root: Path, thread: int, *, run: Run, lock: LinkedInLock,
-               sleep: Callable[[float], None]) -> Thread:
-    """Send the reply as the person approved it, once."""
+               sleep: Callable[[float], None], browser: str | None = None) -> Thread:
+    """Send the reply as the person approved it, once. `browser` is the settings' chrome_browser."""
     # Held while sending, so a thread `sending` with the lock free is a dead run's.
     with _locked(root / "data" / "send.lock"):
-        return _send_reply(threads, root, thread, run, lock, sleep)
+        return _send_reply(threads, root, thread, run, lock, sleep, browser)
 
 
 def _send_reply(threads: Threads, root: Path, thread: int, run: Run, lock: LinkedInLock,
-                sleep: Callable[[float], None]) -> Thread:
+                sleep: Callable[[float], None], browser: str | None) -> Thread:
     found = _waiting(threads, thread, "drafted", "unsure")
     report = folder(root, thread) / "sent.json"
     report.unlink(missing_ok=True)
@@ -845,7 +848,7 @@ def _send_reply(threads: Threads, root: Path, thread: int, run: Run, lock: Linke
     def send() -> None:
         nonlocal failure
         try:
-            run(send_command(found, found.reply or "", root))
+            run(send_command(found, found.reply or "", root, browser=browser))
         except ReplyError as error:
             failure = str(error)
 
@@ -872,15 +875,18 @@ def _send_reply(threads: Threads, root: Path, thread: int, run: Run, lock: Linke
 # Reading LinkedIn
 
 
-def read_command(after: datetime, out: Path) -> list[str]:
-    arguments = {"after": after.isoformat(), "out": str(out)}
+def read_command(after: datetime, out: Path, *, browser: str | None = None) -> list[str]:
+    """With `browser`, the settings' chrome_browser, LinkedIn is read only in that browser."""
+    arguments = {"after": after.isoformat(), "out": str(out), **browser_argument(browser)}
     return ["claude", "--chrome", "-p", f"/{READ_SKILL} {json.dumps(arguments)}", "--model", MODEL, *ONLY_NAMED_TOOLS,
             "--allowedTools", ",".join([*READ_CHROME_TOOLS, f"Edit({_rule(out)})"])]
 
 
 def read_linkedin(threads: Threads, jobs: JobsList, root: Path, *, run: Run, lock: LinkedInLock,
-                  sleep: Callable[[float], None], clock: Callable[[], datetime] = _now) -> int:
-    """Read the new LinkedIn messages under the lock; return how many threads are new."""
+                  sleep: Callable[[float], None], clock: Callable[[], datetime] = _now,
+                  browser: str | None = None) -> int:
+    """Read the new LinkedIn messages under the lock; return how many threads are new. `browser`
+    is the settings' chrome_browser."""
     out = root / "data" / "linkedin-messages.json"
     found: dict[str, Any] = {}
 
@@ -889,7 +895,7 @@ def read_linkedin(threads: Threads, jobs: JobsList, root: Path, *, run: Run, loc
         found["started"] = clock()
         found["after"] = threads.last_read("linkedin") or found["started"] - FIRST_READ
         out.unlink(missing_ok=True)
-        run(read_command(found["after"], out))
+        run(read_command(found["after"], out, browser=browser))
         try:
             found["data"] = json.loads(out.read_text())
         except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as error:

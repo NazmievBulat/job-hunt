@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from job_hunt.apply import CHROME_TOOLS
+from job_hunt.apply import CHROME_TOOLS, browser_argument
 from job_hunt.finder import ONLY_NAMED_TOOLS
 from job_hunt.jobs import Job, JobsList
 from job_hunt.linkedin_lock import LinkedInLock
@@ -429,10 +429,11 @@ def sendable(notes: Notes, data: Path, daily: int, now: datetime) -> list[Note]:
     return notes.in_states("approved")
 
 
-def send_command(note: Note, root: Path) -> list[str]:
+def send_command(note: Note, root: Path, *, browser: str | None = None) -> list[str]:
+    """With `browser`, the settings' chrome_browser, the worker uses only that browser."""
     report = _folder(root, note.job) / "note-sent.json"
     arguments = {"id": note.id, "name": note.name, "title": note.title, "profile": note.profile,
-                 "text": note.note, "report": str(report)}
+                 "text": note.note, "report": str(report), **browser_argument(browser)}
     return ["claude", "--chrome", "-p", f"/{SEND_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
             "--model", MODEL, *ONLY_NAMED_TOOLS, "--allowedTools", ",".join([*SEND_TOOLS, f"Edit({_rule(report)})"])]
 
@@ -484,18 +485,20 @@ def recover_sends(notes: Notes, data: Path) -> None:
 
 def send_notes(notes: Notes, threads: Threads, jobs: JobsList, root: Path, *, run: Run, lock: LinkedInLock,
                sleep: Callable[[float], None], daily: int = DAILY,
-               clock: Callable[[], datetime] | None = None) -> Sent:
-    """Send the approved notes, one at a time, each under the LinkedIn lock."""
+               clock: Callable[[], datetime] | None = None, browser: str | None = None) -> Sent:
+    """Send the approved notes, one at a time, each under the LinkedIn lock. `browser` is the
+    settings' chrome_browser."""
     data = root / "data"
     data.mkdir(parents=True, exist_ok=True)
     # Held while sending, so a note `sending` with the lock free is a dead run's.
     with (data / "notes-send.lock").open("w") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        return _send_notes(notes, threads, jobs, root, run, lock, sleep, daily, clock or notes.now)
+        return _send_notes(notes, threads, jobs, root, run, lock, sleep, daily, clock or notes.now, browser)
 
 
 def _send_notes(notes: Notes, threads: Threads, jobs: JobsList, root: Path, run: Run, lock: LinkedInLock,
-                sleep: Callable[[float], None], daily: int, clock: Callable[[], datetime]) -> Sent:
+                sleep: Callable[[float], None], daily: int, clock: Callable[[], datetime],
+                browser: str | None) -> Sent:
     data = root / "data"
     summary = Sent()
     while True:
@@ -516,21 +519,22 @@ def _send_notes(notes: Notes, threads: Threads, jobs: JobsList, root: Path, run:
         while (later := lock.take(f"note {note.id}")) is not None:
             sleep(later)
         try:
-            _send_one(notes, threads, root, run, note, summary)
+            _send_one(notes, threads, root, run, note, summary, browser)
         finally:
             lock.release()
     summary.left = len(notes.in_states("approved"))
     return summary
 
 
-def _send_one(notes: Notes, threads: Threads, root: Path, run: Run, note: Note, summary: Sent) -> None:
+def _send_one(notes: Notes, threads: Threads, root: Path, run: Run, note: Note, summary: Sent,
+              browser: str | None) -> None:
     report = _folder(root, note.job) / "note-sent.json"
     report.unlink(missing_ok=True)
     notes.move(note.id, "sending")
     failure: str | None = None
     try:
         try:
-            run(send_command(note, root))
+            run(send_command(note, root, browser=browser))
         except RuntimeError as error:
             failure = str(error)
         result = _read_sent(report)

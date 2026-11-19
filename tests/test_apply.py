@@ -1371,33 +1371,46 @@ def test_with_captcha_skip_hunt_status_fails_the_captchas_already_waiting_too(
 
 
 BROWSER_SKILLS = ("apply-site", "apply-linkedin", "read-linkedin-messages", "send-note", "send-reply")
+# The browser a worker's report names: by its deviceId, which `hunt apply` matches to the settings' chrome_browser.
+THE_BROWSER_SHAPE = ('{"device_id": "<its deviceId>", "name": "<its name>", "system": "<its system>", '
+                     '"on_this_computer": <true for this computer\'s Chrome, else false>}')
 
 
 @pytest.mark.parametrize("skill", BROWSER_SKILLS)
-def test_each_browser_skill_starts_by_selecting_this_computers_chrome(skill: str) -> None:
+def test_each_browser_skill_starts_by_selecting_the_one_browser_it_may_use(skill: str) -> None:
     text = (Path(__file__).parents[1] / ".claude" / "skills" / skill / "SKILL.md").read_text()
     body = text.split("\n---\n", 1)[1]
     sections = [line for line in body.splitlines() if line.startswith("## ")]
     # Its first step, before any other in Chrome.
-    assert sections[0] == "## This computer's Chrome first"
-    first = body.split("## This computer's Chrome first", 1)[1].split("\n## ", 1)[0]
+    assert sections[0] == "## The browser first"
+    first = body.split("## The browser first", 1)[1].split("\n## ", 1)[0]
     assert "list_connected_browsers" in first and "select_browser" in first
-    assert "`onThisComputer: true`" in first and "`isLocal: true`" in first
-    assert "no other browser could be this computer's" in first
-    assert "Never use switch_browser, never select another computer's browser" in first
-    # With none here, or several, it does nothing in any browser and says what is connected.
-    assert "do nothing in any\n   browser" in first
+    steps = first.split("\n2. ", 1)[1].split("\n3. ", 1)
+    # With the settings' browser: that deviceId only, this computer's Chrome not even.
+    named, here = steps[0], steps[1]
+    assert "When the arguments give `browser`" in named and "exactly that `deviceId`" in named
+    assert "not even this computer's Chrome" in named
+    # Without it: this computer's Chrome only, as before.
+    assert here.startswith("Without `browser`, only the Chrome on the computer this runs on may be used")
+    assert "`onThisComputer: true`" in here and "`isLocal: true`" in here
+    assert "no other browser could be this computer's" in here
+    assert "Never use switch_browser, never select a browser these steps did not choose" in first
+    # Whichever is not there, it does nothing in any browser and says what is connected.
+    assert first.count("do nothing in any\n   browser") == 2
     if skill.startswith("apply-"):
-        assert '{"result": "paused", "needs": "chrome", "connected": "<each connected browser\'s name and system' in first
+        assert first.count('{"result": "paused", "needs": "chrome", "connected": "<each connected browser\'s name and system') == 2
     else:
-        assert "Chrome on this computer is not connected (connected: <each connected browser's name and system" in first
+        assert "Chrome on this computer is not connected (connected: <each connected browser's name and system" in here
+        assert "The browser the settings name is not connected (connected: <each connected browser's name" in named
+    # The argument is listed with the others.
+    assert "- `browser`, only when the person's settings name one: the `deviceId`" in body.split("## ", 1)[0]
 
 
 @pytest.mark.parametrize("skill", ["apply-site", "apply-linkedin"])
 def test_each_apply_skills_report_names_the_browser_it_used(skill: str) -> None:
     text = (Path(__file__).parents[1] / ".claude" / "skills" / skill / "SKILL.md").read_text()
     report = text.split("## Report", 1)[1]
-    assert '`{"name": "<its name>", "system": "<its system>", "on_this_computer": true}`' in report
+    assert f"`{THE_BROWSER_SHAPE}`" in report
     examples = report.split("```json\n", 1)[1].split("```", 1)[0].splitlines()
     assert all(('"browser": <the browser>' in line) != ('"needs": "chrome"' in line) for line in examples), examples
 
@@ -1421,7 +1434,7 @@ def test_no_browser_connected_anywhere_pauses_for_chrome_without_naming_any(proj
     assert jobs.get(job).state_reason == "Chrome open, with the Claude extension connected"
 
 
-THE_BROWSER = '"browser": {"name": "<its name>", "system": "<its system>", "on_this_computer": true}'
+THE_BROWSER = f'"browser": {THE_BROWSER_SHAPE}'
 
 
 @pytest.mark.parametrize("skill", ["read-linkedin-messages", "send-note", "send-reply"])

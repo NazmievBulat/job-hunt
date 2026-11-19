@@ -16,10 +16,13 @@ applies to one job in a Chrome tab of its own and writes `jobs/<id>/report.json`
 
 Each worker first selects this computer's Chrome among the browsers the account has connected,
 never another computer's, and every report but a Chrome out of reach names it:
-`"browser": {"name": ..., "system": ..., "on_this_computer": true}`. A report that does not is
-refused as one that cannot be read: the application may have gone from another computer's
-Chrome, so the user looks. With only other computers' browsers connected, the worker pauses
-for Chrome (`connected` names them), which costs the job no try.
+`"browser": {"device_id": ..., "name": ..., "system": ..., "on_this_computer": true}`. A report
+that does not is refused as one that cannot be read: the application may have gone from another
+computer's Chrome, so the user looks. With only other computers' browsers connected, the worker
+pauses for Chrome (`connected` names them), which costs the job no try. With the settings'
+`chrome_browser`, a deviceId, the worker is given it as `browser` and selects that one browser
+only, on whatever computer it runs; its report must then name that `device_id`, and with that
+browser not connected it pauses for Chrome the same way.
 
 The LinkedIn worker takes every job applied to on LinkedIn: the Easy Apply jobs, and the
 company-site jobs whose link is still their LinkedIn page, which only LinkedIn can lead to the
@@ -57,7 +60,7 @@ import shlex
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -126,10 +129,15 @@ class Report:
     link: str | None = None
     # Chrome out of reach while other computers' browsers are connected: those, named.
     connected: str | None = None
+    # The settings' chrome_browser the worker could not reach, when they name one.
+    named_browser: str | None = None
 
     def pause_reason(self) -> str:
         if self.needs is None:
             return f"{UNSURE}: {self.reason}"
+        if self.needs == "chrome" and self.named_browser:
+            return (f"{NEEDS['chrome']}, in the browser data/settings.json names (chrome_browser {self.named_browser}"
+                    + (f"; connected now: {self.connected}; workers use no other" if self.connected else "") + ")")
         if self.needs == "chrome" and self.connected:
             return f"{NEEDS['chrome']}, on this computer (connected now: {self.connected}; workers never use them)"
         if self.needs == "chrome":
@@ -181,22 +189,29 @@ def resume_command(job: int, root: Path) -> list[str]:
     ]
 
 
-def site_command(job: Job, root: Path, paused: Report | None = None) -> list[str]:
+def site_command(job: Job, root: Path, paused: Report | None = None, *, browser: str | None = None) -> list[str]:
     """With the report of the job's pause, the worker carries on in the tab it paused in, where
-    the user just did what it needed, instead of starting again in a new one."""
-    return _chrome_command(SITE_SKILL, job, job.apply_link or job.link, root, paused)
+    the user just did what it needed, instead of starting again in a new one. With `browser`, the
+    settings' chrome_browser, the worker uses only that browser."""
+    return _chrome_command(SITE_SKILL, job, job.apply_link or job.link, root, paused, browser)
 
 
-def linkedin_command(job: Job, root: Path, paused: Report | None = None) -> list[str]:
+def linkedin_command(job: Job, root: Path, paused: Report | None = None, *, browser: str | None = None) -> list[str]:
     """As `site_command`, on the job's LinkedIn page."""
-    return _chrome_command(LINKEDIN_SKILL, job, _linkedin_page(job) or job.link, root, paused)
+    return _chrome_command(LINKEDIN_SKILL, job, _linkedin_page(job) or job.link, root, paused, browser)
 
 
-def _chrome_command(skill: str, job: Job, link: str, root: Path, paused: Report | None) -> list[str]:
+def browser_argument(browser: str | None) -> dict[str, str]:
+    """The settings' chrome_browser as a browser worker's arguments carry it: nothing without one."""
+    return {"browser": browser} if browser else {}
+
+
+def _chrome_command(skill: str, job: Job, link: str, root: Path, paused: Report | None,
+                    browser: str | None) -> list[str]:
     folder = _folder(root, job.id)
     arguments = {"job": job.id, "link": link, "title": job.title, "company": job.company,
                  "resume": str(folder / "resume.pdf"), "career": str(_career(root)),
-                 "report": str(folder / "report.json")}
+                 "report": str(folder / "report.json"), **browser_argument(browser)}
     # A pause with no tab (Chrome out of reach) starts again in a new one.
     if paused is not None and paused.tab is not None:
         arguments |= {"tab": paused.tab, "tab_id": paused.tab_id}
@@ -235,16 +250,22 @@ def _skill(job: Job) -> str:
     return SITE_SKILL
 
 
-def _this_computers_chrome(data: dict) -> bool:
+def _used_the_browser(data: dict, named: str | None) -> bool:
+    """Whether the report names the browser the worker had to use: the settings' chrome_browser
+    by its deviceId when they name one, else this computer's Chrome."""
     browser = data.get("browser")
-    return (isinstance(browser, dict) and browser.get("on_this_computer") is True
-            and bool(_text(browser, "name")) and bool(_text(browser, "system")))
+    if not (isinstance(browser, dict) and _text(browser, "name") and _text(browser, "system")):
+        return False
+    if named:
+        return browser.get("device_id") == named
+    return browser.get("on_this_computer") is True
 
 
-def read_report(path: Path, skill: str = SITE_SKILL, *, worker: bool = False) -> Report:
+def read_report(path: Path, skill: str = SITE_SKILL, *, worker: bool = False, browser: str | None = None) -> Report:
     """The worker's report, or ApplyError naming what is wrong with it. With `worker`, a report
-    just written by a worker, which must name this computer's Chrome unless it reached none; an
-    earlier one read again (to answer its question, to go on in its tab) is taken as it is."""
+    just written by a worker, which must name the browser it had to use (`browser`, the settings'
+    chrome_browser, or else this computer's Chrome) unless it reached none; an earlier one read
+    again (to answer its question, to go on in its tab) is taken as it is."""
     if not path.exists():
         raise ApplyError(f"the {skill} run wrote no report")
     try:
@@ -256,8 +277,13 @@ def read_report(path: Path, skill: str = SITE_SKILL, *, worker: bool = False) ->
     if not isinstance(data, dict) or data.get("result") not in results:
         raise ApplyError(f'the {skill} run wrote a report whose "result" is not {", ".join(results[:-1])} or {results[-1]}')
     report = _report(data, skill)
+    if worker and report.needs == "chrome" and browser:
+        return replace(report, named_browser=browser)
     # Checked last: a report that cannot be read says first what is wrong with it.
-    if worker and report.needs != "chrome" and not _this_computers_chrome(data):
+    if worker and report.needs != "chrome" and not _used_the_browser(data, browser):
+        if browser:
+            raise ApplyError(f"the {skill} run did not say it used the browser data/settings.json names "
+                             f"(chrome_browser {browser})")
         raise ApplyError(f"the {skill} run did not say it used this computer's Chrome")
     return report
 
@@ -311,14 +337,17 @@ class _Run:
     captcha: str
     clock: Callable[[], datetime]
     plan: Plan | None = None
+    # The settings' chrome_browser: the one browser the workers use, or None for this computer's.
+    browser: str | None = None
 
 
 def apply(
     jobs: JobsList, root: Path, *, run_resume: Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock | None = None,
     captcha: str = "ask", sleep: Callable[[float], None] = time.sleep, plan: Plan | None = None,
+    browser: str | None = None,
 ) -> Summary:
     """Without a plan, only the limits of this module hold: no daily number, no spread, no end of
-    the day."""
+    the day. `browser` is the settings' chrome_browser."""
     (root / "jobs").mkdir(exist_ok=True)
     # One run at a time: two would start two workers on one job.
     with (root / "jobs" / "apply.lock").open("w") as lock:
@@ -334,7 +363,7 @@ def apply(
                                      " it takes the jobs put back within a minute") from error
                 time.sleep(0.05)
         summary = Summary()
-        this = _Run(jobs, root, summary, captcha, jobs.now, plan)
+        this = _Run(jobs, root, summary, captcha, jobs.now, plan, browser)
         _left_applying(this)
         _resumes(jobs, root, run_resume, summary)
         # A run spread over the day takes the jobs picked meanwhile too, by a later morning run.
@@ -372,7 +401,8 @@ def _left_applying(this: _Run) -> None:
     saved; without one the application may have been sent, so the user looks."""
     for job in this.jobs.in_states("applying"):
         try:
-            report = read_report(_folder(this.root, job.id) / "report.json", _skill(job), worker=True)
+            report = read_report(_folder(this.root, job.id) / "report.json", _skill(job), worker=True,
+                                 browser=this.browser)
         except ApplyError:
             this.jobs.move(job.id, "paused", f"{UNSURE}: the last hunt apply stopped while applying")
             this.summary.paused += 1
@@ -453,21 +483,21 @@ def _unsure(error: ApplyError) -> Report:
     return Report("paused", reason=str(error))
 
 
-def _apply_one(job: Job, root: Path, run: Run, paused: Report | None) -> Report:
+def _apply_one(job: Job, root: Path, run: Run, paused: Report | None, browser: str | None) -> Report:
     skill = _skill(job)
     report = _folder(root, job.id) / "report.json"
     command = linkedin_command if skill == LINKEDIN_SKILL else site_command
     try:
-        run(command(job, root, paused))
+        run(command(job, root, paused, browser=browser))
     except ApplyError as error:
         # A worker that wrote its report and then stopped badly still did what it reports: an
         # application it sent must not be sent again.
         try:
-            return read_report(report, skill, worker=True)
+            return read_report(report, skill, worker=True, browser=browser)
         except ApplyError:
             return _unsure(error)
     try:
-        return read_report(report, skill, worker=True)
+        return read_report(report, skill, worker=True, browser=browser)
     except ApplyError as error:
         return _unsure(error)
 
@@ -595,7 +625,7 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         except MoveError:
             return False
         jobs.started_on(host(jobs.get(job)) if skill == SITE_SKILL else LINKEDIN_HOST, job)
-        running[pool.submit(_apply_one, jobs.get(job), root, run, paused)] = (job, skill)
+        running[pool.submit(_apply_one, jobs.get(job), root, run, paused, this.browser)] = (job, skill)
         return True
 
     # The jobs list is written here only, on this thread; the workers run the skills.

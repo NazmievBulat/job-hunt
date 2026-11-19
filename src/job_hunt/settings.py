@@ -14,6 +14,7 @@
      "auto_apply_from": 7,
      "site_workers": 3,
      "linkedin_daily": 25,
+     "chrome_browser": "0b6c9a52-...",
      "pushover": {"token": "...", "user": "..."},
      "companies": ["https://jobs.lever.co/example"],
      "keys": {"usajobs": {"email": "...", "key": "..."}, "adzuna": {"app_id": "...", "app_key": "..."},
@@ -39,6 +40,12 @@ many company-site applications run at once, may be left out (3); at most 5. `lin
 how many LinkedIn Easy Apply applications start in a day, may be left out (25); at most 30, as
 LinkedIn limits accounts that look automated.
 
+`chrome_browser`, the `deviceId` of one Chrome the Claude account has connected (as `hunt doctor`
+lists them), may be left out or null: then the browser workers use only the Chrome on this
+computer. Given, they use only that one browser, on whatever computer it runs, and never
+another, this computer's included; with it not connected they pause, as for Chrome closed.
+`hunt chrome-browser` sets it and clears it.
+
 `hunt find` reads the alert emails and also searches the sites itself: LinkedIn signed out, and
 the public job boards (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable) of every
 company in `data/companies.db`, which fills itself from Common Crawl. `companies`, which may be
@@ -54,6 +61,7 @@ person's own, under `keys`; a feed without one is skipped with one line. Keys ar
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -65,7 +73,8 @@ Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
 OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover", "linkedin_notes_daily", "companies",
-            "keys", "captcha", "daily_applications", "auto_apply_from", "site_workers", "linkedin_daily")
+            "keys", "captcha", "daily_applications", "auto_apply_from", "site_workers", "linkedin_daily",
+            "chrome_browser")
 Captcha = Literal["ask", "skip"]
 CAPTCHA: tuple[Captcha, ...] = ("ask", "skip")
 # The feeds that need a key, and the fields of each one's key.
@@ -76,6 +85,8 @@ NOTES_DAILY = 15
 DAILY_APPLICATIONS, MOST_APPLICATIONS = 20, 100
 SITE_WORKERS, MOST_SITE_WORKERS = 3, 5
 LINKEDIN_DAILY, MOST_LINKEDIN = 25, 30
+# What a deviceId may hold: it goes into a worker's arguments and the doctor's line as it is.
+DEVICE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
 class SettingsError(ValueError):
@@ -107,6 +118,8 @@ class Settings:
     auto_apply_from: int | None = None
     site_workers: int = SITE_WORKERS
     linkedin_daily: int = LINKEDIN_DAILY
+    # The deviceId of the one browser the workers use; None for this computer's Chrome.
+    chrome_browser: str | None = None
     # Each keyed feed's key, by the feed's name (`FEED_KEYS`).
     keys: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
@@ -172,6 +185,15 @@ def _companies(data: dict[str, Any]) -> list[str]:
                 f"companies has {link.strip()!r}, which is not a Greenhouse, Lever, Ashby, Workday, SmartRecruiters "
                 "or Workable board address")
     return [link.strip() for link in links]
+
+
+def device_id(value: object) -> str | None:
+    """A browser's deviceId as the settings hold it; None for none. SettingsError when it is not one."""
+    if value is None:
+        return None
+    if isinstance(value, str) and DEVICE_ID.fullmatch(value.strip()):
+        return value.strip()
+    raise SettingsError(f"chrome_browser must be a browser's deviceId as hunt doctor lists it, or null, not {value!r}")
 
 
 def _keys(data: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -252,5 +274,6 @@ def read_settings(path: Path) -> Settings:
         auto_apply_from=None if auto_from is None else _whole_number(data, "auto_apply_from", 1, 10),
         site_workers=optional("site_workers", 1, MOST_SITE_WORKERS, SITE_WORKERS),
         linkedin_daily=optional("linkedin_daily", 0, MOST_LINKEDIN, LINKEDIN_DAILY),
+        chrome_browser=device_id(data.get("chrome_browser")),
         keys=_keys(data),
     )

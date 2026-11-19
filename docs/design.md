@@ -283,6 +283,20 @@ PDF and the worker's report. A worker sees only its own folder and the career.
   the browser it used, and `hunt apply` takes no report without it: the job pauses for the user
   to look. `hunt doctor` checks the same thing with one short run on Haiku allowed only the
   listing tool, and names the other computers' browsers, which the workers never use.
+- One other browser may be named instead, by its `deviceId`: `chrome_browser` in
+  `data/settings.json`, set with `hunt chrome-browser <deviceId>` and cleared with
+  `hunt chrome-browser off` (the owner, 2026-11-19: "For now work on mac", while the PC's own
+  Chrome is not signed in). Every browser worker is then given that deviceId as `browser` and
+  selects exactly that browser with `select_browser`, on whatever computer it runs, never
+  another one and never this computer's; with it not connected it does nothing in any browser
+  and pauses (an application at no cost of a try) or fails (a note, a reply, the LinkedIn
+  reader) as when this computer's Chrome is missing. A report names the browser's `device_id`,
+  and `hunt apply` takes no report that does not name the one in the settings. `hunt doctor`
+  skips the native-host checks, which are about this computer's Chrome, and says `ok` only
+  when that deviceId is among the connected browsers; otherwise it lists them with their
+  deviceIds and says what to do. Settings that cannot be read name no browser, so the workers
+  fall back to this computer's Chrome, never to another. A paused application's CAPTCHA or
+  sign-in is then solved in that browser, on its computer.
 - Several `claude -p --chrome` workers can each drive a tab of their own in one Chrome at the
   same time (checked on 2026-11-18 with three).
 - Only one worker at a time may use LinkedIn: a lock file the LinkedIn worker holds for each

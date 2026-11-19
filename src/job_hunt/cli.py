@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,7 +18,11 @@ from pathlib import Path
 from job_hunt.apply import (
     LINKEDIN_SKILL, RESUME_SKILL, SITE_SKILL, AnswerError, ApplyError, answer, apply, applied, resume_job,
 )
-from job_hunt.career import career_from_export, read_career, write_career
+from job_hunt.career import (
+    STANDING, Career, CareerError, career_from_export, career_from_resume, career_lock, read_career,
+    resume_text, with_ready_answers, write_career,
+)
+from job_hunt.doctor import Machine, doctor, remote_desktop_ready
 from job_hunt.companies import Companies, fill_index
 from job_hunt.finder import SKILL as ALERTS_SKILL, FinderError, fetch_page, find, run_claude
 from job_hunt.finder import Summary as FindSummary
@@ -52,6 +58,93 @@ def _career(args: argparse.Namespace) -> int:
     print(f"{len(career.jobs)} jobs, {len(career.education)} schools, {len(career.skills)} skills -> {CAREER}")
     for job in career.jobs:
         print(f"  {job.id}: {job.title} at {job.company}, {job.start_date} to {job.end_date or 'now'}")
+    return 0
+
+
+def _shown(career: Career) -> list[str]:
+    """What was read from a resume, for the person to correct before it is saved."""
+    person = career.person
+    contacts = ", ".join(str(person[key]) for key in ("email", "phone", "location") if person.get(key))
+    lines = [f"{person.get('name')}: {contacts}"]
+    lines += [f"  link: {link.get('label') or 'link'} {link.get('url')}" for link in person.get("links") or []]
+    lines.append(f"Jobs ({len(career.jobs)}):")
+    for job in career.jobs:
+        where = f", {job.location}" if job.location else ""
+        lines.append(f"  {job.id}: {job.title} at {job.company}{where}, {job.start_date} to {job.end_date or 'now'}")
+        # Every later resume is written from these, so each is shown to be checked.
+        lines += [f"    - {line}" for line in job.material]
+    lines.append(f"Schools ({len(career.education)}):")
+    for school in career.education:
+        degree = f"{school.degree}, {school.field_of_study}" if school.field_of_study else school.degree
+        years = f", {school.start_date or '?'} to {school.end_date or '?'}" if school.start_date or school.end_date else ""
+        lines.append(f"  {degree} at {school.school}{years}")
+    lines.append(f"Certifications: {', '.join(career.certifications) or 'none'}")
+    lines.append(f"Skills ({len(career.skills)}): {', '.join(career.skills) or 'none'}")
+    lines.append(f"Titles: {', '.join(career.titles) or 'none'}")
+    lines.append(f"Summary: {career.summary or 'none'}")
+    return lines
+
+
+def _kept_career() -> Career | None:
+    """The career a resume replaces. One hunt doctor says needs a fix is replaced too, since
+    reading the resume again is the fix; its form answers stay when they can still be read."""
+    if not CAREER.exists():
+        return None
+    try:
+        return read_career(CAREER)
+    except (ValueError, KeyError, TypeError):
+        pass
+    try:
+        answers = json.loads(CAREER.read_text()).get("form_answers")
+    except (ValueError, AttributeError):
+        answers = None
+    if not isinstance(answers, dict):
+        return None
+    return Career(person={}, summary="", titles=[], skills=[], jobs=[], education=[], certifications=[],
+                  form_answers=answers)
+
+
+def _career_from_resume(args: argparse.Namespace) -> int:
+    try:
+        draft = json.loads(Path(args.draft).read_text())
+        if not args.save:
+            print("\n".join(_shown(career_from_resume(draft, kept=_kept_career()))))
+            print("not saved yet: run it again with --save once it is right")
+            return 0
+        # The form answers kept are read under the lock, so one hunt answer saves meanwhile stays.
+        with career_lock(CAREER):
+            career = career_from_resume(draft, kept=_kept_career())
+            write_career(career, CAREER)
+    except (OSError, json.JSONDecodeError, CareerError) as error:
+        print(f"hunt career-from-resume: {error}", file=sys.stderr)
+        return 1
+    print("\n".join(_shown(career)))
+    print(f"saved to {CAREER}")
+    return 0
+
+
+def _form_answers(args: argparse.Namespace) -> int:
+    try:
+        answers = json.loads(args.answers)
+        if not isinstance(answers, dict):
+            raise CareerError("give the answers as one JSON object")
+        with career_lock(CAREER):
+            career = with_ready_answers(read_career(CAREER), answers)
+            write_career(career, CAREER)
+    except (OSError, json.JSONDecodeError, CareerError) as error:
+        print(f"hunt form-answers: {error}", file=sys.stderr)
+        return 1
+    ready = career.form_answers["ready"]
+    print("standing answers: " + ", ".join(f"{key} {ready[key]}" for key in STANDING if key in ready))
+    return 0
+
+
+def _resume_text(args: argparse.Namespace) -> int:
+    try:
+        print(resume_text(Path(args.file)))
+    except (OSError, CareerError) as error:
+        print(f"hunt resume-text: {error}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -382,7 +475,7 @@ def _morning(args: argparse.Namespace) -> int:
 
 def _questions(args: argparse.Namespace) -> int:
     print(questions(JobsList(DATA / "jobs.db"), DATA, Threads(DATA / "jobs.db"), Notes(DATA / "jobs.db"),
-                    notes_daily()), end="")
+                    notes_daily(), remote_desktop=remote_desktop_ready(this_machine())), end="")
     return 0
 
 
@@ -524,12 +617,91 @@ def _timer(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_quietly(command: list[str]) -> subprocess.CompletedProcess[str] | None:
+    try:
+        # `claude mcp list` checks every connector, which takes a while.
+        return subprocess.run(command, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _timer_status() -> str:
+    try:
+        hour = read_settings(DATA / "settings.json").morning_hour
+    except SettingsError:
+        raise RuntimeError("it is set once data/settings.json is") from None
+    return timer("status", platform.system(), Path.home(), ROOT, hour, run=run_command,
+                 uv=shutil.which("uv") or "uv", path=os.environ.get("PATH", ""), uid=os.getuid())
+
+
+def this_machine() -> Machine:
+    return Machine(system=platform.system(), home=Path.home(), root=Path("/"), data=DATA,
+                   python=sys.version_info[:2], run=_run_quietly, which=shutil.which, timer_status=_timer_status)
+
+
+def _settings(args: argparse.Namespace) -> int:
+    path = DATA / "settings.json"
+    temporary: Path | None = None
+    try:
+        given = json.loads(args.settings)
+        if not isinstance(given, dict):
+            raise SettingsError("give the settings as one JSON object")
+        for kept in ("pushover", "companies"):
+            if kept not in given and path.exists():
+                # Keys given once stay, and so do the companies added by hand: the search is
+                # changed without typing them again.
+                with contextlib.suppress(json.JSONDecodeError, AttributeError):
+                    if (value := json.loads(path.read_text()).get(kept)) is not None:
+                        given[kept] = value
+        DATA.mkdir(parents=True, exist_ok=True)
+        descriptor, name = tempfile.mkstemp(dir=DATA, prefix=".settings.json.")
+        temporary = Path(name)
+        with os.fdopen(descriptor, "w") as out:
+            out.write(json.dumps(given, indent=2, ensure_ascii=False) + "\n")
+        # Saved only as the hunt reads it: what it cannot read never replaces what it can.
+        settings = read_settings(temporary)
+        os.replace(temporary, path)
+    except (json.JSONDecodeError, SettingsError) as error:
+        said = str(error).replace(str(temporary), str(path)) if temporary else str(error)
+        print(f"hunt settings: {said}", file=sys.stderr)
+        return 1
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    remote = {"include": "remote jobs too", "exclude": "no remote jobs", "only": "remote jobs only"}[settings.remote]
+    salary = f"at least {settings.lowest_salary}" if settings.lowest_salary is not None else "any salary"
+    print(f"saved: {', '.join(settings.titles)}; in {', '.join(settings.areas) or 'no area'}, {remote}; {salary}; "
+          f"the morning run at {settings.morning_hour:02d}:00{'; Pushover keys kept' if settings.pushover else ''}")
+    return 0
+
+
+def _doctor(args: argparse.Namespace) -> int:
+    lines = doctor(this_machine())
+    for line in lines:
+        print(line)
+    return 1 if any(line.state == "missing" for line in lines) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hunt", description="Every mechanical step of the job hunt.")
     commands = parser.add_subparsers(dest="command", required=True)
     career = commands.add_parser("career", help="clean a career export into data/career.json")
     career.add_argument("export", nargs="?", default=str(DATA / "profile.json"))
     career.set_defaults(run=_career)
+    from_resume = commands.add_parser(
+        "career-from-resume", help="check a career the read-resume skill wrote from a resume and print what it "
+        "holds; with --save, write it to data/career.json, keeping the career's form answers")
+    from_resume.add_argument("draft")
+    from_resume.add_argument("--save", action="store_true")
+    from_resume.set_defaults(run=_career_from_resume)
+    reading = commands.add_parser("resume-text", help="print the text of a resume, a PDF or a Word (.docx) file")
+    reading.add_argument("file")
+    reading.set_defaults(run=_resume_text)
+    standing = commands.add_parser(
+        "form-answers", help="save the standing form answers in data/career.json, as one JSON object of "
+        f"{', '.join(STANDING)}")
+    standing.add_argument("answers")
+    standing.set_defaults(run=_form_answers)
     resume = commands.add_parser("resume", help="build resume.pdf from a job folder's resume-content.json")
     resume.add_argument("folder")
     resume.set_defaults(run=_resume)
@@ -634,6 +806,16 @@ def main(argv: list[str] | None = None) -> int:
         "say its state")
     timing.add_argument("action", nargs="?", choices=["on", "off"])
     timing.set_defaults(run=_timer)
+    searching = commands.add_parser(
+        "settings", help="check and save what to look for in data/settings.json, as one JSON object of titles, "
+        "areas, remote (include, exclude or only), lowest_salary and morning_hour; Pushover keys saved before stay")
+    searching.add_argument("settings")
+    searching.set_defaults(run=_settings)
+    checking = commands.add_parser(
+        "doctor", help="check what the hunt needs (Claude Code signed in, uv, Python 3.14, Claude in Chrome connected, "
+        "the Gmail connector, the career, the settings, the timer, and optionally Chrome Remote Desktop) and print "
+        "one line each: ok, or what is missing and how to add it")
+    checking.set_defaults(run=_doctor)
     watching = commands.add_parser(
         "watch", help="the watch timer's run, every 20 minutes from the morning hour to the summary hour: one "
         "claude -p on Haiku looks for recruiters' emails and LinkedIn's message notifications, LinkedIn is read "

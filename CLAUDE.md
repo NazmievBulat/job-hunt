@@ -30,7 +30,8 @@ each part as a message of its own, one at a time, and wait for the reply before 
    command after it. Ask once for all of them, offering each job only the replies its command
    takes: "done 12" for `hunt resume-job 12` (a CAPTCHA, a sign-in, Chrome to open), "12: and
    the answer" for `hunt answer 12`, and "sent 12" or "done 12" for a job whose command is
-   `hunt applied 12`. Run the commands `/apply` names.
+   `hunt applied 12`. Run the commands `/apply` names. When the part ends with a line about
+   Chrome Remote Desktop or about waiting for the computer, say that line too.
 5. **Recruiter messages.** One message each: who wrote and about which job, the message, the
    job description when there is one, then the drafted reply exactly as printed, and "Send?".
    "yes" runs `uv run hunt send-reply <n>`; a change runs `uv run hunt edit-reply <n> "<the

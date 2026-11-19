@@ -431,7 +431,7 @@ def _notes(args: argparse.Namespace) -> int:
         return 1
     lock = LinkedInLock(DATA, pause=note_pause)
     print(send_notes(notes, Threads(DATA / "jobs.db"), JobsList(DATA / "jobs.db"), ROOT, run=run_note_send,
-                     lock=lock, sleep=time.sleep, daily=daily, browser=chrome_browser()))
+                     lock=lock, sleep=time.sleep, daily=daily, browser=chrome_browser))
     return 0
 
 

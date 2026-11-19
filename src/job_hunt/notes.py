@@ -485,20 +485,23 @@ def recover_sends(notes: Notes, data: Path) -> None:
 
 def send_notes(notes: Notes, threads: Threads, jobs: JobsList, root: Path, *, run: Run, lock: LinkedInLock,
                sleep: Callable[[float], None], daily: int = DAILY,
-               clock: Callable[[], datetime] | None = None, browser: str | None = None) -> Sent:
+               clock: Callable[[], datetime] | None = None,
+               browser: str | None | Callable[[], str | None] = None) -> Sent:
     """Send the approved notes, one at a time, each under the LinkedIn lock. `browser` is the
-    settings' chrome_browser."""
+    settings' chrome_browser, or what reads it again for each note: a batch paced over minutes
+    never sends from a browser named off meanwhile."""
     data = root / "data"
     data.mkdir(parents=True, exist_ok=True)
     # Held while sending, so a note `sending` with the lock free is a dead run's.
     with (data / "notes-send.lock").open("w") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        return _send_notes(notes, threads, jobs, root, run, lock, sleep, daily, clock or notes.now, browser)
+        return _send_notes(notes, threads, jobs, root, run, lock, sleep, daily, clock or notes.now,
+                           browser if callable(browser) else lambda: browser)
 
 
 def _send_notes(notes: Notes, threads: Threads, jobs: JobsList, root: Path, run: Run, lock: LinkedInLock,
                 sleep: Callable[[float], None], daily: int, clock: Callable[[], datetime],
-                browser: str | None) -> Sent:
+                browser: Callable[[], str | None]) -> Sent:
     data = root / "data"
     summary = Sent()
     while True:
@@ -519,7 +522,8 @@ def _send_notes(notes: Notes, threads: Threads, jobs: JobsList, root: Path, run:
         while (later := lock.take(f"note {note.id}")) is not None:
             sleep(later)
         try:
-            _send_one(notes, threads, root, run, note, summary, browser)
+            # Read once the lock is held, after the wait for it.
+            _send_one(notes, threads, root, run, note, summary, browser())
         finally:
             lock.release()
     summary.left = len(notes.in_states("approved"))

@@ -39,7 +39,9 @@ name and system, and never pick one they did not choose: run
 `uv run hunt chrome-browser <its deviceId>`, show the line it prints, then run the doctor
 again. From then on every worker uses only that browser, wherever it runs, and they sign in to
 LinkedIn and the job sites there. `uv run hunt chrome-browser off` goes back to this computer's
-Chrome; `uv run hunt chrome-browser` says which is used now.
+Chrome; `uv run hunt chrome-browser` says which is used now. It saves into the settings, so on a
+first setup, when it says to run /setup to make them, do the search step (3) first and then this,
+and leave the Chrome line for now as the career and the settings are left.
 
 ## 2. The resume
 

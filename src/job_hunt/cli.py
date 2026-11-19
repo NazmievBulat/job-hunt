@@ -24,6 +24,7 @@ from job_hunt.career import (
 )
 from job_hunt.doctor import Machine, doctor, remote_desktop_ready
 from job_hunt.companies import Companies, fill_index
+from job_hunt.feeds import Feeds
 from job_hunt.finder import SKILL as ALERTS_SKILL, FinderError, fetch_page, find, run_claude
 from job_hunt.finder import Summary as FindSummary
 from job_hunt.jobs import Job, JobsList, PickError
@@ -169,6 +170,11 @@ def site_search() -> Search | None:
                   clock=lambda: datetime.now(UTC))
 
 
+def public_feeds() -> Feeds | None:
+    """The public job feeds, over the network."""
+    return Feeds(get=http_get, sleep=SLEEP)
+
+
 def find_step() -> FindSummary:
     # The settings first: without them nothing is made in data/.
     settings = read_settings(DATA / "settings.json")
@@ -182,6 +188,7 @@ def find_step() -> FindSummary:
         fetch=fetch_page,
         search=site_search(),
         messages=EmailMessages(Threads(DATA / "jobs.db"), jobs),
+        feeds=public_feeds(),
     )
     for problem in summary.problems:
         print(f"hunt find: left out {problem}", file=sys.stderr)
@@ -655,10 +662,10 @@ def _settings(args: argparse.Namespace) -> int:
         given = json.loads(args.settings)
         if not isinstance(given, dict):
             raise SettingsError("give the settings as one JSON object")
-        for kept in ("pushover", "working_hours", "time_zone", "companies"):
+        for kept in ("pushover", "working_hours", "time_zone", "companies", "keys"):
             if kept not in given and path.exists():
-                # Keys given once stay, and so do the call hours and the companies added by hand: the search is
-                # changed without typing them again.
+                # Keys given once stay (Pushover's and the feeds'), and so do the call hours and the companies
+                # added by hand: the search is changed without typing them again.
                 with contextlib.suppress(json.JSONDecodeError, AttributeError):
                     if (value := json.loads(path.read_text()).get(kept)) is not None:
                         given[kept] = value
@@ -718,15 +725,23 @@ def main(argv: list[str] | None = None) -> int:
         "find",
         help="read the job alert emails since the last run into data/jobs.db (one claude -p on Haiku with the "
         "read-job-alerts skill, Gmail read-only), search LinkedIn signed out and every company's public job board "
-        "in data/companies.db (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable), save each new job's "
-        "page in jobs/<id>/posting.md and print, for each source, how many jobs it found and how many were new",
+        "in data/companies.db (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable), read the public job "
+        "feeds (Remotive, RemoteOK, Arbeitnow, Hacker News' Who is hiring; USAJobs, Adzuna and Jooble with a free key "
+        "in data/settings.json's keys), save each new job's page in jobs/<id>/posting.md and print, for each source, "
+        "how many jobs it found and how many were new",
         description="Every source in turn; one that fails is named and the others go on. The alert emails and "
         "LinkedIn's search (each title in each area, and once remote unless the settings exclude it; at most 5 pages "
         "a search, 2 to 5 seconds apart, a 429 or 999 ends LinkedIn for the run) read what came since their own "
         "last run. Every company's public board (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable) is "
         "read in the first run of a day, and in the later runs only the boards that posted in the last week; at "
         "most 4 requests at a time to one host. Once a week the company index is filled from Common Crawl first "
-        "(hunt companies), and a board an alert's link leads to joins it.",
+        "(hunt companies), and a board an alert's link leads to joins it. The public feeds are read side by side, "
+        "one request at a time to each: Remotive and RemoteOK (remote jobs only, skipped when the settings exclude "
+        "remote jobs), Arbeitnow, and the latest monthly Hacker News \"Who is hiring?\" thread, one comment a job, "
+        "need no key; USAJobs (each title), Adzuna's US jobs and Jooble (each title in each area, and once remote) "
+        "need a free key of your own under keys in data/settings.json, "
+        "{\"usajobs\": {\"email\", \"key\"}, \"adzuna\": {\"app_id\", \"app_key\"}, \"jooble\": {\"key\"}}, "
+        "and are skipped with one line without it.",
     )
     finder.set_defaults(run=_find)
     indexing = commands.add_parser(

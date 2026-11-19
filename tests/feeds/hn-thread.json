@@ -1,0 +1,9 @@
+{"id": 9001, "type": "story", "author": "whoishiring", "title": "Ask HN: Who is hiring? (November 2026)", "created_at_i": 1793635297, "parent_id": null, "story_id": 9001, "text": "Please state the location and include REMOTE for remote work.", "children": [
+  {"id": 9101, "type": "comment", "author": "ada_example", "created_at_i": 1793635303, "parent_id": 9001, "story_id": 9001, "text": "Example Robotics | QA Automation Engineer | Durham, NC | ONSITE | Full-time<p>We build robot fleets and need someone to own their tests.<p>Apply at <a href=\"https:&#x2F;&#x2F;example.com&#x2F;jobs&#x2F;qa\" rel=\"nofollow\">https:&#x2F;&#x2F;example.com&#x2F;jobs&#x2F;qa</a>", "children": [
+    {"id": 9201, "type": "comment", "author": "someone_example", "parent_id": 9101, "story_id": 9001, "text": "Is this role open to SDET contractors? | yes | no", "children": []}
+  ]},
+  {"id": 9102, "type": "comment", "author": "bob_example", "created_at_i": 1793635313, "parent_id": 9001, "story_id": 9001, "text": "Sample Cloud | Senior SDET | REMOTE (US) | Full-time | $150k<p>We run a test cloud.", "children": []},
+  {"id": 9103, "type": "comment", "author": "cy_example", "created_at_i": 1793635403, "parent_id": 9001, "story_id": 9001, "text": "We are hiring an SDET to own our test suite, remote within the US.<p>Write to jobs@example.com with a few lines about you.", "children": []},
+  {"id": 9104, "type": "comment", "author": "dee_example", "created_at_i": 1793635419, "parent_id": 9001, "story_id": 9001, "text": "Example Bank | Data Scientist | New York, NY | ONSITE", "children": []},
+  {"id": 9105, "type": "comment", "author": null, "created_at_i": 1793635500, "parent_id": 9001, "story_id": 9001, "text": null, "children": []}
+]}

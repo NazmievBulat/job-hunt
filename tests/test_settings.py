@@ -197,3 +197,43 @@ def test_the_summary_hour_is_18_unless_the_settings_give_another(tmp_path: Path)
 def test_a_summary_hour_not_after_the_morning_hour_is_refused(tmp_path: Path, summary_hour: object) -> None:
     with pytest.raises(SettingsError, match="summary_hour"):
         read_settings(_write(tmp_path, {**GOOD, "summary_hour": summary_hour}))
+
+
+def test_feed_keys_are_optional_and_never_printed(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).keys == {}
+    keys = {"usajobs": {"email": " ada@example.com ", "key": "uExampleKey"}, "jooble": {"key": "jExampleKey"}}
+
+    settings = read_settings(_write(tmp_path, {**GOOD, "keys": keys}))
+
+    assert settings.keys == {"usajobs": {"email": "ada@example.com", "key": "uExampleKey"},
+                             "jooble": {"key": "jExampleKey"}}
+    assert "ExampleKey" not in repr(settings)
+
+
+@pytest.mark.parametrize(("keys", "said"), [
+    ("uExampleKey", "keys must be an object"),
+    ({"indeed": {"key": "uExampleKey"}}, "keys has 'indeed', which is not one of usajobs, adzuna, jooble"),
+    ({"usajobs": {"key": "uExampleKey"}}, 'keys.usajobs must be {"email": ..., "key": ...}'),
+    ({"adzuna": {"app_id": "uExampleKey", "app_key": " "}}, 'keys.adzuna must be {"app_id": ..., "app_key": ...}'),
+    ({"jooble": "uExampleKey"}, 'keys.jooble must be {"key": ...}'),
+])
+def test_feed_keys_must_have_the_fields_of_their_feed(tmp_path: Path, keys: object, said: str) -> None:
+    with pytest.raises(SettingsError) as refused:
+        read_settings(_write(tmp_path, {**GOOD, "keys": keys}))
+    assert said in str(refused.value)
+    # The keys are never repeated in an error.
+    assert "uExampleKey" not in str(refused.value)
+
+
+def test_hunt_settings_keeps_the_feed_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                          capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    keys = {"jooble": {"key": "jExampleKey"}}
+    (tmp_path / "settings.json").write_text(json.dumps({**GOOD, "keys": keys}))
+
+    assert cli.main(["settings", json.dumps({**GOOD, "titles": ["SDET"]})]) == 0
+
+    assert read_settings(tmp_path / "settings.json").keys == keys
+    assert "jExampleKey" not in capsys.readouterr().out

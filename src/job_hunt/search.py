@@ -78,9 +78,10 @@ class Gone(SearchError):
     """A board that answered 404: the company has no board there (any more)."""
 
 
-def http_get(url: str, body: Any = None) -> Answer:
-    """GET the address, or POST `body` as JSON; any HTTP status is an answer, no answer an error."""
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/json, text/html"}
+def http_get(url: str, body: Any = None, headers: dict[str, str] | None = None) -> Answer:
+    """GET the address, or POST `body` as JSON, with `headers` besides the usual ones; any HTTP
+    status is an answer, no answer an error."""
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json, text/html", **(headers or {})}
     data = None
     if body is not None:
         data, headers["Content-Type"] = json.dumps(body).encode(), "application/json"

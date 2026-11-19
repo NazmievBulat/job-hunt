@@ -1,0 +1,5 @@
+[
+  {"last_updated": 1795300000, "legal": "API Terms of Service: please link back to Remote OK and mention it as the source."},
+  {"slug": "remote-qa-automation-engineer-example-remote-201", "id": "201", "epoch": "1795290000", "date": "2026-11-17T00:00:00+00:00", "company": "Example Remote", "company_logo": "", "position": "QA Automation Engineer", "tags": ["testing", "qa"], "description": "<h3>About the role</h3><p>Automate our API tests.</p>", "location": "United States", "apply_url": "https://remoteOK.com/remote-jobs/remote-qa-automation-engineer-example-remote-201", "salary_min": "120000", "salary_max": "150000", "logo": "", "url": "https://remoteOK.com/remote-jobs/remote-qa-automation-engineer-example-remote-201"},
+  {"slug": "remote-backend-engineer-example-remote-202", "id": "202", "epoch": "1795280000", "date": "2026-11-16T20:00:00+00:00", "company": "Example Remote", "company_logo": "", "position": "Backend Engineer", "tags": ["go"], "description": "<p>Write Go.</p>", "location": "", "apply_url": "", "salary_min": "0", "salary_max": "0", "logo": "", "url": "https://remoteOK.com/remote-jobs/remote-backend-engineer-example-remote-202"}
+]

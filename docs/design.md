@@ -103,6 +103,14 @@ Without it the job waits until the user is at the computer, and the other jobs g
      the settings' `companies`. The first run of a day reads every board's public JSON, the
      later runs only the boards that posted in the last week; at most 4 requests at a time to
      one host. A board that answers 404 twice is dropped.
+   - **Public job feeds** (`feeds.py`), the APIs meant to be read by programs, side by side and
+     one request at a time to each. No key: Remotive and RemoteOK (remote jobs only, skipped
+     when the settings exclude them), Arbeitnow, and the latest monthly Hacker News "Who is
+     hiring?" thread through the Algolia HN API, one top-level comment a job, its first line
+     read by code and a comment it cannot read kept with its text. With a free key of the
+     user's own under `keys` in the settings, skipped with one line without it: USAJobs,
+     Adzuna's US jobs and Jooble, the last two each title in each area and once remote, with
+     their job pages read since they give only a snippet.
    A script drops jobs already in the list (one link is one job, whichever source found it),
    wrong titles, and jobs outside the areas or the remote setting; a board's or LinkedIn's job
    gets its area from a table of the cities in each area. For each job left it saves the full

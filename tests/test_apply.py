@@ -29,7 +29,7 @@ from only_named_tools import assert_only_named_tools
 
 
 def _found(number: int, **change: object) -> FoundJob:
-    job = dict(link=f"https://jobs.example.com/{number}", title=f"QA Engineer {number}",
+    job = dict(link=f"https://jobs.example{number}.com/{number}", title=f"QA Engineer {number}",
                company=f"Example Co {number}", place="Durham, NC", remote="on_site", board="indeed",
                email_id="1", email_date="2026-11-17T07:00:00+00:00", area="Raleigh-Durham-Chapel Hill")
     return FoundJob(**{**job, **change})
@@ -144,7 +144,7 @@ def test_a_site_worker_drives_chrome_reads_its_folder_and_the_career_and_writes_
     assert command[:3] == ["claude", "--chrome", "-p"]
     folder = project / "jobs" / str(job.id)
     assert json.loads(command[3].removeprefix(f"/{SITE_SKILL} ")) == {
-        "job": job.id, "link": "https://jobs.example.com/1", "title": "QA Engineer 1", "company": "Example Co 1",
+        "job": job.id, "link": "https://jobs.example1.com/1", "title": "QA Engineer 1", "company": "Example Co 1",
         "resume": str(folder / "resume.pdf"), "career": str(project / "data" / "career.json"),
         "report": str(folder / "report.json"),
     }
@@ -363,8 +363,14 @@ def test_a_run_stopped_before_the_retry_started_does_not_count_the_last_failure_
 
 
 def _pause(project: Path, jobs: JobsList, report: dict) -> int:
+    """A job paused on this report; a CAPTCHA or a sign-in after the try again it gets on its own."""
     job = _picked(jobs, 1)
-    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project, {job: [report]}))
+    sites = Sites(project, {job: [report]})
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
+    if report.get("needs") in ("captcha", "sign_in"):
+        assert jobs.get(job).state == "resume_ready"
+        jobs._clock.advance(hours=3)
+        apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
     assert jobs.get(job).state == "paused"
     return job
 
@@ -500,7 +506,10 @@ def hunt(project: Path, monkeypatch: pytest.MonkeyPatch, jobs: JobsList) -> Jobs
     return jobs
 
 
-def test_hunt_status_lines(hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_hunt_status_lines(hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str],
+                           monkeypatch: pytest.MonkeyPatch) -> None:
+    # hunt status's own jobs list, on the test's clock.
+    monkeypatch.setattr(cli, "JobsList", lambda path: JobsList(path, clock=hunt._clock))
     applied, paused, failed = _picked(hunt, 1), _picked(hunt, 2), _picked(hunt, 3)
     silent = _picked(hunt, 4)
     sites = Sites(project, {
@@ -516,17 +525,18 @@ def test_hunt_status_lines(hunt: JobsList, project: Path, capsys: pytest.Capture
     hunt.add(_found(7))  # new, not picked: not part of applying
     capsys.readouterr()
     assert cli.main(["status"]) == 0
+    # The CAPTCHA is tried again on its own three hours later; until then it waits.
+    again = datetime.fromisoformat(hunt.get(paused).not_before).astimezone()
     assert capsys.readouterr().out.splitlines() == [
         "Applied (1):",
         f"  {applied}. QA Engineer 1 at Example Co 1",
-        "Paused (2):",
-        f'  {paused}. QA Engineer 2 at Example Co 2: needs a CAPTCHA solved, in the Chrome tab "Apply - Example Co 2"'
-        f" (then: hunt resume-job {paused})",
+        "Paused (1):",
         f"  {silent}. QA Engineer 4 at Example Co 4: needs a look in Chrome whether it was sent: the apply-site run"
         f" wrote no report (then: hunt applied {silent} if it was sent, hunt resume-job {silent} if not)",
         "Failed (1):",
         f"  {failed}. QA Engineer 3 at Example Co 3: The site showed an error page.",
-        "Waiting (2):",
+        "Waiting (3):",
+        f"  {paused}. QA Engineer 2 at Example Co 2: resume ready, for a hunt apply from {again:%H:%M} on",
         f"  {easy}. QA Engineer 5 at Example Co 5: resume ready, for the next hunt apply",
         f"  {unwritten}. QA Engineer 6 at Example Co 6: resume not written yet",
     ]
@@ -636,7 +646,9 @@ def test_a_needs_that_is_not_a_word_pauses_the_job_and_does_not_crash_the_run(pr
 
 @pytest.mark.parametrize(("left", "state"), [
     ('{"result": "failed", "reason": "The site showed an error page."}', "applied"),
-    ('{"result": "paused", "needs": "captcha", "tab": "Apply"}', "paused"),
+    ('{"result": "paused", "needs": "question", "question": "Notice period?", "tab": "Apply"}', "paused"),
+    # Tried again on its own, three hours later.
+    ('{"result": "paused", "needs": "captcha", "tab": "Apply"}', "resume_ready"),
     ("{not json", "paused"),
     (b'{"result": "paused", "tab": "\xc3', "paused"),
 ])
@@ -866,3 +878,392 @@ def test_a_worker_that_crashes_leaving_a_broken_report_is_named_by_its_error(pro
 
     _unsure_after_two_runs(project, jobs, job, wrote_half_then_crashed)
     assert jobs.get(job).state_reason == UNSURE + "the apply-site run failed (1): the connection to Chrome was lost"
+
+
+# CAPTCHAs and sign-ins: tried again once on their own, then asked
+
+
+def _sent(command: list[str]) -> dict:
+    return json.loads(command[3].removeprefix(f"/{SITE_SKILL} "))
+
+
+@pytest.mark.parametrize("needs", ["captcha", "sign_in"])
+def test_a_captcha_or_sign_in_is_tried_again_once_three_hours_later_in_a_fresh_tab(
+        project: Path, jobs: JobsList, needs: str) -> None:
+    job = _picked(jobs, 1)
+    pause = {"result": "paused", "needs": needs, "tab": "Apply - Example Co 1", "tab_id": 7}
+    commands: list[list[str]] = []
+    sites = Sites(project, {job: [pause]})
+
+    def run(command: list[str]) -> None:
+        commands.append(command)
+        sites(command)
+
+    summary = apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=run)
+    assert str(summary) == "1 resumes written; 0 applied, 0 paused, 0 failed, 1 left for later"
+    found = jobs.get(job)
+    assert (found.state, found.retries, found.failures) == ("resume_ready", 1, 0)
+    assert found.not_before == (jobs.now() + timedelta(hours=3)).isoformat()
+    # Not before its time.
+    jobs._clock.advance(hours=2, seconds=59 * 60)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=run)
+    assert len(commands) == 1
+    jobs._clock.advance(seconds=60)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=run)
+    assert len(commands) == 2
+    assert "tab" not in _sent(commands[1])
+    # Still blocked after its one try again: it waits for the person, with its tab left open.
+    assert (jobs.get(job).state, jobs.get(job).retries) == ("paused", 1)
+    resume_job(jobs, job)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=run)
+    assert (_sent(commands[2])["tab_id"], jobs.get(job).state) == (7, "paused")
+
+
+def test_a_captcha_still_there_after_two_questions_fails_to_apply_by_hand(
+        project: Path, jobs: JobsList) -> None:
+    job = _pause(project, jobs, {"result": "paused", "needs": "captcha", "tab": "Apply"})
+    sites = Sites(project, {job: [{"result": "paused", "needs": "captcha", "tab": "Apply"}]})
+    for asked in (1, 2):
+        jobs.asked(job)
+        assert jobs.get(job).asks == asked
+        resume_job(jobs, job)
+        apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
+    assert (jobs.get(job).state, jobs.get(job).state_reason) == ("failed", "the site asks for a CAPTCHA")
+    # Asked once only, the person had one more question.
+    other = _picked(jobs, 2)
+    sites = Sites(project, {other: [{"result": "paused", "needs": "captcha", "tab": "Apply"}]})
+    for _ in range(2):
+        apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
+        jobs._clock.advance(hours=3)
+    jobs.asked(other)
+    resume_job(jobs, other)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
+    assert jobs.get(other).state == "paused"
+
+
+def test_a_done_to_a_captcha_asked_from_hunt_status_counts_as_its_question(project: Path, jobs: JobsList) -> None:
+    # /apply asks from `hunt status`, not `hunt questions`: the "done" itself counts the question.
+    job = _pause(project, jobs, {"result": "paused", "needs": "captcha", "tab": "Apply"})
+    sites = Sites(project, {job: [{"result": "paused", "needs": "captcha", "tab": "Apply"}]})
+    for asked in (1, 2):
+        resume_job(jobs, job)
+        assert jobs.get(job).asks == asked
+        apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
+    assert (jobs.get(job).state, jobs.get(job).state_reason) == ("failed", "the site asks for a CAPTCHA")
+
+
+def test_with_captcha_skip_a_captcha_after_its_try_again_fails_at_once(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1)
+    sites = Sites(project, {job: [{"result": "paused", "needs": "captcha", "tab": "Apply"}]})
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, captcha="skip")
+    assert jobs.get(job).state == "resume_ready"
+    jobs._clock.advance(hours=3)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, captcha="skip")
+    assert (jobs.get(job).state, jobs.get(job).state_reason) == ("failed", "the site asks for a CAPTCHA")
+
+
+def test_hunt_resume_job_resumes_every_job_of_a_done(hunt: JobsList, project: Path,
+                                                     capsys: pytest.CaptureFixture[str]) -> None:
+    first = _pause(project, hunt, {"result": "paused", "needs": "question", "question": "Why?", "tab": "Apply"})
+    second = _picked(hunt, 2)
+    hunt.move(second, "resume_ready")
+    hunt.move(second, "applying")
+    hunt.move(second, "paused", 'a CAPTCHA solved, in the Chrome tab "Apply"')
+    capsys.readouterr()
+    assert cli.main(["resume-job", str(first), str(second)]) == 0
+    assert [hunt.get(job).state for job in (first, second)] == ["resume_ready", "resume_ready"]
+    # One that is not paused any more is said; the others still go on.
+    hunt.move(second, "applying")
+    hunt.move(second, "paused", 'a CAPTCHA solved, in the Chrome tab "Apply"')
+    capsys.readouterr()
+    assert cli.main(["resume-job", str(first), str(second)]) == 1
+    out = capsys.readouterr()
+    assert f"job {first} is not paused, it is resume_ready" in out.err
+    assert hunt.get(second).state == "resume_ready"
+
+
+# Fewer CAPTCHAs: one site's host
+
+
+class Waiting:
+    """Stands in for the sleep between starts: moves the clock instead."""
+
+    def __init__(self, clock: MovableClock) -> None:
+        self.clock, self.slept = clock, []
+
+    def __call__(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.clock.advance(seconds=seconds)
+
+
+def test_two_applications_on_one_host_start_ten_minutes_apart(project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    one = jobs.add(_found(1, link="https://acme.wd5.myworkdayjobs.com/job/1"), kind="company_site")
+    two = jobs.add(_found(2, link="https://www.acme.wd5.myworkdayjobs.com/job/2"), kind="company_site")
+    elsewhere = jobs.add(_found(3), kind="company_site")
+    for job in (one, two, elsewhere):
+        jobs.score(job, 8, "Good.")
+        jobs.move(job, "picked")
+    started: dict[int, datetime] = {}
+    sites = Sites(project)
+
+    def run(command: list[str]) -> None:
+        started[_job_of(command, SITE_SKILL)] = clock.now
+        sites(command)
+
+    waiting = Waiting(clock)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=run, sleep=waiting)
+    assert [jobs.get(job).state for job in (one, two, elsewhere)] == ["applied"] * 3
+    # Another host does not wait.
+    assert started[elsewhere] == started[one]
+    assert started[two] - started[one] == timedelta(minutes=10)
+
+
+def test_at_most_six_applications_a_day_on_one_host_and_the_rest_wait_for_the_next_day(
+        project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    picked = []
+    for number in range(1, 8):
+        job = jobs.add(_found(number, link=f"https://boards.greenhouse.io/example/jobs/{number}"), kind="company_site")
+        jobs.score(job, 8, "Good.")
+        jobs.move(job, "picked")
+        picked.append(job)
+    summary = apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project),
+                    sleep=Waiting(clock))
+    assert [jobs.get(job).state for job in picked] == ["applied"] * 6 + ["resume_ready"]
+    assert summary.later == 1
+    tomorrow = (clock.now.astimezone() + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    assert jobs.get(picked[-1]).not_before == tomorrow.isoformat()
+    clock.now = tomorrow
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project),
+          sleep=Waiting(clock))
+    assert jobs.get(picked[-1]).state == "applied"
+
+
+@pytest.fixture
+def new_york(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    """The computer's own time zone, one whose clocks change."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def _six_on_greenhouse_then_one_more(project: Path, jobs: JobsList, first: datetime, then: datetime) -> int:
+    clock = jobs._clock
+    clock.now = first
+    for number in range(1, 8):
+        job = jobs.add(_found(number, link=f"https://boards.greenhouse.io/example/jobs/{number}"), kind="company_site")
+        jobs.score(job, 8, "Good.")
+        if number < 7:
+            jobs.move(job, "picked")
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project),
+          sleep=Waiting(clock))
+    clock.now = then
+    jobs.move(7, "picked")
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project),
+          sleep=Waiting(clock))
+    return 7
+
+
+def test_the_day_of_a_host_s_limit_starts_at_midnight_on_the_day_the_clocks_go_back(
+        project: Path, jobs: JobsList, new_york: None) -> None:
+    # Six from 00:00 EDT on 2026-11-01; at 02:00 EST the same day the seventh still waits.
+    seventh = _six_on_greenhouse_then_one_more(project, jobs, datetime(2026, 11, 1, 4, 0, tzinfo=UTC),
+                                               datetime(2026, 11, 1, 7, 0, tzinfo=UTC))
+    assert jobs.get(seventh).state == "resume_ready"
+    assert datetime.fromisoformat(jobs.get(seventh).not_before) == datetime(2026, 11, 2, 5, 0, tzinfo=UTC)
+
+
+def test_the_day_of_a_host_s_limit_starts_at_midnight_on_the_day_the_clocks_go_forward(
+        project: Path, jobs: JobsList, new_york: None) -> None:
+    # Six from 23:00 EST on 2026-03-07: the next day, at 08:00 EDT, the seventh goes.
+    seventh = _six_on_greenhouse_then_one_more(project, jobs, datetime(2026, 3, 8, 4, 0, tzinfo=UTC),
+                                               datetime(2026, 3, 8, 12, 0, tzinfo=UTC))
+    assert jobs.get(seventh).state == "applied"
+
+
+def test_a_captcha_held_all_day_is_named_in_the_end_of_day_summary(
+        hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    job = _pause(project, hunt, {"result": "paused", "needs": "captcha", "tab": "Apply - Example Co 1"})
+    capsys.readouterr()
+    assert cli.main(["status"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "Paused (1):",
+        f'  {job}. QA Engineer 1 at Example Co 1: needs a CAPTCHA solved, in the Chrome tab "Apply - Example Co 1"'
+        f"; not asked yet, as you were not free (then: hunt resume-job {job})",
+    ]
+    hunt.asked(job)
+    cli.main(["status"])
+    assert "not asked" not in capsys.readouterr().out
+
+
+def test_a_try_again_on_another_day_names_its_day(hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str],
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "JobsList", lambda path: JobsList(path, clock=hunt._clock))
+    job = _picked(hunt, 1)
+    hunt.move(job, "resume_ready")
+    when = (hunt.now().astimezone() + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    hunt.later(job, when)
+    capsys.readouterr()
+    cli.main(["status"])
+    assert f"resume ready, for a hunt apply from {when:%a %d %b} 00:00 on" in capsys.readouterr().out
+
+
+def test_a_jobs_own_try_again_is_not_held_by_its_host(project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    picked = []
+    for number in range(1, 7):
+        job = jobs.add(_found(number, link=f"https://boards.greenhouse.io/example/jobs/{number}"), kind="company_site")
+        jobs.score(job, 8, "Good.")
+        jobs.move(job, "picked")
+        picked.append(job)
+    captcha = picked[0]
+    sites = Sites(project, {captcha: [{"result": "paused", "needs": "captcha", "tab": "Apply"}, {"result": "applied"}]})
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=Waiting(clock))
+    assert jobs.get(captcha).state == "resume_ready"
+    # Six started on the host today, but this one's try again is the same application.
+    clock.advance(hours=3)
+    waiting = Waiting(clock)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=waiting)
+    assert (jobs.get(captcha).state, waiting.slept) == ("applied", [])
+
+
+def test_jobs_resumed_in_their_tabs_after_done_are_not_held_by_their_host(project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    picked = []
+    for number in (1, 2):
+        job = jobs.add(_found(number, link=f"https://boards.greenhouse.io/example/jobs/{number}"), kind="company_site")
+        jobs.score(job, 8, "Good.")
+        jobs.move(job, "picked")
+        picked.append(job)
+    captcha = {"result": "paused", "needs": "captcha", "tab": "Apply"}
+    sites = Sites(project, {job: [captcha, captcha, {"result": "applied"}] for job in picked})
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=Waiting(clock))
+    clock.advance(hours=3)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=Waiting(clock))
+    assert [jobs.get(job).state for job in picked] == ["paused"] * 2
+    for job in picked:
+        resume_job(jobs, job)
+    # Both CAPTCHAs were solved for one "done": a solved CAPTCHA does not last 10 minutes.
+    waiting = Waiting(clock)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=waiting)
+    assert ([jobs.get(job).state for job in picked], waiting.slept) == (["applied"] * 2, [])
+
+
+def test_jobs_resumed_once_chrome_is_open_are_held_by_their_host(project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    picked = []
+    for number in (1, 2):
+        job = jobs.add(_found(number, link=f"https://boards.greenhouse.io/example/jobs/{number}"), kind="company_site")
+        jobs.score(job, 8, "Good.")
+        jobs.move(job, "picked")
+        picked.append(job)
+    sites = Sites(project, {job: [{"result": "paused", "needs": "chrome"}, {"result": "applied"}] for job in picked})
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=Waiting(clock))
+    assert [jobs.get(job).state for job in picked] == ["paused"] * 2
+    for job in picked:
+        resume_job(jobs, job)
+    # A Chrome pause has no tab to go on in: each is a fresh start on the host.
+    waiting = Waiting(clock)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=waiting)
+    assert ([jobs.get(job).state for job in picked], waiting.slept) == (["applied"] * 2, [600.0])
+
+
+def test_the_host_is_the_company_site_a_linkedin_job_sends_to(project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    found = []
+    for number, site in ((1, "https://careers.acme.example/1"), (2, "https://jobs.other.example/2"),
+                         (3, "https://careers.acme.example/3")):
+        job = jobs.add(_found(number, link=f"https://www.linkedin.com/jobs/view/{number}"), kind="company_site")
+        jobs.score(job, 8, "Good.")
+        jobs.move(job, "picked")
+        jobs.move(job, "resume_ready")
+        jobs.move(job, "applying")
+        jobs.to_company_site(job, site)
+        (project / "jobs" / str(job)).mkdir()
+        (project / "jobs" / str(job) / "resume.pdf").write_bytes(b"%PDF-1.4 stand-in")
+        found.append(job)
+    started: dict[int, datetime] = {}
+    sites = Sites(project)
+
+    def run(command: list[str]) -> None:
+        started[_job_of(command, SITE_SKILL)] = clock.now
+        sites(command)
+
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=run, sleep=Waiting(clock))
+    one, two, three = (started[job] for job in found)
+    assert one == two and three - one == timedelta(minutes=10)
+
+
+def test_an_easy_apply_sign_in_is_tried_again_through_linkedin_in_a_fresh_tab(project: Path, jobs: JobsList) -> None:
+    job = _picked(jobs, 1, kind="easy_apply")
+    commands: list[list[str]] = []
+    linkedin = Sites(project, {job: [{"result": "paused", "needs": "sign_in", "tab": "LinkedIn", "tab_id": 4},
+                                     {"result": "applied"}]}, skill=LINKEDIN_SKILL)
+
+    def run(command: list[str]) -> None:
+        commands.append(command)
+        linkedin(command)
+
+    lock = _no_pause(project)
+    apply(jobs, project, run_linkedin=run, run_resume=Resumes(project), run_site=no_linkedin, linkedin=lock)
+    assert (jobs.get(job).state, jobs.get(job).retries) == ("resume_ready", 1)
+    assert not (project / "data" / "linkedin.lock").exists()
+    jobs._clock.advance(hours=3)
+    apply(jobs, project, run_linkedin=run, run_resume=Resumes(project), run_site=no_linkedin, linkedin=lock)
+    assert "tab_id" not in json.loads(commands[1][3].removeprefix(f"/{LINKEDIN_SKILL} "))
+    assert jobs.get(job).state == "applied"
+    assert jobs.starts_on("linkedin.com", datetime(2026, 1, 1, tzinfo=UTC), but=0) == {}
+
+
+def test_the_host_is_where_a_tracked_link_ended(project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    direct = jobs.add(_found(1, link="https://careers.acme.example/1"), kind="company_site")
+    tracked = jobs.add(_found(2, link="https://click.example.com/t/2"), page_link="https://careers.acme.example/2",
+                       kind="company_site")
+    for job in (direct, tracked):
+        jobs.score(job, 8, "Good.")
+        jobs.move(job, "picked")
+    waiting = Waiting(clock)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project), sleep=waiting)
+    assert waiting.slept == [600.0]
+
+
+def test_the_spacing_holds_across_midnight(project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    midnight = (clock.now.astimezone() + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    clock.now = midnight - timedelta(minutes=2)
+    jobs.started_on("careers.acme.example", 98)
+    clock.now = midnight + timedelta(minutes=2)
+    job = jobs.add(_found(1, link="https://careers.acme.example/1"), kind="company_site")
+    jobs.score(job, 8, "Good.")
+    jobs.move(job, "picked")
+    waiting = Waiting(clock)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project), sleep=waiting)
+    # The start two minutes before midnight still holds this one six minutes.
+    assert waiting.slept == [360.0] and jobs.get(job).state == "applied"
+
+
+def test_with_captcha_skip_the_captchas_already_waiting_fail_and_are_not_asked(
+        hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    job = _pause(project, hunt, {"result": "paused", "needs": "captcha", "tab": "Apply"})
+    (project / "data" / "settings.json").write_text(json.dumps({
+        "titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 7,
+        "captcha": "skip"}))
+    assert cli.main(["questions"]) == 0
+    assert (hunt.get(job).state, hunt.get(job).state_reason) == ("failed", "the site asks for a CAPTCHA")
+
+
+def test_with_captcha_skip_hunt_status_fails_the_captchas_already_waiting_too(
+        hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    job = _pause(project, hunt, {"result": "paused", "needs": "captcha", "tab": "Apply"})
+    (project / "data" / "settings.json").write_text(json.dumps({
+        "titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 7,
+        "captcha": "skip"}))
+    capsys.readouterr()
+    # `/apply` asks from `hunt status`: a CAPTCHA the setting skips is not shown there as paused.
+    assert cli.main(["status"]) == 0
+    assert (hunt.get(job).state, hunt.get(job).state_reason) == ("failed", "the site asks for a CAPTCHA")
+    assert "Paused" not in capsys.readouterr().out

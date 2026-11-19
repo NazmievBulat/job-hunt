@@ -404,3 +404,17 @@ def test_a_recruiters_email_found_in_the_morning_is_drafted_and_starts_the_sessi
             clock=clock, threads=threads, draft=draft)
 
     assert drafted and steps.ran == ["find", "start"]
+
+
+def test_a_session_started_with_a_message_opens_with_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import watch
+
+    tmux = Tmux("https://claude.ai/code/session_01Example")
+    start_session(tmp_path, run=tmux, sleep=lambda seconds: None, message="The day ends")
+    assert [command for command in tmux.commands if command[1] == "new-session"][0][-1] == "The day ends"
+    # The watch starts a session with what it tells, not the morning's first message.
+    started: list[str] = []
+    monkeypatch.setattr(watch, "start_session", lambda root, *, message: started.append(message))
+    watch.tell_session(tmp_path, run=lambda command: subprocess.CompletedProcess(command, 1, "", ""),
+                       text="The day ends")
+    assert started == ["The day ends"]

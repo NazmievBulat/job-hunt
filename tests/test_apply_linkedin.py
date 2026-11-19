@@ -417,10 +417,11 @@ def test_a_run_that_stops_while_the_linkedin_worker_applies_still_releases_the_l
 
 def test_a_paused_easy_apply_job_goes_on_in_its_tab_through_the_linkedin_worker(project: Path, jobs: JobsList) -> None:
     job = _picked(jobs, 1, kind="easy_apply")
-    linkedin = LinkedIn(project, {job: {"result": "paused", "needs": "sign_in", "tab": "LinkedIn", "tab_id": 4}})
+    linkedin = LinkedIn(project, {job: {"result": "paused", "needs": "question", "question": "Notice period?",
+                                        "tab": "LinkedIn", "tab_id": 4}})
     apply(jobs, project, run_resume=Resumes(project), run_site=no_linkedin, run_linkedin=linkedin,
           linkedin=_lock(project))
-    assert jobs.get(job).state_reason == 'a sign-in or a new account, in the Chrome tab "LinkedIn"'
+    assert jobs.get(job).state_reason == 'an answer to "Notice period?", in the Chrome tab "LinkedIn"'
     jobs.move(job, "resume_ready")
     commands: list[list[str]] = []
     apply(jobs, project, run_resume=Resumes(project), run_site=no_linkedin,

@@ -11,6 +11,12 @@ Each job keeps its source (`SOURCES`): an alert email, LinkedIn's search, one of
 systems or one of the public job feeds; each finder run of a source is kept, so the next run of that source reads from when it
 started.
 
+A job paused for a CAPTCHA or a sign-in is tried again once on its own (`retry`): back to
+`resume_ready` with a time before which no `hunt apply` takes it (`not_before`, which any later
+move clears). A job still on a CAPTCHA after that is asked about in one question with the others
+(`asked`), at most `CAPTCHA_ASKS` times. Each start of a company-site worker is kept with the
+site's host (`started_on`), for the spacing and the daily limit of `apply`.
+
 The list the user picks from is numbered when it is shown (`show`), and the numbers are kept
 in the file, so "pick 2" names the second job of the last list shown, also after more jobs
 were scored.
@@ -49,6 +55,8 @@ MOVES: dict[State, tuple[State, ...]] = {
 WITH_REASON: tuple[State, ...] = ("paused", "failed")
 # A job whose workers failed this many times is `failed`.
 TRIES = 2
+# A job still on a CAPTCHA after this many questions is `failed`.
+CAPTCHA_ASKS = 2
 KINDS = ("easy_apply", "company_site")
 SOURCES = ("alert", "linkedin_search", "greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable",
            "remotive", "remoteok", "arbeitnow", "hn_hiring", "usajobs", "adzuna", "jooble")
@@ -112,6 +120,13 @@ class Job:
     state: State
     state_reason: str | None
     failures: int
+    # The tries again of a CAPTCHA or sign-in pause spent (`retry`), and the time before which
+    # no `hunt apply` takes the job.
+    retries: int
+    not_before: str | None
+    # The questions a CAPTCHA pause of the job was in, and whether its pause now was in one.
+    asks: int
+    asked: int
     source: str
     found_at: str
     updated_at: str
@@ -141,6 +156,10 @@ CREATE TABLE IF NOT EXISTS jobs (
         'applying', 'paused', 'applied', 'failed')),
     state_reason TEXT,
     failures INTEGER NOT NULL DEFAULT 0,
+    retries INTEGER NOT NULL DEFAULT 0,
+    not_before TEXT,
+    asks INTEGER NOT NULL DEFAULT 0,
+    asked INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'alert',
     found_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -156,6 +175,11 @@ CREATE TABLE IF NOT EXISTS shown (
 );
 CREATE TABLE IF NOT EXISTS lists (
     shown_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS site_starts (
+    host TEXT NOT NULL,
+    job INTEGER NOT NULL,
+    started_at TEXT NOT NULL
 );
 """
 
@@ -209,8 +233,15 @@ class JobsList:
                 self._db.execute("ALTER TABLE jobs ADD COLUMN apply_link TEXT")
             if "source" not in columns:
                 self._db.execute("ALTER TABLE jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'alert'")
+            for column, kind in (("retries", "INTEGER NOT NULL DEFAULT 0"), ("not_before", "TEXT"),
+                                 ("asks", "INTEGER NOT NULL DEFAULT 0"), ("asked", "INTEGER NOT NULL DEFAULT 0")):
+                if column not in columns:
+                    self._db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
             if "source" not in runs:
                 self._db.execute("ALTER TABLE runs ADD COLUMN source TEXT NOT NULL DEFAULT 'alert'")
+
+    def now(self) -> datetime:
+        return self._clock()
 
     def _stamp(self) -> str:
         return self._clock().isoformat()
@@ -293,7 +324,8 @@ class JobsList:
             )
         decision = ", decision = ?" if state in ("picked", "skipped") else ""
         self._db.execute(
-            f"UPDATE jobs SET state = ?, state_reason = ?, updated_at = ?{decision} WHERE id = ?",
+            f"UPDATE jobs SET state = ?, state_reason = ?, updated_at = ?, not_before = NULL, asked = 0{decision}"
+            " WHERE id = ?",
             (state, reason, self._stamp(), *((state,) if decision else ()), job),
         )
 
@@ -311,6 +343,44 @@ class JobsList:
             elif start != "picked":
                 raise MoveError(f"job {job} is {start}: no worker of it can fail")
         return self.get(job).state
+
+    def retry(self, job: int, not_before: datetime) -> None:
+        """Try a job paused by a CAPTCHA or a sign-in again on its own, once, from `not_before` on."""
+        with self._db:
+            if self.get(job).retries:
+                raise MoveError(f"job {job} was tried again on its own already")
+            self._move(job, "resume_ready", None)
+            self._db.execute("UPDATE jobs SET retries = retries + 1, not_before = ? WHERE id = ?",
+                             (not_before.isoformat(), job))
+
+    def later(self, job: int, not_before: datetime) -> None:
+        """Leave a job ready to apply to for a `hunt apply` from `not_before` on."""
+        with self._db:
+            if self.get(job).state != "resume_ready":
+                raise MoveError(f"job {job} is not ready to apply to")
+            self._db.execute("UPDATE jobs SET not_before = ? WHERE id = ?", (not_before.isoformat(), job))
+
+    def due(self, job: Job) -> bool:
+        """Whether a `hunt apply` may take the job now: its `not_before`, if any, has come."""
+        return job.not_before is None or datetime.fromisoformat(job.not_before) <= self.now()
+
+    def asked(self, job: int) -> None:
+        """Count the question a CAPTCHA pause of the job is shown in, once a pause."""
+        with self._db:
+            self._db.execute("UPDATE jobs SET asks = asks + 1, asked = 1 WHERE id = ? AND asked = 0", (job,))
+
+    def started_on(self, host: str, job: int) -> None:
+        """Keep that a company-site worker started on this job, on this host, now."""
+        with self._db:
+            self._db.execute("INSERT INTO site_starts (host, job, started_at) VALUES (?, ?, ?)",
+                             (host, job, self._stamp()))
+
+    def starts_on(self, host: str, since: datetime, but: int) -> dict[int, datetime]:
+        """The other jobs started on this host since a time, each with its latest start: a job's
+        own try again is the same application."""
+        rows = self._db.execute("SELECT job, max(started_at) FROM site_starts WHERE host = ? AND job != ? GROUP BY job",
+                                (host, but))
+        return {row[0]: when for row in rows if (when := datetime.fromisoformat(row[1])) >= since}
 
     def to_company_site(self, job: int, link: str) -> None:
         """A job whose LinkedIn page sends to the company's site: from now on a company-site job

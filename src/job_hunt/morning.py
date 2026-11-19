@@ -13,6 +13,9 @@ starts one only when none runs. With nothing waiting it starts nothing. The day 
 is kept in `data/morning-day`. A failed step is written to `data/morning.log` and goes on;
 the next `hunt questions` tells it once, so a failure alone also starts the session.
 
+The session alone has a prompt hook (`--settings`), `hunt replied`, which keeps when the person
+last replied (`data/chat-reply`), so `hunt available` knows they are talking to the chat.
+
 Yesterday's session is ended only while no `hunt apply` runs (`jobs/apply.lock`): ending it
 then would stop a worker in the middle of an application.
 """
@@ -22,6 +25,7 @@ from __future__ import annotations
 import fcntl
 import json
 import re
+import shlex
 import subprocess
 import time
 from collections.abc import Callable
@@ -131,15 +135,24 @@ def session_running(*, run: Run = tmux) -> bool:
     return run(["tmux", "has-session", "-t", TARGET]).returncode == 0
 
 
-def session_command(root: Path) -> list[str]:
+def hook_settings(root: Path) -> str:
+    """The session's own settings: its prompt hook. A background worker has none."""
+    command = f"uv run --project {shlex.quote(str(root))} hunt replied"
+    return json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": command,
+                                                                  "timeout": 10}]}]}})
+
+
+def session_command(root: Path, message: str = FIRST_MESSAGE) -> list[str]:
     # The prompt comes last, after an option that takes one value: --allowedTools takes many.
     return ["tmux", "new-session", "-d", "-s", SESSION, "-c", str(root),
-            "claude", "--allowedTools", TOOLS, "--remote-control", SESSION, "--name", SESSION, FIRST_MESSAGE]
+            "claude", "--allowedTools", TOOLS, "--remote-control", SESSION, "--name", SESSION,
+            "--settings", hook_settings(root), message]
 
 
-def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None] = time.sleep) -> None:
-    """End yesterday's session and start today's, then keep its Remote Control link in
-    `data/session.json` for the pushes, when the session shows one within `LINK_SECONDS`."""
+def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None] = time.sleep,
+                  message: str = FIRST_MESSAGE) -> None:
+    """End yesterday's session and start today's with `message`, then keep its Remote Control
+    link in `data/session.json` for the pushes, when the session shows one within `LINK_SECONDS`."""
     data, jobs = root / "data", root / "jobs"
     data.mkdir(exist_ok=True)
     jobs.mkdir(exist_ok=True)
@@ -148,7 +161,7 @@ def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None]
         fcntl.flock(lock, fcntl.LOCK_EX)
         run(["tmux", "kill-session", "-t", TARGET])
         (data / "session.json").unlink(missing_ok=True)
-        started = run(session_command(root))
+        started = run(session_command(root, message))
     if started.returncode != 0:
         said = (started.stderr.strip() or started.stdout.strip() or f"exit {started.returncode}").splitlines()[-1]
         raise RuntimeError(f"tmux could not start the {SESSION} session: {said}")

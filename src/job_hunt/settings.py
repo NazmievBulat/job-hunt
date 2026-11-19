@@ -9,6 +9,7 @@
      "working_hours": {"start": 9, "end": 17},
      "time_zone": "America/New_York",
      "linkedin_notes_daily": 15,
+     "captcha": "ask",
      "pushover": {"token": "...", "user": "..."},
      "companies": ["https://jobs.lever.co/example"],
      "keys": {"usajobs": {"email": "...", "key": "..."}, "adzuna": {"app_id": "...", "app_key": "..."},
@@ -22,7 +23,9 @@ out (18). `working_hours`, the hours a recruiter's call may be offered in, may b
 how many notes to hiring managers go out a day (`notes`), may be left out (15); 0 sends none,
 and more than 15 is refused, to keep the LinkedIn account safe. `pushover`, the keys `hunt
 notify` pushes the chat's questions
-with, may be left out; they are never printed.
+with, may be left out; they are never printed. `captcha`, what happens to an application still on
+a CAPTCHA after it was tried again on its own, may be left out (`ask`): `ask` asks the person
+when they are free, `skip` never asks and leaves it to apply by hand.
 
 `hunt find` reads the alert emails and also searches the sites itself: LinkedIn signed out, and
 the public job boards (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable) of every
@@ -49,7 +52,10 @@ from job_hunt.companies import board_of
 Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
-OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover", "linkedin_notes_daily", "companies", "keys")
+OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover", "linkedin_notes_daily", "companies",
+            "keys", "captcha")
+Captcha = Literal["ask", "skip"]
+CAPTCHA: tuple[Captcha, ...] = ("ask", "skip")
 # The feeds that need a key, and the fields of each one's key.
 FEED_KEYS = {"usajobs": ("email", "key"), "adzuna": ("app_id", "app_key"), "jooble": ("key",)}
 SUMMARY_HOUR = 18
@@ -80,6 +86,7 @@ class Settings:
     time_zone: str | None = None
     linkedin_notes_daily: int = NOTES_DAILY
     companies: list[str] = field(default_factory=list)
+    captcha: Captcha = "ask"
     # Each keyed feed's key, by the feed's name (`FEED_KEYS`).
     keys: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
@@ -200,6 +207,9 @@ def read_settings(path: Path) -> Settings:
         raise SettingsError(f"summary_hour ({summary_hour}) must be later than morning_hour ({morning_hour})")
     notes_daily = (_whole_number(data, "linkedin_notes_daily", 0, NOTES_DAILY) if "linkedin_notes_daily" in data
                    else NOTES_DAILY)
+    captcha = data.get("captcha", "ask")
+    if captcha not in CAPTCHA:
+        raise SettingsError(f"captcha must be one of {', '.join(CAPTCHA)}, not {captcha!r}")
     return Settings(
         titles=titles,
         areas=areas,
@@ -212,5 +222,6 @@ def read_settings(path: Path) -> Settings:
         time_zone=_time_zone(data),
         linkedin_notes_daily=notes_daily,
         companies=_companies(data),
+        captcha=captcha,
         keys=_keys(data),
     )

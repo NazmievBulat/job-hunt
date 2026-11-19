@@ -29,7 +29,9 @@ jobs in the same Chrome at the same time: work only in your own tab, the one you
 
 1. With `tab_id`, find the tab of that id among Chrome's tabs. When it shows this job's
    application (the company's site, this job's title), carry on there from where the form is
-   now; the question it paused on now has an answer in the career. Never use a tab by its
+   now; the question it paused on now has an answer in the career. When that tab still shows
+   the CAPTCHA or the sign-in it paused on, report the same pause again at once (see "Pause
+   instead"). Never use a tab by its
    title alone: another job's tab may have the same one. Without `tab_id`, or when that tab is
    gone or shows something else, open a new tab of your own and go to `link`. Find the way to apply (an
    "Apply" button, a link to the company's careers site) and follow it in that tab.

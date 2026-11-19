@@ -52,8 +52,11 @@ prints what the hunt still needs at any time.
   by an InMail credit and never as a connection request, at most 15 a day.
 - Your employers, job titles, dates, schools and certifications are printed from your own
   career file; the model writes only the summary, the skills and the bullets.
-- It never types a password and never solves a CAPTCHA. Sign in once in your browser, and it
-  uses that browser.
+- It never types a password and never solves a CAPTCHA, nor uses any service that does. Sign in
+  once in your browser, and it uses that browser. A CAPTCHA is first tried again on its own a
+  few hours later; one still there waits until you are free (at the computer, or just talking
+  to the chat), and every waiting CAPTCHA comes in one question. It never applies to one site
+  more than 6 times a day, or twice within 10 minutes.
 - Your career, jobs and resumes stay on your computer, in `data/` and `jobs/`.
 
 ## Run the tests

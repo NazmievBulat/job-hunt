@@ -199,6 +199,13 @@ def test_a_summary_hour_not_after_the_morning_hour_is_refused(tmp_path: Path, su
         read_settings(_write(tmp_path, {**GOOD, "summary_hour": summary_hour}))
 
 
+def test_captcha_is_ask_or_skip_and_ask_when_left_out(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).captcha == "ask"
+    assert read_settings(_write(tmp_path, {**GOOD, "captcha": "skip"})).captcha == "skip"
+    with pytest.raises(SettingsError, match="captcha must be one of ask, skip"):
+        read_settings(_write(tmp_path, {**GOOD, "captcha": "solve"}))
+
+
 def test_feed_keys_are_optional_and_never_printed(tmp_path: Path) -> None:
     assert read_settings(_write(tmp_path, GOOD)).keys == {}
     keys = {"usajobs": {"email": " ada@example.com ", "key": "uExampleKey"}, "jooble": {"key": "jExampleKey"}}

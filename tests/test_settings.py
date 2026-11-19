@@ -124,6 +124,24 @@ def test_hunt_settings_saves_settings_it_can_read_and_keeps_the_pushover_keys(
     assert "QA Engineer" in printed and "t0ken" not in printed
 
 
+def test_hunt_settings_keeps_the_working_hours_and_the_time_zone_it_was_not_given(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({
+        "titles": ["Old"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 6,
+        "working_hours": {"start": 10, "end": 16}, "time_zone": "Europe/Berlin"}))
+    given = {"titles": ["QA Engineer"], "areas": [], "remote": "include", "lowest_salary": None, "morning_hour": 7}
+
+    assert cli.main(["settings", json.dumps(given)]) == 0
+
+    saved = read_settings(tmp_path / "settings.json")
+    assert (saved.titles, saved.working_hours, saved.time_zone) == (["QA Engineer"], (10, 16), "Europe/Berlin")
+    assert cli.main(["settings", json.dumps({**given, "working_hours": {"start": 8, "end": 12}})]) == 0
+    assert read_settings(tmp_path / "settings.json").working_hours == (8, 12)
+
+
 def test_hunt_settings_keeps_the_companies_added_by_hand(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from job_hunt import cli

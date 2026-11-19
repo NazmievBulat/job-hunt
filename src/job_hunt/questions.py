@@ -12,8 +12,8 @@ The state is all in `data/`, so a fresh session knows everything by running it:
    set up, so it is done from the phone; without it, it waits until the person is at the
    computer;
 4. recruiter messages, each with its drafted reply (`replies`), for `hunt send-reply`,
-   `hunt edit-reply` and `hunt skip-reply`; one that asks to talk says so (offering times is a
-   later step);
+   `hunt edit-reply` and `hunt skip-reply`; one that asks to talk shows the times its reply
+   offers, the resume it goes out with on LinkedIn, and the time held in the calendar on yes;
 5. notes to hiring managers after LinkedIn applications (`notes`), one question for all of them,
    for `hunt send-notes` and `hunt skip-notes`.
 
@@ -140,7 +140,9 @@ DESCRIPTION_CHARACTERS = 600
 
 def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
     # Imported here: `replies` uses this module's `log_failure`.
-    from job_hunt.replies import posting_path, recover_sends
+    from job_hunt.replies import posting_path, recover_sends, resume_of
+    from job_hunt.settings import SettingsError, read_settings
+    from job_hunt.times import Talks, zone
 
     recover_sends(threads, data)
     waiting = threads.in_states("drafted", "unsure")
@@ -164,6 +166,17 @@ def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
             cut = text if len(text) <= DESCRIPTION_CHARACTERS else text[:DESCRIPTION_CHARACTERS].rstrip() + " …"
             lines += _indented(cut, f"Job description ({posting}): ")
         lines += _indented(thread.reply or "", "Reply: ")
+        if (talk := Talks(data / "jobs.db").of_reply(thread.id, thread.reply)) is not None and talk.state == "offered":
+            try:
+                where = zone(read_settings(data / "settings.json"))
+            except SettingsError:
+                where = talk.times()[0].tzinfo
+            times = [when.astimezone(where) for when in talk.times()]
+            offered = [when.strftime("%a %d %b %H:%M") for when in times]
+            lines.append(f"     Times offered: {', '.join(offered)} ({times[0].tzname()})")
+            if (resume := resume_of(thread, data.parent)) is not None:
+                lines.append(f"     Resume attached: {resume}")
+            lines.append(f'     On yes, "Held: {talk.title}" is added to Google Calendar at {offered[0]}')
         if thread.state == "unsure":
             lines.append(f"     Needs {thread.state_reason} (then: hunt skip-reply {thread.id} if it went, "
                          f"hunt send-reply {thread.id} to send it again)")
@@ -171,7 +184,7 @@ def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
             if thread.state_reason:
                 lines.append(f"     The last send did not go out: {thread.state_reason}")
             lines.append(f'     (then: hunt send-reply {thread.id}, hunt edit-reply {thread.id} "<the reply>", '
-                         f"hunt skip-reply {thread.id})")
+                         f"hunt offer-times {thread.id}, hunt skip-reply {thread.id})")
     return "\n".join(lines)
 
 

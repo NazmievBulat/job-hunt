@@ -36,8 +36,10 @@ each part as a message of its own, one at a time, and wait for the reply before 
    job description when there is one, then the drafted reply exactly as printed, and "Send?".
    "yes" runs `uv run hunt send-reply <n>`; a change runs `uv run hunt edit-reply <n> "<the
    whole new reply>"`, shows the new reply and asks "Send?" again; "skip" runs
-   `uv run hunt skip-reply <n>`. A message that asks to talk says so; offering times is not
-   built yet, so the reply only says times will follow. A reply that "needs a look whether it
+   `uv run hunt skip-reply <n>`. A message that asks to talk comes with the times its reply
+   offers, the resume it goes out with and the time held in Google Calendar on yes: show
+   them with the reply. "other times" runs `uv run hunt offer-times <n>` and shows the new
+   reply. After `hunt send-reply` says a time was held, say it in one line. A reply that "needs a look whether it
    was sent" asks the person to look in Gmail or LinkedIn: "it went" runs `hunt skip-reply`,
    "send it" runs `hunt send-reply`.
 6. **Notes to hiring managers.** One message for all of them: "N notes to hiring managers for

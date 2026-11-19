@@ -34,8 +34,8 @@ from job_hunt.notes import decide as decide_notes, draft_notes, note_pause, send
 from job_hunt.notify import NotifyError, notify, post_pushover
 from job_hunt.questions import job_line, log_failure, questions, then
 from job_hunt.replies import (
-    DRAFT_SKILL, READ_SKILL, SEND_SKILL, EmailMessages, ReplyError, Threads, draft_replies, edit_reply, read_linkedin,
-    send_reply, skip_reply,
+    DRAFT_SKILL, READ_SKILL, SEND_SKILL, EmailMessages, ReplyError, Threads, draft_replies, edit_reply, hold_times,
+    offer_times, read_linkedin, send_reply, skip_reply,
 )
 from job_hunt.resume import ContentError, write_pdf
 from job_hunt.scoring import SKILL as SCORE_SKILL, ScoreError, score
@@ -484,7 +484,9 @@ def run_check(command: list[str]) -> None:
 
 
 def run_draft(command: list[str]) -> None:
-    run_claude(command, ROOT, skill=DRAFT_SKILL, error=ReplyError)
+    # The drafting runs are draft-reply's, and offer-times' for a request to talk and its calendar.
+    skill = command[command.index("-p") + 1].split(" ", 1)[0].removeprefix("/") if "-p" in command else DRAFT_SKILL
+    run_claude(command, ROOT, skill=skill, error=ReplyError)
 
 
 def run_read(command: list[str]) -> None:
@@ -531,6 +533,8 @@ def _watch_linkedin() -> int | None:
 def _watch(args: argparse.Namespace) -> int:
     jobs, threads = JobsList(DATA / "jobs.db"), Threads(DATA / "jobs.db")
     try:
+        # An offer the person said yes to whose hold failed is tried again, also when nothing is new.
+        hold_times(threads, ROOT, run=run_draft)
         said = watch(threads, jobs, DATA, read_settings(DATA / "settings.json"), check=run_check,
                      read_linkedin=_watch_linkedin, draft=draft_step, tell=lambda told: tell_session(ROOT))
     except (SettingsError, ReplyError, RuntimeError, OSError, subprocess.SubprocessError) as error:
@@ -562,6 +566,8 @@ def _reply(args: argparse.Namespace) -> int:
     try:
         if args.command == "send-reply":
             thread = send_reply(threads, ROOT, args.thread, run=run_send, lock=LinkedInLock(DATA), sleep=time.sleep)
+        elif args.command == "offer-times":
+            thread = offer_times(threads, ROOT, args.thread, run=run_draft)
         elif args.command == "edit-reply":
             thread = edit_reply(threads, ROOT, args.thread, args.text)
         else:
@@ -570,7 +576,10 @@ def _reply(args: argparse.Namespace) -> int:
         print(f"hunt {args.command}: {error}", file=sys.stderr)
         return 1
     if thread.state == "sent":
-        print(f"sent the reply to {thread.sender}")
+        print(f"noted that the reply to {thread.sender} went" if args.command == "skip-reply"
+              else f"sent the reply to {thread.sender}")
+        for held in hold_times(threads, ROOT, run=run_draft):
+            print(f"held in Google Calendar: {held}")
     elif thread.state == "unsure":
         print(f"the reply to {thread.sender} may not have gone: needs {thread.state_reason}")
         return 1
@@ -646,9 +655,9 @@ def _settings(args: argparse.Namespace) -> int:
         given = json.loads(args.settings)
         if not isinstance(given, dict):
             raise SettingsError("give the settings as one JSON object")
-        for kept in ("pushover", "companies"):
+        for kept in ("pushover", "working_hours", "time_zone", "companies"):
             if kept not in given and path.exists():
-                # Keys given once stay, and so do the companies added by hand: the search is
+                # Keys given once stay, and so do the call hours and the companies added by hand: the search is
                 # changed without typing them again.
                 with contextlib.suppress(json.JSONDecodeError, AttributeError):
                     if (value := json.loads(path.read_text()).get(kept)) is not None:
@@ -834,11 +843,17 @@ def main(argv: list[str] | None = None) -> int:
         "LinkedIn message in Chrome under the LinkedIn lock (claude -p with the send-reply skill)")
     sending.add_argument("thread", type=int, help="the message's number, as hunt questions prints it")
     sending.set_defaults(run=_reply)
+    offering = commands.add_parser(
+        "offer-times", help="draft the reply again offering two or three free times of the next five working days "
+        "from Google Calendar (claude -p with the offer-times skill); on send-reply's yes the first is held there")
+    offering.add_argument("thread", type=int, help="the message's number, as hunt questions prints it")
+    offering.set_defaults(run=_reply)
     editing = commands.add_parser("edit-reply", help="change a drafted reply before it is sent")
     editing.add_argument("thread", type=int, help="the message's number, as hunt questions prints it")
     editing.add_argument("text")
     editing.set_defaults(run=_reply)
-    skipping = commands.add_parser("skip-reply", help="close a recruiter's message without a reply")
+    skipping = commands.add_parser("skip-reply", help="close a recruiter's message without a reply; for a reply "
+                                     "that may not have gone, note that the person saw it went")
     skipping.add_argument("thread", type=int, help="the message's number, as hunt questions prints it")
     skipping.set_defaults(run=_reply)
     args = parser.parse_args(argv)

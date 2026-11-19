@@ -38,7 +38,8 @@ it paused in is not held: it is the same application.
 With the day's plan (`plan`), the jobs start in its order, leftovers of an earlier day first,
 spread over the day, up to its daily numbers and not past the summary hour; the rest wait for
 the next morning. A job whose title was applied to at the same company lately is left out
-(skipped), whatever the plan. A job skipped while the run goes on is not started.
+(skipped), whatever the plan. A job skipped while the run goes on is not started; one picked
+or put back meanwhile is taken by the same run, its resume written first.
 """
 
 from __future__ import annotations
@@ -290,7 +291,9 @@ def apply(
         this = _Run(jobs, root, summary, captcha, jobs.now, plan)
         _left_applying(this)
         _resumes(jobs, root, run_resume, summary)
-        _applications(this, run_site, run_linkedin, linkedin or LinkedInLock(root / "data"), sleep)
+        # A run spread over the day takes the jobs picked meanwhile too, by a later morning run.
+        while _applications(this, run_site, run_linkedin, linkedin or LinkedInLock(root / "data"), sleep):
+            _resumes(jobs, root, run_resume, summary)
         return summary
 
 
@@ -483,14 +486,20 @@ def _next_site(this: _Run, waiting: list[int], spread: float | None = None) -> t
 
 
 def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock,
-                  sleep: Callable[[float], None]) -> None:
+                  sleep: Callable[[float], None]) -> bool:
+    """Apply to the jobs ready now and to those ready meanwhile. True when it stopped, with
+    nothing running, for jobs picked meanwhile, whose resumes are written first."""
     jobs, root = this.jobs, this.root
-    ready = order([job for job in jobs.in_states("resume_ready") if jobs.due(job)])
     waiting: dict[str, list[int]] = {SITE_SKILL: [], LINKEDIN_SKILL: []}
-    for job in ready:
-        if job.kind in ("easy_apply", "company_site"):
-            waiting[_skill(job)].append(job.id)
     running: dict[Future[Report], tuple[int, str]] = {}
+
+    def gather() -> None:
+        """The jobs ready and due that wait for no worker yet: at the start, and each turn the ones
+        a time came for or another command put back."""
+        known = {job for line in waiting.values() for job in line} | {job for job, _ in running.values()}
+        for job in order([job for job in jobs.in_states("resume_ready") if jobs.due(job) and job.id not in known]):
+            if job.kind in ("easy_apply", "company_site"):
+                waiting[_skill(job)].append(job.id)
 
     def start(job: int, run: Run) -> None:
         skill = _skill(jobs.get(job))
@@ -507,7 +516,9 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
     try:
         workers = this.plan.site_workers if this.plan is not None else SITE_WORKERS
         with ThreadPoolExecutor(max_workers=workers + 1) as pool:
+            gather()
             while any(waiting.values()) or running:
+                gather()
                 sites = sum(skill == SITE_SKILL for _, skill in running.values())
                 site_later = None
                 while waiting[SITE_SKILL] and sites < workers:
@@ -535,6 +546,8 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
                     break
                 later = min((each for each in (later, site_later) if each is not None), default=None)
                 if not running:
+                    if jobs.in_states("picked"):
+                        return True
                     if later is not None:
                         sleep(later)
                     continue
@@ -549,6 +562,7 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         # A run stopped while the LinkedIn worker applied still starts the pause, once the
         # worker ended.
         linkedin.release()
+    return False
 
 
 def skip_captchas(jobs: JobsList) -> list[Job]:

@@ -243,6 +243,26 @@ def test_the_starts_are_spread_over_what_is_left_of_the_day(jobs: JobsList, proj
     assert jobs.get(picked[2]).not_before == (MORNING + timedelta(days=1)).isoformat()
 
 
+def test_a_job_picked_while_the_run_waits_gets_its_resume_and_is_applied_in_the_same_run(
+        jobs: JobsList, project: Path) -> None:
+    first, second = _picked(jobs, 1), _picked(jobs, 2)
+    sites = Sites(project)
+    later = _scored(jobs, 3, 9)
+
+    def run(command: list[str]) -> None:
+        sites(command)
+        if _job_of(command, SITE_SKILL) == first:
+            # The noon morning run picks it by its score, with its own connection.
+            JobsList(project / "data" / "jobs.db").move(later, "picked")
+
+    resumes = Resumes(project)
+    _apply(jobs, project, Plan(), site=run, resumes=resumes)
+    # Picked today with a better score, it goes before the one waiting.
+    assert sites.ran == [first, later, second]
+    assert resumes.ran == [first, second, later]
+    assert jobs.get(later).state == "applied"
+
+
 def test_the_spread_is_at_most_fifteen_minutes() -> None:
     plan = Plan(summary_hour=18)
     assert MOST_GAP == timedelta(minutes=15)

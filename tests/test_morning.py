@@ -154,7 +154,7 @@ def test_the_session_ends_yesterdays_and_starts_one_with_remote_control(tmp_path
 
     start_session(tmp_path, run=tmux, sleep=lambda seconds: None)
 
-    assert tmux.commands[0] == ["tmux", "kill-session", "-t", SESSION]
+    assert tmux.commands[0] == ["tmux", "kill-session", "-t", f"={SESSION}"]
     started = [command for command in tmux.commands if command[1] == "new-session"]
     assert len(started) == 1
     command = started[0]
@@ -167,6 +167,16 @@ def test_the_session_ends_yesterdays_and_starts_one_with_remote_control(tmp_path
     assert "hunt questions" in FIRST_MESSAGE
     assert (tmp_path / "data" / "session.json").read_text() == (
         '{"link": "https://claude.ai/code/session_01Example"}\n')
+
+
+def test_only_the_session_of_that_exact_name_is_ended_or_read(tmp_path: Path) -> None:
+    tmux = Tmux("https://claude.ai/code/session_01Example")
+
+    start_session(tmp_path, run=tmux, sleep=lambda seconds: None)
+
+    # A bare name is a prefix to tmux: it would end or read a `job-hunt-notes` session.
+    targets = [command[command.index("-t") + 1] for command in tmux.commands if "-t" in command]
+    assert targets and all(target.startswith(f"={SESSION}") for target in targets)
 
 
 def test_a_session_whose_link_never_shows_keeps_no_old_link(tmp_path: Path) -> None:

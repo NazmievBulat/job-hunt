@@ -168,6 +168,13 @@ def test_paths_with_spaces_and_percent_signs_are_quoted(tmp_path: Path) -> None:
     assert 'Environment="PATH=/opt/my tools:/usr/bin"' in service
 
 
+def test_a_dollar_sign_in_a_path_is_not_read_as_a_variable(tmp_path: Path) -> None:
+    root = tmp_path / "jobs-${ARCH}"
+    service, _ = systemd_units(root, 7, "/opt/$tools/uv", "/usr/bin")
+
+    assert f'ExecStart="/opt/$$tools/uv" run --project "{str(root).replace("$", "$$")}" hunt morning' in service
+
+
 class Refusing(Runner):
     """A scheduler that refuses to stop the timer."""
 

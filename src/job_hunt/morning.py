@@ -31,6 +31,9 @@ from job_hunt.settings import SettingsError
 __all__ = ["FIRST_MESSAGE", "SESSION", "log_failure", "morning", "start_session"]
 
 SESSION = "job-hunt"
+# tmux takes a target that is not exact as the start of a name: `job-hunt` alone would end a
+# `job-hunt-notes` session when no `job-hunt` runs.
+TARGET = f"={SESSION}"
 FIRST_MESSAGE = (
     "Good morning. Run `uv run hunt questions` and ask what it prints, one question at a time, "
     "as CLAUDE.md says."
@@ -101,7 +104,7 @@ def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None]
     with (jobs / "apply.lock").open("w") as lock:
         # Waits for a running hunt apply; its workers have their own time limits.
         fcntl.flock(lock, fcntl.LOCK_EX)
-        run(["tmux", "kill-session", "-t", SESSION])
+        run(["tmux", "kill-session", "-t", TARGET])
         (data / "session.json").unlink(missing_ok=True)
         started = run(session_command(root))
     if started.returncode != 0:
@@ -109,7 +112,7 @@ def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None]
         raise RuntimeError(f"tmux could not start the {SESSION} session: {said}")
     for _ in range(LINK_SECONDS):
         sleep(1)
-        pane = run(["tmux", "capture-pane", "-p", "-J", "-t", SESSION])
+        pane = run(["tmux", "capture-pane", "-p", "-J", "-t", f"{TARGET}:"])
         if pane.returncode != 0:
             # Its only window closed: claude stopped, or was not found on the PATH.
             raise RuntimeError(f"the {SESSION} session ended as it started: is claude on the timer's PATH?")

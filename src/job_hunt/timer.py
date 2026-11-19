@@ -37,6 +37,11 @@ def _quoted(value: object) -> str:
     return '"' + _literal(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _word(value: object) -> str:
+    """One word of `ExecStart`, which also reads `$` as the start of a variable."""
+    return _quoted(value).replace("$", "$$")
+
+
 def systemd_units(root: Path, hour: int, uv: str, path: str) -> tuple[str, str]:
     service = f"""[Unit]
 Description=The job hunt's morning run
@@ -45,7 +50,7 @@ Description=The job hunt's morning run
 Type=oneshot
 WorkingDirectory={_literal(root)}
 Environment={_quoted(f"PATH={path}")}
-ExecStart={_quoted(uv)} run --project {_quoted(root)} hunt morning
+ExecStart={_word(uv)} run --project {_word(root)} hunt morning
 KillMode=process
 """
     timer = f"""[Unit]

@@ -4,7 +4,8 @@ A job is the same job when its link is, once the tracking parts are removed (`cl
 an alert that sends a job again never lists it twice. The address its page ended at, after the
 redirects of a click-tracking link, is its second link (`page_link`) and counts the same when
 the title and company are the same too. A job moves through the day's states only
-along `MOVES`; a pause or a failure carries its reason.
+along `MOVES`; a pause or a failure carries its reason. A worker that fails counts against its
+job (`fail`): the first time the job is tried again, the second time it is `failed`.
 
 The list the user picks from is numbered when it is shown (`show`), and the numbers are kept
 in the file, so "pick 2" names the second job of the last list shown, also after more jobs
@@ -32,12 +33,17 @@ MOVES: dict[State, tuple[State, ...]] = {
     "skipped": ("picked",),
     "picked": ("resume_ready", "failed"),
     "resume_ready": ("applying", "failed"),
-    "applying": ("applied", "paused", "failed"),
-    "paused": ("applying", "failed"),
+    # Back to resume_ready: a site worker failed for the first time, and is tried again.
+    "applying": ("applied", "paused", "failed", "resume_ready"),
+    # Back to resume_ready: the user answered the question or did what the site needed. To
+    # applied: the user saw in Chrome that the application was sent.
+    "paused": ("applying", "failed", "resume_ready", "applied"),
     "applied": (),
     "failed": (),
 }
 WITH_REASON: tuple[State, ...] = ("paused", "failed")
+# A job whose workers failed this many times is `failed`.
+TRIES = 2
 KINDS = ("easy_apply", "company_site")
 Remote = Literal["remote", "hybrid", "on_site"]
 
@@ -93,6 +99,7 @@ class Job:
     decision: str | None
     state: State
     state_reason: str | None
+    failures: int
     found_at: str
     updated_at: str
 
@@ -119,6 +126,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     state TEXT NOT NULL CHECK (state IN ('new', 'scored', 'picked', 'skipped', 'resume_ready',
         'applying', 'paused', 'applied', 'failed')),
     state_reason TEXT,
+    failures INTEGER NOT NULL DEFAULT 0,
     found_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -174,6 +182,10 @@ class JobsList:
         if new:
             path.chmod(0o600)
         self._db.executescript(SCHEMA)
+        # A file made before failures were counted gains the count.
+        if "failures" not in {row["name"] for row in self._db.execute("PRAGMA table_info(jobs)")}:
+            with self._db:
+                self._db.execute("ALTER TABLE jobs ADD COLUMN failures INTEGER NOT NULL DEFAULT 0")
 
     def _stamp(self) -> str:
         return self._clock().isoformat()
@@ -252,6 +264,27 @@ class JobsList:
             f"UPDATE jobs SET state = ?, state_reason = ?, updated_at = ?{decision} WHERE id = ?",
             (state, reason, self._stamp(), *((state,) if decision else ()), job),
         )
+
+    def fail(self, job: int, reason: str) -> State:
+        """Count a worker's failure against the job and return its state now: `failed` with the
+        reason once it has failed `TRIES` times, otherwise where it is tried again from."""
+        with self._db:
+            failures = self.get(job).failures + 1
+            self._db.execute("UPDATE jobs SET failures = ? WHERE id = ?", (failures, job))
+            start = self.get(job).state
+            if failures >= TRIES:
+                self._move(job, "failed", reason)
+            elif start == "applying":
+                self._move(job, "resume_ready", None)
+            elif start != "picked":
+                raise MoveError(f"job {job} is {start}: no worker of it can fail")
+        return self.get(job).state
+
+    def in_states(self, *states: State) -> list[Job]:
+        """The jobs in these states, in the order found."""
+        marks = ", ".join("?" * len(states))
+        rows = self._db.execute(f"SELECT id FROM jobs WHERE state IN ({marks}) ORDER BY id", states)
+        return [self.get(row["id"]) for row in rows]
 
     def waiting(self) -> list[Job]:
         """The scored jobs not yet decided, best first; equal scores in the order found."""

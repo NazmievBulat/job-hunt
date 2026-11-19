@@ -9,7 +9,9 @@ employer, title and location. The bullets of all of them are kept as material to
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -117,8 +119,16 @@ def career_from_export(export: dict[str, Any]) -> Career:
 
 
 def write_career(career: Career, path: Path) -> None:
-    path.write_text(json.dumps(asdict(career), indent=2, ensure_ascii=False) + "\n")
-    path.chmod(0o600)
+    """Replace the file whole, so a reader meanwhile sees the old career or the new one, never
+    half of one. The temporary file is made mode 600, as the career is."""
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(descriptor, "w") as out:
+            out.write(json.dumps(asdict(career), indent=2, ensure_ascii=False) + "\n")
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def read_career(path: Path) -> Career:

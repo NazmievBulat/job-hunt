@@ -911,7 +911,9 @@ def test_a_newer_message_read_while_a_pick_is_confirmed_is_told(
 
 def test_every_calendar_run_may_use_only_the_tools_its_command_names(tmp_path: Path) -> None:
     out = tmp_path / "offer.json"
-    offer = offer_command({"out": str(out)}, [(_at(19, 9), _at(19, 17))], NEW_YORK, [], ())
+    drafted = {"out": str(out), "career": str(tmp_path / "career.json"), "message": str(tmp_path / "message.md"),
+               "posting": str(tmp_path / "posting.md")}
+    offer = offer_command(drafted, [(_at(19, 9), _at(19, 17))], NEW_YORK, [], ())
     talk = Talk(thread=1, source="email", conversation="t1", title="Example Labs, QA Engineer", offered="[]",
                 reply="Glad to talk", state="holding", state_reason=None, event_id="e1", start=None, failures=0,
                 updated_at=MORNING.isoformat())

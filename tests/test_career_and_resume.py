@@ -7,7 +7,8 @@ from pypdf import PdfReader
 from io import BytesIO
 
 from resume_kit.documents.pdf import render_pdf
-from job_hunt.career import career_from_export
+from job_hunt import cli
+from job_hunt.career import career_from_export, write_career
 from job_hunt.resume import ContentError, build_resume
 
 EXPORT = {
@@ -110,3 +111,22 @@ def test_a_resume_pdf_is_replaced_whole_or_not_at_all(tmp_path, monkeypatch: pyt
     assert sorted(path.name for path in tmp_path.iterdir()) == ["resume-content.json", "resume.pdf"]
     resume.write_pdf(None, tmp_path / "resume-content.json", pdf)
     assert pdf.read_bytes() == b"%PDF new"
+
+
+def test_hunt_resume_builds_in_an_absolute_folder_from_another_working_folder(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The resume worker runs it from the empty run folder, with the job folder's absolute path.
+    import json
+
+    write_career(career_from_export(EXPORT), tmp_path / "career.json")
+    monkeypatch.setattr(cli, "CAREER", tmp_path / "career.json")
+    folder = tmp_path / "My Projects" / "jobs" / "4"
+    folder.mkdir(parents=True)
+    (folder / "resume-content.json").write_text(json.dumps(CONTENT))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert cli.main(["resume", str(folder)]) == 0
+    assert (folder / "resume.pdf").read_bytes().startswith(b"%PDF")
+    assert list(elsewhere.iterdir()) == []

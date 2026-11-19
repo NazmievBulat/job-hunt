@@ -22,8 +22,10 @@ without them.
   tools and permission mode stay out of it, and runs in `dontAsk`, which refuses every tool the
   command does not name. WebFetch, WebSearch and subagents are taken away outright, since
   `dontAsk` would still let WebFetch reach Claude Code's preapproved documentation sites. Claude
-  Code still lets it read files in the project folder without a rule, by Read or a read-only
-  shell command.
+  Code lets a run read its working folder without a rule, by Read or a read-only shell command,
+  so every run starts in `.background/`, an empty folder of the project, with absolute paths in
+  its arguments and rules: it reads only the files its rules name. Claude Code still finds the
+  skills, and `uv run` the project, in the folders above.
 - No app and no web screens. The chat session is the interface; `/setup` is the way in.
 - Choosing a job approves its resume. Nothing reviews or tests the model's writing. A bad
   resume is one lost application.

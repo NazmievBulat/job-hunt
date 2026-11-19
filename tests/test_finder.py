@@ -201,18 +201,19 @@ def test_a_sign_in_page_is_a_page_that_cannot_be_read(form: str) -> None:
 
 def test_the_skill_runs_on_haiku_with_only_gmails_read_tools_and_its_one_file(tmp_path: Path) -> None:
     since = datetime(2026, 11, 4, 7, 0, tzinfo=UTC)
-    command = skill_command(since, ["Raleigh-Durham-Chapel Hill"], Path("data/found-jobs.json"))
+    out = tmp_path / "data" / "found-jobs.json"
+    command = skill_command(since, ["Raleigh-Durham-Chapel Hill"], out)
     assert command[:3] == ["claude", "-p", command[2]]
     assert command[2].startswith("/read-job-alerts ")
     assert json.loads(command[2].removeprefix("/read-job-alerts ")) == {
         "after": int(since.timestamp()),
         "since": "2026-11-04T07:00:00+00:00",
         "areas": ["Raleigh-Durham-Chapel Hill"],
-        "out": "data/found-jobs.json",
+        "out": str(out),
     }
     assert command[command.index("--model") + 1] == "claude-haiku-5-5"
     allowed = command[command.index("--allowedTools") + 1].split(",")
-    assert allowed == [*GMAIL_READ_TOOLS, "Edit(./data/found-jobs.json)"]
+    assert allowed == [*GMAIL_READ_TOOLS, f"Edit(/{out})"]
     assert_only_named_tools(command)
     assert all(tool.startswith("mcp__claude_ai_Gmail__") for tool in GMAIL_READ_TOOLS)
     assert not any(word in tool for tool in GMAIL_READ_TOOLS for word in ("send", "draft", "label", "trash", "spam", "forward", "reply"))
@@ -455,14 +456,14 @@ def fake_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return project
 
 
-def test_hunt_find_starts_claude_on_haiku_in_the_project_with_only_gmail_reads_and_its_file(
+def test_hunt_find_starts_claude_on_haiku_in_the_run_folder_with_only_gmail_reads_and_its_file(
     fake_claude: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert cli.main(["find"]) == 0
     assert capsys.readouterr().out == "alert: 4 emails, 8 jobs, 4 new\n"
     started = json.loads((tmp_path / "claude.json").read_text())
     argv = started["argv"]
-    assert Path(started["cwd"]) == fake_claude
+    assert Path(started["cwd"]) == fake_claude / ".background"
     assert argv[0] == "-p" and argv[1].startswith("/read-job-alerts {")
     assert argv[argv.index("--model") + 1] == "claude-haiku-5-5"
     found = fake_claude / "data" / "found-jobs.json"
@@ -605,3 +606,13 @@ def test_hunt_find_saves_one_job_for_two_links_to_one_page_and_a_job_whose_page_
     assert (sdet.page_problem, sdet.kind) == ("ValueError: a bug in reading pages", None)
     posting = (fake_claude / "jobs" / str(sdet.id) / "posting.md").read_text()
     assert "could not be read (ValueError: a bug in reading pages)" in posting
+
+
+def test_hunt_find_starts_no_run_while_the_run_folder_holds_a_file(
+    fake_claude: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (fake_claude / ".background").mkdir()
+    (fake_claude / ".background" / "career.json").write_text("{}")
+    assert cli.main(["find"]) == 1
+    assert "holds career.json, and it must be empty" in capsys.readouterr().err
+    assert not (tmp_path / "claude.json").exists()

@@ -46,14 +46,16 @@ def _paths(root: Path) -> tuple[Path, Path, Path]:
 
 
 def skill_command(jobs: list[dict[str, Any]], root: Path) -> list[str]:
-    folders, career, out = _paths(root)
+    _, career, out = _paths(root)
     arguments = {"jobs": jobs, "career": str(career), "out": str(out)}
     # A permission rule's path: `//` starts an absolute one. Edit rules cover every tool that
-    # writes a file, the Write tool among them.
+    # writes a file, the Write tool among them. The postings sent, not every job folder: those
+    # hold the other jobs' reports and the recruiters' messages too.
+    postings = [f"Read(/{job['posting']})" for job in jobs]
     return [
         "claude", "-p", f"/{SKILL} {json.dumps(arguments, ensure_ascii=False)}",
         "--model", MODEL, *ONLY_NAMED_TOOLS,
-        "--allowedTools", ",".join([f"Read(/{folders}/**)", f"Read(/{career})", f"Edit(/{out})"]),
+        "--allowedTools", ",".join([*postings, f"Read(/{career})", f"Edit(/{out})"]),
     ]
 
 

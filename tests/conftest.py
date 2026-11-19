@@ -1,4 +1,4 @@
-import sys, pathlib
+import os, stat, sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 
@@ -38,3 +38,25 @@ def told(monkeypatch: pytest.MonkeyPatch) -> Told:
     stand_in = Told()
     monkeypatch.setattr(cli, "tell_session", stand_in)
     return stand_in
+
+
+REFUSED_CLAUDE = """#!/bin/sh
+echo "$@" >> "$NO_REAL_CLAUDE_LOG"
+echo "a test started claude without a fake of its own" >&2
+exit 97
+"""
+
+
+@pytest.fixture(autouse=True)
+def _no_real_claude(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
+    """No test starts the real `claude`: one could drive the person's Chrome or mailbox. A test's
+    own fake goes first on the PATH; anything that reaches this one fails the test."""
+    folder = tmp_path_factory.mktemp("no-real-claude")
+    claude = folder / "claude"
+    claude.write_text(REFUSED_CLAUDE)
+    claude.chmod(claude.stat().st_mode | stat.S_IXUSR)
+    log = folder / "started.log"
+    monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("NO_REAL_CLAUDE_LOG", str(log))
+    yield
+    assert not log.exists(), f"a test started claude: {log.read_text()}"

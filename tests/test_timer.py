@@ -260,3 +260,15 @@ def test_an_agent_written_before_the_later_runs_still_says_its_hour(tmp_path: Pa
     said = timer("status", "Darwin", home, root, 7, run=Runner(), uv="uv", path="/usr/bin", uid=501)
 
     assert "06:00" in said and "hunt timer on" in said
+
+
+def test_a_timer_written_before_the_later_runs_says_they_are_missing(tmp_path: Path) -> None:
+    home, root = tmp_path / "home", tmp_path / "project"
+    units = home / ".config" / "systemd" / "user"
+    units.mkdir(parents=True)
+    (units / f"{UNIT}.timer").write_text("[Timer]\nOnCalendar=*-*-* 07:00:00\nPersistent=true\n")
+
+    said = timer("status", "Linux", home, root, 7, run=Runner("active\n"), uv="uv", path="/usr/bin")
+
+    assert said.startswith("the morning run is on, every day at 07:00;") and "hunt timer on" in said
+    assert "12:00" in said

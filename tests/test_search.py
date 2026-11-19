@@ -128,7 +128,7 @@ def test_linkedin_searches_remote_only_when_the_settings_want_it(
     linkedin_search(replace(settings, remote=remote), clock.now - timedelta(days=1), clock.now, sites, _no_pause())
     asked = [parse_qs(urlsplit(url).query) for url in sites.urls(LINKEDIN)]
     assert len(asked) == searches
-    assert all(("f_WT" in each) == (remote == "only") for each in asked)
+    assert all(each["f_WT"] == (["2"] if remote == "only" else ["1,3"]) for each in asked)
 
 
 def test_linkedin_reads_the_next_page_until_the_limit(settings: Settings, clock: MovableClock) -> None:
@@ -696,3 +696,154 @@ def test_hunt_help_describes_the_new_sources(capsys: pytest.CaptureFixture[str],
         cli.main(["find", "--help"])
     find_help = capsys.readouterr().out
     assert "LinkedIn" in find_help and "Greenhouse" in find_help and "Workable" in find_help
+
+
+# What the first review found
+
+
+def test_a_job_that_closed_before_its_details_were_read_is_skipped_not_the_board(
+    settings: Settings, clock: MovableClock
+) -> None:
+    api = "https://umbrella.wd5.myworkdayjobs.com/wday/cxs/umbrella/Careers"
+    sites = Sites({f"{api}/jobs": _ok("workday-list.json"), f"{api}/job/": Answer(404, "")})
+    read = read_board(Board("workday", "umbrella/wd5/Careers"), settings, sites, _known(), now=clock.now)
+    assert read.jobs == []
+    api = "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings"
+    sites = Sites({f"{api}/744000000000001": Answer(404, ""), api: _ok("smartrecruiters-list.json")})
+    assert read_board(Board("smartrecruiters", "ExampleCorp"), settings, sites, _known()).jobs == []
+
+
+def test_workday_pages_on_with_the_total_its_first_page_gave(settings: Settings, clock: MovableClock) -> None:
+    # Workday says the total on the first page only, and 0 on the later ones.
+    page = json.loads(_saved("workday-list.json"))
+    first = {**page, "total": 85, "jobPostings": [page["jobPostings"][1]] * 20}
+    later = {**page, "total": 0, "jobPostings": [page["jobPostings"][1]] * 20}
+    api = "https://umbrella.wd5.myworkdayjobs.com/wday/cxs/umbrella/Careers"
+    sites = Sites({f"{api}/jobs": [Answer(200, json.dumps(first))] + [Answer(200, json.dumps(later))] * 4})
+    one = replace(settings, titles=["QA Automation Engineer"])
+    read_board(Board("workday", "umbrella/wd5/Careers"), one, sites, _known(), now=clock.now)
+    assert [body["offset"] for _, body in sites.asked] == [0, 20, 40, 60, 80]  # type: ignore[index]
+
+
+def test_an_http_error_of_the_standard_library_is_a_search_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import http.client
+
+    from job_hunt import search
+
+    def cut_short(request: object, timeout: float) -> object:
+        raise http.client.IncompleteRead(b"half")
+
+    monkeypatch.setattr(search, "urlopen", cut_short)
+    with pytest.raises(SearchError, match="IncompleteRead"):
+        search.http_get("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search")
+
+
+def test_a_search_that_breaks_is_named_and_the_alerts_still_get_their_postings(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    def broken(url: str, body: object = None) -> Answer:
+        raise RuntimeError("a bug in a reader")
+
+    summary, jobs, _ = _run(tmp_path, settings, clock, broken)  # type: ignore[arg-type]
+    assert summary.failed == ["search: RuntimeError: a bug in a reader"]
+    alerts = [job for job in jobs.all() if job.source == "alert"]
+    assert len(alerts) == 4 and all((tmp_path / "jobs" / str(job.id) / "posting.md").exists() for job in alerts)
+
+
+def test_hunt_find_with_a_failing_source_says_it_and_exits_1_and_the_morning_logs_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    shutil.copy(FINDER / "settings.json", data / "settings.json")
+    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    monkeypatch.setattr(cli, "DATA", data)
+    monkeypatch.setattr(cli, "run_skill", Skill(data / "found-jobs.json"))
+    monkeypatch.setattr(cli, "fetch_page", _fetch)
+
+    runs: list[int] = []
+
+    def search() -> Search:
+        # A fresh index each run, so the morning's run is the day's first sweep too.
+        runs.append(len(runs))
+        companies = Companies(data / f"companies-{len(runs)}.db")
+        companies.indexed()
+        companies.add([Board("ashby", "initech")])
+        return Search(get=_board_sites(), pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+
+    monkeypatch.setattr(cli, "site_search", search)
+    assert cli.main(["find"]) == 1
+    printed = capsys.readouterr()
+    assert printed.out.splitlines()[0] == "alert: 4 emails, 8 jobs, 4 new" and len(printed.out.splitlines()) == 8
+    assert printed.err == "hunt find: ashby: no board answered (initech: HTTP 500)\n"
+
+    monkeypatch.setattr(cli, "score_step", lambda: None)
+    monkeypatch.setattr(cli, "start_session", lambda root: None)
+    assert cli.main(["morning"]) == 0
+    assert "hunt find: ashby: no board answered (initech: HTTP 500)" in (data / "morning.log").read_text()
+
+
+def test_the_site_search_keeps_its_index_in_the_data_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The real one, which the tests otherwise replace.
+    monkeypatch.undo()
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    search = cli.site_search()
+    assert search is not None and search.get is cli.http_get and (tmp_path / "companies.db").exists()
+
+
+def test_after_linkedin_said_stop_no_linkedin_page_is_read_and_its_jobs_are_still_saved(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    read: list[str] = []
+
+    def fetch(link: str) -> tuple[str, str]:
+        read.append(link)
+        return _fetch(link)
+
+    sites = _board_sites()
+    sites.answers = {start: answer for start, answer in sites.answers.items() if "linkedin" not in start}
+    sites.answers[LINKEDIN] = [Answer(200, _saved("linkedin-short-page.html")), Answer(429, "")]
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    found = tmp_path / "found-jobs.json"
+    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock, search=search)
+    searched = [job for job in jobs.all() if job.source == "linkedin_search"]
+    assert len(searched) == 3 and not any("41000001" in link for link in read)
+    assert {(job.kind, job.page_problem) for job in searched} == {
+        (None, "not read: LinkedIn answered 429, so it is not searched again this run")}
+
+
+def test_a_linkedin_page_that_answers_429_ends_the_reading_of_linkedin_pages(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    from job_hunt.finder import PageError
+
+    read: list[str] = []
+
+    def fetch(link: str) -> tuple[str, str]:
+        read.append(link)
+        if "linkedin.com" in link:
+            raise PageError("HTTP 429")
+        return _fetch(link)
+
+    sites = Sites({f"{LINKEDIN}?keywords=QA+Automation+Engineer&location=Raleigh": _ok("linkedin-short-page.html"),
+                   LINKEDIN: Answer(200, "")})
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    found = tmp_path / "found-jobs.json"
+    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock, search=search)
+    # The alerts' first LinkedIn page answered 429: no other LinkedIn page or search is asked for.
+    assert len([link for link in read if "linkedin.com" in link]) == 1 and sites.urls(LINKEDIN) == []
+    assert len([job for job in jobs.all() if "linkedin.com" in job.link]) == 2
+
+
+def test_with_remote_excluded_the_area_searches_ask_for_on_site_and_hybrid_jobs(
+    settings: Settings, clock: MovableClock
+) -> None:
+    sites = _linkedin_sites([""])
+    linkedin_search(replace(settings, remote="exclude"), clock.now - timedelta(days=1), clock.now, sites, _no_pause())
+    assert {parse_qs(urlsplit(url).query)["f_WT"][0] for url in sites.urls(LINKEDIN)} == {"1,3"}

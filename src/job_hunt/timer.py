@@ -50,9 +50,9 @@ def hours(morning: int) -> list[int]:
     return [morning, *(hour for hour in LATER if hour > morning)]
 
 
-def _said(hour: int) -> str:
-    later = [f"{each:02d}:00" for each in hours(hour)[1:]]
-    return f"every day at {hour:02d}:00" + (f", then at {' and '.join(later)}" if later else "")
+def _said(runs: list[int]) -> str:
+    later = [f"{each:02d}:00" for each in runs[1:]]
+    return f"every day at {runs[0]:02d}:00" + (f", then at {' and '.join(later)}" if later else "")
 
 
 def systemd_units(root: Path, hour: int, uv: str, path: str) -> tuple[str, str]:
@@ -67,7 +67,7 @@ ExecStart={_word(uv)} run --project {_word(root)} hunt morning
 KillMode=process
 """
     timer = f"""[Unit]
-Description=The job hunt's runs, {_said(hour)}
+Description=The job hunt's runs, {_said(hours(hour))}
 
 [Timer]
 {"".join(f"OnCalendar=*-*-* {each:02d}:00:00{chr(10)}" for each in hours(hour))}Persistent=true
@@ -107,18 +107,18 @@ def _must(run: Run, command: list[str]) -> None:
         raise TimerError(f"{' '.join(command)} failed: {said}")
 
 
-def _written_hour(system: str, home: Path) -> int | None:
+def _written_hours(system: str, home: Path) -> list[int] | None:
+    """The hours of the runs written, the morning's first; None when no timer is written."""
     if system == "Linux":
         timer = _units(home) / f"{UNIT}.timer"
-        # The first run is the morning's.
-        found = re.search(r"^OnCalendar=\*-\*-\* (\d\d):", timer.read_text(), re.M) if timer.exists() else None
-        return int(found.group(1)) if found else None
+        found = re.findall(r"^OnCalendar=\*-\*-\* (\d\d):", timer.read_text(), re.M) if timer.exists() else []
+        return [int(hour) for hour in found] or None
     agent = _agent(home)
     if not agent.exists():
         return None
     runs = plistlib.loads(agent.read_bytes())["StartCalendarInterval"]
     # An agent written before the later runs has one run, not a list of them.
-    return (runs[0] if isinstance(runs, list) else runs)["Hour"]
+    return [run["Hour"] for run in (runs if isinstance(runs, list) else [runs])] or None
 
 
 def timer(
@@ -157,11 +157,11 @@ def timer(
             _must(run, ["launchctl", "bootstrap", f"gui/{uid}", str(agent)])
         else:
             agent.unlink(missing_ok=True)
-    return f"the morning run is on, {_said(hour)}" if action == "on" else "the morning run is off"
+    return f"the morning run is on, {_said(hours(hour))}" if action == "on" else "the morning run is off"
 
 
 def _status(system: str, home: Path, hour: int, run: Run, uid: int) -> str:
-    written = _written_hour(system, home)
+    written = _written_hours(system, home)
     if written is None:
         return "the morning run is off (hunt timer on turns it on)"
     if system == "Linux":
@@ -169,6 +169,7 @@ def _status(system: str, home: Path, hour: int, run: Run, uid: int) -> str:
     else:
         active = run(["launchctl", "print", f"gui/{uid}/{LABEL}"]).returncode == 0
     said = f"the morning run is {'on' if active else 'written but not running'}, {_said(written)}"
-    if written != hour or not active:
-        said += f"; hunt timer on sets it to the settings' {hour:02d}:00 and turns it on"
+    # A timer written before the later runs, or at another hour, is written again.
+    if written != hours(hour) or not active:
+        said += f"; hunt timer on sets it to {_said(hours(hour))} and turns it on"
     return said

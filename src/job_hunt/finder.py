@@ -370,10 +370,16 @@ def _find(
         if description is not None:
             return jobs.add(each, description=description, kind="company_site") is not None
         link = clean_link(each.link)
-        if search is not None and urlsplit(link).netloc.endswith("linkedin.com"):
+        linkedin = search is not None and urlsplit(link).netloc.endswith("linkedin.com")
+        if linkedin and search.pace.stopped:
+            # LinkedIn said stop: the job is saved without its page, as one whose page failed.
+            return jobs.add(each, problem=f"not read: {search.pace.stopped}") is not None
+        if linkedin:
             # LinkedIn's pages count as its requests, paced as its searches are.
             search.pace.wait()
         ended_at, text, kind, problem = _read_page(link, fetch)
+        if linkedin and problem in ("HTTP 429", "HTTP 999"):
+            search.pace.stop(problem.removeprefix("HTTP "))
         met.extend(page for page in (link, ended_at) if page)
         return jobs.add(each, page_link=ended_at, description=text, kind=kind, problem=problem) is not None
 
@@ -387,7 +393,11 @@ def _find(
     except FinderError as error:
         summary.failed.append(f"alert: {error}")
     if search is not None:
-        lines, failed = search.run(settings, jobs, started, save, met)
+        try:
+            lines, failed = search.run(settings, jobs, started, save, met)
+        except Exception as error:
+            # Whatever broke in the searches, the alerts' jobs still get their postings.
+            lines, failed = [], [f"search: {type(error).__name__}: {error}"]
         summary.lines += lines
         summary.failed += failed
     # Every new job has its posting, also one whose run stopped after saving it.

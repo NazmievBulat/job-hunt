@@ -16,6 +16,7 @@ area's search that the table cannot place keeps that area: LinkedIn put it there
 from __future__ import annotations
 
 import html
+import http.client
 import json
 import random
 import re
@@ -88,15 +89,23 @@ def http_get(url: str, body: Any = None) -> Answer:
         raise SearchError(f"no answer in {REQUEST_SECONDS} seconds") from error
     except (URLError, OSError) as error:
         raise SearchError(str(getattr(error, "reason", error))) from error
+    except http.client.HTTPException as error:
+        # An answer cut short or not HTTP at all: `IncompleteRead`, `BadStatusLine`.
+        raise SearchError(f"{type(error).__name__}: {error}") from error
 
 
 class Pace:
-    """A pause of 2 to 5 seconds before each LinkedIn request but the first, pages included."""
+    """A pause of 2 to 5 seconds before each LinkedIn request but the first, pages included; and
+    why LinkedIn said stop this run, after which no LinkedIn request is made."""
 
     def __init__(self, sleep: Callable[[float], None] = time.sleep, between: Callable[[], float] | None = None) -> None:
         self.sleep = sleep
         self.between = between or (lambda: random.uniform(*PAUSE_SECONDS))
         self._first = True
+        self.stopped: str | None = None
+
+    def stop(self, status: int | str) -> None:
+        self.stopped = f"LinkedIn answered {status}, so it is not searched again this run"
 
     def wait(self) -> None:
         if not self._first:
@@ -269,11 +278,15 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
     if settings.remote != "exclude":
         searches += [(title, None) for title in settings.titles]
     found: dict[str, FoundJob] = {}
-    result = LinkedInResult([])
+    result = LinkedInResult([], stopped=pace.stopped)
+    if pace.stopped:
+        return result
     for title, area in searches:
         named = f"LinkedIn search for {title} in {area}" if area else f"LinkedIn search for {title}, remote"
         for page in range(LINKEDIN_PAGES):
-            where = {"location": area} if area else {"f_WT": "2"}
+            # Without remote jobs, an area's search asks for on-site and hybrid ones only.
+            where = {"location": area, **({"f_WT": "1,3"} if settings.remote == "exclude" else {})} if area else {
+                "f_WT": "2"}
             query = urlencode({"keywords": title, **where, "f_TPR": f"r{seconds}", "start": page * LINKEDIN_PAGE_SIZE})
             pace.wait()
             try:
@@ -282,7 +295,8 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
                 result.problems.append(f"{named}: {error}")
                 break
             if answer.status in LINKEDIN_STOPS:
-                result.stopped = f"LinkedIn answered {answer.status}, so it is not searched again this run"
+                pace.stop(answer.status)
+                result.stopped = pace.stopped
                 result.jobs = list(found.values())
                 return result
             if answer.status != 200:
@@ -427,22 +441,29 @@ def _workday(board: Board, settings: Settings, ask: Ask, known: set[str], now: d
     postings: dict[str, dict[str, Any]] = {}
     posted: list[datetime | None] = []
     for title in settings.titles:
+        total = 0
         for page in range(WORKDAY_PAGES):
             body = {"appliedFacets": {}, "limit": WORKDAY_PAGE, "offset": page * WORKDAY_PAGE, "searchText": title}
             data = ask(f"{api}/jobs", body)
+            # Workday says the total on the first page only.
+            total = total or int(data.get("total") or 0)
             found = data.get("jobPostings") or []
             for posting in found:
                 posted.append(_posted_on(posting.get("postedOn"), now))
                 if title_matches(posting.get("title", ""), settings.titles):
                     postings.setdefault(posting["externalPath"], posting)
-            if len(found) < WORKDAY_PAGE or (page + 1) * WORKDAY_PAGE >= int(data.get("total") or 0):
+            if len(found) < WORKDAY_PAGE or (page + 1) * WORKDAY_PAGE >= total:
                 break
     jobs, name = [], board.name
     for path, posting in postings.items():
         # Only a job the list does not have yet is worth its details.
         if clean_link(f"{host}/{site}{path}") in known:
             continue
-        details = ask(f"{api}{path}")
+        try:
+            details = ask(f"{api}{path}")
+        except Gone:
+            # The job closed since the list was read; the board is still there.
+            continue
         info = details["jobPostingInfo"]
         name = (details.get("hiringOrganization") or {}).get("name") or name
         places = [info.get("location", ""), *(info.get("additionalLocations") or [])]
@@ -470,7 +491,10 @@ def _smartrecruiters(board: Board, settings: Settings, ask: Ask, known: set[str]
         # Its saved link may go on with the title after the number.
         if any(link == public or link.startswith(f"{public}-") for link in known):
             continue
-        details = ask(f"{api}/{quote(str(entry['id']))}")
+        try:
+            details = ask(f"{api}/{quote(str(entry['id']))}")
+        except Gone:
+            continue
         sections = (details.get("jobAd") or {}).get("sections") or {}
         text = "".join((sections.get(part) or {}).get("text") or ""
                        for part in ("companyDescription", "jobDescription", "qualifications", "additionalInformation"))

@@ -33,7 +33,8 @@ MOVES: dict[State, tuple[State, ...]] = {
     "skipped": ("picked",),
     "picked": ("resume_ready", "failed"),
     "resume_ready": ("applying", "failed"),
-    # Back to resume_ready: a site worker failed for the first time, and is tried again.
+    # Back to resume_ready: a worker failed for the first time, and is tried again, or an Easy
+    # Apply job turned out to apply on the company's site (`to_company_site`).
     "applying": ("applied", "paused", "failed", "resume_ready"),
     # Back to resume_ready: the user answered the question or did what the site needed. To
     # applied: the user saw in Chrome that the application was sent.
@@ -89,6 +90,9 @@ class Job:
     remote: Remote | None
     board: str
     kind: str | None
+    # Where a company-site worker applies, when it is not `link`: the company's site that an
+    # Easy Apply job's LinkedIn page sent to.
+    apply_link: str | None
     email_id: str | None
     email_date: str | None
     area: str | None
@@ -115,6 +119,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     remote TEXT CHECK (remote IN ('remote', 'hybrid', 'on_site')),
     board TEXT NOT NULL,
     kind TEXT CHECK (kind IN ('easy_apply', 'company_site')),
+    apply_link TEXT,
     email_id TEXT,
     email_date TEXT,
     area TEXT,
@@ -182,10 +187,13 @@ class JobsList:
         if new:
             path.chmod(0o600)
         self._db.executescript(SCHEMA)
-        # A file made before failures were counted gains the count.
-        if "failures" not in {row["name"] for row in self._db.execute("PRAGMA table_info(jobs)")}:
-            with self._db:
+        # A file made before failures were counted, or before apply links, gains the column.
+        columns = {row["name"] for row in self._db.execute("PRAGMA table_info(jobs)")}
+        with self._db:
+            if "failures" not in columns:
                 self._db.execute("ALTER TABLE jobs ADD COLUMN failures INTEGER NOT NULL DEFAULT 0")
+            if "apply_link" not in columns:
+                self._db.execute("ALTER TABLE jobs ADD COLUMN apply_link TEXT")
 
     def _stamp(self) -> str:
         return self._clock().isoformat()
@@ -279,6 +287,15 @@ class JobsList:
             elif start != "picked":
                 raise MoveError(f"job {job} is {start}: no worker of it can fail")
         return self.get(job).state
+
+    def to_company_site(self, job: int, link: str) -> None:
+        """An Easy Apply job whose LinkedIn page sends to the company's site: from now on a
+        company-site job applied to at `link`, back to `resume_ready` with no try spent."""
+        with self._db:
+            if (kind := self.get(job).kind) != "easy_apply":
+                raise MoveError(f"job {job} is not an Easy Apply job, it is {kind}")
+            self._move(job, "resume_ready", None)
+            self._db.execute("UPDATE jobs SET kind = 'company_site', apply_link = ? WHERE id = ?", (link, job))
 
     def in_states(self, *states: State) -> list[Job]:
         """The jobs in these states, in the order found."""

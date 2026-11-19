@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from job_hunt.apply import (
-    RESUME_SKILL, SITE_SKILL, UNSURE, AnswerError, ApplyError, answer, apply, applied, resume_job,
+    LINKEDIN_SKILL, RESUME_SKILL, SITE_SKILL, UNSURE, AnswerError, ApplyError, answer, apply, applied, resume_job,
 )
 from job_hunt.career import career_from_export, read_career, write_career
 from job_hunt.finder import FinderError, fetch_page, find, run_claude
@@ -138,9 +138,14 @@ def run_site(command: list[str]) -> None:
     run_claude(command, ROOT, skill=SITE_SKILL, error=ApplyError)
 
 
+def run_linkedin(command: list[str]) -> None:
+    run_claude(command, ROOT, skill=LINKEDIN_SKILL, error=ApplyError)
+
+
 def _apply(args: argparse.Namespace) -> int:
     try:
-        summary = apply(JobsList(DATA / "jobs.db"), ROOT, run_resume=run_resume, run_site=run_site)
+        summary = apply(JobsList(DATA / "jobs.db"), ROOT, run_resume=run_resume, run_site=run_site,
+                        run_linkedin=run_linkedin)
     except ApplyError as error:
         print(f"hunt apply: {error}", file=sys.stderr)
         return 1
@@ -185,10 +190,8 @@ def _waits_for(job: Job) -> str:
         return "resume not written yet"
     if job.state == "applying":
         return "being applied to"
-    if job.kind == "company_site":
+    if job.kind in ("company_site", "easy_apply"):
         return "resume ready, for the next hunt apply"
-    if job.kind == "easy_apply":
-        return "resume ready, for the LinkedIn worker"
     return "resume ready; the way to apply is not known"
 
 
@@ -245,7 +248,8 @@ def main(argv: list[str] | None = None) -> int:
     applying = commands.add_parser(
         "apply",
         help="write a resume for every picked job (claude -p with the write-resume skill, all at once), then apply "
-        "to the company-site jobs, up to three at once (claude --chrome -p with the apply-site skill)",
+        "to the company-site jobs, up to three at once (claude --chrome -p with the apply-site skill), and to the "
+        "Easy Apply jobs one at a time, three to six minutes apart (claude --chrome -p with the apply-linkedin skill)",
     )
     applying.set_defaults(run=_apply)
     answering = commands.add_parser(

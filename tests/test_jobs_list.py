@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from job_hunt.jobs import MOVES, STATES, FoundJob, JobsList, MoveError, clean_link
+from job_hunt.jobs import MOVES, STATES, FoundJob, JobsList, MoveError, clean_link, job_link
 from movable_clock import MovableClock
 
 
@@ -87,6 +87,34 @@ def test_jobs_that_differ_only_in_a_parameter_that_names_the_job_stay_two_jobs(j
     second = jobs.add(_found(f"https://careers.example.com/job?{name}=JR-2&utm_source=alert"))
     assert first is not None and second is not None and first != second
     assert jobs.get(first).link == f"https://careers.example.com/job?{name}=JR-1"
+
+
+@pytest.mark.parametrize(("link", "known_as_given"), [
+    ("https://click.example.com/redirect?ref=job123", True),
+    ("  https://www.jobot.com/redirect?src=email&trk=abc&refId=9 ", True),
+    ("https://jobs.example.com/careers#/redirect?ref=job123", True),
+    ("https://careers.example.com/job?reference=JR-1&utm_source=alert", False),
+    ("https://jobs.example.com/careers/1234", False),
+    ("https://www.linkedin.com/comm/jobs/view/123?trackingId=x&refId=y", False),
+    ("https://uk.indeed.com/rc/clk?jk=abc&from=email&src=x", False),
+])
+def test_a_tracking_address_that_cleans_to_no_parameter_is_known_as_it_was_given(
+    link: str, known_as_given: bool
+) -> None:
+    assert job_link(link) == (link.strip() if known_as_given else clean_link(link))
+    # Only an alert email's job: a search gives each job its own address.
+    assert _found(link).known_by == job_link(link)
+    assert _found(link, source="greenhouse", email_id=None, email_date=None).known_by == clean_link(link)
+
+
+def test_a_tracking_address_finds_its_own_job_and_no_other_of_its_board(jobs: JobsList) -> None:
+    job = jobs.add(_found("https://click.example.com/redirect?ref=job123"),
+                   page_link="https://jobs.example.com/careers/1?utm_source=x")
+    assert job is not None and jobs.job_of_link("https://click.example.com/redirect?ref=job123") == job
+    assert jobs.job_of_link("https://jobs.example.com/careers/1") == job
+    assert not jobs.has("https://click.example.com/redirect?ref=job456")
+    assert not jobs.has("https://click.example.com/redirect")
+    assert jobs.add(_found("https://click.example.com/redirect?ref=job456")) not in (None, job)
 
 
 def test_a_job_is_also_known_by_the_address_its_page_ended_at(jobs: JobsList) -> None:

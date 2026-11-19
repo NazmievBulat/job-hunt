@@ -1,7 +1,9 @@
 """The jobs list, `data/jobs.db`: one row per job, written only by this module.
 
 A job is the same job when its link is, once the tracking parts are removed (`clean_link`), so
-an alert that sends a job again never lists it twice. The address its page ended at, after the
+an alert that sends a job again never lists it twice. A click-tracking address off LinkedIn and
+Indeed is the exception (`job_link`): it is known as it was given, as two jobs' tracking addresses
+may differ only in those parts, and its cleaned link is never saved. The address its page ended at, after the
 redirects of a click-tracking link, is its second link (`page_link`) and counts the same when
 the title and company are the same too. A job from another source with another link is still the
 same job when its company and title are (`same_job`): folded for case, punctuation and the
@@ -108,6 +110,12 @@ class FoundJob:
     # Which of the settings' areas the place is in, or None.
     area: str | None
     source: str = "alert"
+
+    @property
+    def known_by(self) -> str:
+        """The link the job is known by: an alert email's click-tracking address as it was given
+        (`job_link`), any other link cleaned, as a search gives each job its own address."""
+        return job_link(self.link) if self.source == "alert" else clean_link(self.link)
 
 
 @dataclass(frozen=True)
@@ -231,6 +239,28 @@ def clean_link(link: str) -> str:
     return urlunsplit((parts.scheme.lower(), host, parts.path.rstrip("/") or "/", _untracked(parts.query), fragment))
 
 
+def cleaned_on_purpose(link: str) -> bool:
+    """Whether a link is on LinkedIn or Indeed, whose job addresses `clean_link` rewrites to the
+    job's own address on purpose."""
+    host = urlsplit(link.strip()).netloc.lower()
+    return host.removeprefix("www.") in ("linkedin.com", "indeed.com") or host.endswith((".linkedin.com", ".indeed.com"))
+
+
+def job_link(link: str) -> str:
+    """The link a job of an alert email is known by: `clean_link`'s, except that a click-tracking
+    address off LinkedIn and Indeed that `clean_link` would leave with no parameter at all is kept
+    as it was given, as two jobs' addresses may differ only there (`/redirect?ref=job123` and
+    `?ref=job456`). A link left with a parameter that names the job (`?reference=JR-1`) is cleaned."""
+    if cleaned_on_purpose(link):
+        return clean_link(link)
+    parts = urlsplit(link.strip())
+    route_query = parts.fragment.partition("?")[2] if parts.fragment.startswith(("/", "!")) else ""
+    queries = [query for query in (parts.query, route_query) if parse_qsl(query)]
+    if queries and not any(_untracked(query) for query in queries):
+        return link.strip()
+    return clean_link(link)
+
+
 def _untracked(query: str) -> str:
     return urlencode([(name, value) for name, value in parse_qsl(query) if not TRACKING.match(name)])
 
@@ -292,18 +322,19 @@ class JobsList:
         return self._clock().isoformat()
 
     def has(self, link: str) -> bool:
-        link = clean_link(link)
-        return self._db.execute(
-            "SELECT 1 FROM jobs WHERE ? IN (link, page_link) UNION ALL SELECT 1 FROM other_links WHERE link = ?",
-            (link, link)).fetchone() is not None
+        return self.job_of_link(link) is not None
 
     def job_of_link(self, link: str) -> int | None:
-        """The job a link is of, by its link, its page link or another link of it, or None."""
-        link = clean_link(link)
-        row = self._db.execute(
-            "SELECT id FROM jobs WHERE ? IN (link, page_link) UNION ALL SELECT job FROM other_links WHERE link = ?",
-            (link, link)).fetchone()
-        return row[0] if row else None
+        """The job a link is of, by its link, its page link or another link of it, or None; the
+        link is looked up as the job is known by it (`job_link`) and cleaned. A tracking address's
+        cleaned link is never saved, so it finds no other job of that board."""
+        for each in dict.fromkeys((job_link(link), clean_link(link))):
+            row = self._db.execute(
+                "SELECT id FROM jobs WHERE ? IN (link, page_link) UNION ALL SELECT job FROM other_links WHERE link = ?",
+                (each, each)).fetchone()
+            if row:
+                return row[0]
+        return None
 
     def known_links(self) -> set[str]:
         """Every link, page link and other link of the list, for the searches that run beside this
@@ -330,7 +361,7 @@ class JobsList:
         company board's link becomes where a LinkedIn job without Easy Apply not started yet is
         applied to."""
         first = self.get(job)
-        links = {clean_link(found.link), *([clean_link(page_link)] if page_link else [])} - {first.link}
+        links = {found.known_by, *([clean_link(page_link)] if page_link else [])} - {first.link}
         with self._db:
             self._db.executemany("INSERT OR IGNORE INTO other_links (link, job) VALUES (?, ?)",
                                  [(link, job) for link in sorted(links)])
@@ -354,7 +385,7 @@ class JobsList:
             raise ValueError(f"kind must be one of {', '.join(KINDS)}, not {kind!r}")
         if found.source not in SOURCES:
             raise ValueError(f"source must be one of {', '.join(SOURCES)}, not {found.source!r}")
-        link = clean_link(found.link)
+        link = found.known_by
         page = clean_link(page_link) if page_link else None
         page = None if page == link else page
         if self.has(link):

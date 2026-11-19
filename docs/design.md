@@ -125,7 +125,9 @@ Without it the job waits until the user is at the computer, and the other jobs g
      the emails it is named, in plain text one at a time (an alert's HTML is larger than a
      tool's answer may be), and writes each job's link, title, company and place, and which of
      the user's areas each job is in. A click-tracking link is kept as it is and followed to the
-     job's page as the email gave it. Each batch's jobs are saved as it ends; a batch that
+     job's page as the email gave it. One that its tracking parts are all of (`/redirect?ref=job123`)
+     is known by itself as given, never by its cleaned link, so two jobs of one board stay two;
+     the page it ended at, cleaned, is its second link for the duplicate check. Each batch's jobs are saved as it ends; a batch that
      fails, or reads fewer emails than it was named, is named and the others still count, and the next run reads from the newest email of the batches that all
      succeeded in order.
    - **LinkedIn, signed out.** Its public guest search, plain HTTP with no cookies and never the

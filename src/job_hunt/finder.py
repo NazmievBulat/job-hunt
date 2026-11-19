@@ -64,7 +64,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlsplit
 from urllib.request import Request, urlopen
 
-from job_hunt.jobs import FoundJob, Job, JobsList, Remote, clean_link
+from job_hunt.jobs import FoundJob, Job, JobsList, Remote, clean_link, cleaned_on_purpose
 from job_hunt.settings import Settings
 
 if TYPE_CHECKING:
@@ -410,10 +410,7 @@ def followed_link(link: str) -> str:
     """The address a job's page is read at: a LinkedIn or Indeed job's own address, and any other
     link as it was given, as a click-tracking address may need the very parameters `clean_link`
     takes off to lead to the job."""
-    host = urlsplit(link.strip()).netloc.lower()
-    if host.removeprefix("www.") in ("linkedin.com", "indeed.com") or host.endswith((".linkedin.com", ".indeed.com")):
-        return clean_link(link)
-    return link.strip()
+    return clean_link(link) if cleaned_on_purpose(link) else link.strip()
 
 
 def _read_page(
@@ -525,7 +522,8 @@ def _find(
         return whether it is new. Two sources saving one job at once save it once."""
         if not title_matches(each.title, settings.titles) or not place_kept(each, settings):
             return False
-        link = clean_link(each.link)
+        # Two tracking addresses of one board may clean to one link, so not `clean_link`.
+        link = each.known_by
         with lock:
             if link in reading or known(each):
                 return False

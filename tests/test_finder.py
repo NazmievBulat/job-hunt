@@ -14,6 +14,7 @@ import stat
 import sys
 from email import message_from_string
 from urllib.error import HTTPError, URLError
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -903,8 +904,98 @@ def test_a_tracking_link_is_followed_with_the_parameters_the_saved_link_leaves_o
     assert (summary.new, summary.problems) == (1, [])
     (saved,) = jobs.all()
     assert saved.page_problem is None and saved.description
-    # The duplicate check works on the cleaned addresses.
-    assert (saved.link, saved.page_link) == (clean_link(tracking), "https://jobs.example.com/careers/1234")
+    # The job is known by the address as the email gave it, which `clean_link` would leave with no
+    # parameter, and the duplicate check after reading works on the cleaned page address.
+    assert (saved.link, saved.page_link) == (tracking, "https://jobs.example.com/careers/1234")
+
+
+def _tracked(link: str, title: str) -> dict:
+    """An alert's job behind a click-tracking address, as the batch file holds it."""
+    job = {**_job().__dict__, "link": link, "title": title, "board": "jobot", "remote": "remote", "area": None}
+    del job["source"]
+    return job
+
+
+def _postings(pages: dict[str, str], followed: list[str]) -> Callable[[str], tuple[str, str]]:
+    """A fetch that answers only each tracking address exactly as given, with the posting it leads to."""
+    def redirect(link: str) -> tuple[str, str]:
+        followed.append(link)
+        if link not in pages:
+            raise PageError("HTTP 404")
+        return pages[link], (HERE / "pages" / "company.html").read_text()
+    return redirect
+
+
+@pytest.mark.parametrize("links", [
+    ("https://click.example.com/redirect?ref=job123", "https://click.example.com/redirect?ref=job456"),
+    ("https://www.jobot.com/redirect?src=email&trk=abc&refId=9",
+     "https://www.jobot.com/redirect?src=email&trk=def&refId=10"),
+])
+def test_two_tracking_links_that_differ_only_in_their_tracking_parameters_are_two_jobs(
+    tmp_path: Path, settings: Settings, clock: MovableClock, links: tuple[str, str]
+) -> None:
+    first, second = links
+    followed: list[str] = []
+    fetch = _postings({first: "https://jobs.example.com/careers/1?utm_source=email",
+                       second: "https://jobs.example.com/careers/2?utm_source=email"}, followed)
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json",
+                   run=AlertSkill({"emails": 1, "jobs": [_tracked(first, "QA Automation Engineer"),
+                                                         _tracked(second, "SDET II QA Automation Engineer")]}),
+                   fetch=fetch, clock=clock)
+    assert sorted(followed) == sorted(links)
+    assert (summary.jobs, summary.new, summary.problems) == (2, 2, [])
+    assert "same job from two sources: 0" in summary.lines
+    assert sorted((each.link, each.page_link) for each in jobs.all()) == [
+        (first, "https://jobs.example.com/careers/1"), (second, "https://jobs.example.com/careers/2")]
+
+
+def test_a_later_run_saves_a_new_posting_behind_another_tracking_link_of_the_same_board(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    first = "https://www.jobot.com/redirect?src=email&trk=abc&refId=9"
+    third = "https://www.jobot.com/redirect?src=email&trk=ghi&refId=11"
+    followed: list[str] = []
+    fetch = _postings({first: "https://jobs.example.com/careers/1", third: "https://jobs.example.com/careers/3"},
+                      followed)
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json",
+         run=AlertSkill({"emails": 1, "jobs": [_tracked(first, "QA Automation Engineer")]}), fetch=fetch, clock=clock)
+    clock.advance(days=1)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json",
+                   run=AlertSkill({"emails": 1, "jobs": [_tracked(third, "Lead QA Automation Engineer")]}),
+                   fetch=fetch, clock=clock)
+    assert (summary.new, followed) == (1, [first, third])
+    assert [each.page_link for each in jobs.all()] == ["https://jobs.example.com/careers/1",
+                                                      "https://jobs.example.com/careers/3"]
+    # The same address sent again is known before its page is read.
+    clock.advance(days=1)
+    again = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json",
+                 run=AlertSkill({"emails": 1, "jobs": [_tracked(third, "Lead QA Automation Engineer")]}),
+                 fetch=fetch, clock=clock)
+    assert (again.new, followed) == (0, [first, third])
+
+
+@pytest.mark.parametrize("days_later", [1, 40])
+def test_a_tracking_link_that_ends_at_a_job_the_list_has_is_not_saved_twice(
+    tmp_path: Path, settings: Settings, clock: MovableClock, days_later: int
+) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    jobs.add(FoundJob(**{**_tracked("https://jobs.example.com/careers/1", "QA Automation Engineer"),
+                         "source": "greenhouse"}), description="Test the product.", kind="company_site")
+    # A day later it is the same job by its title and company before its page is read; 40 days
+    # later, past `SAME_JOB_DAYS`, by the page the link ended at.
+    clock.advance(days=days_later)
+    tracking = "https://www.jobot.com/redirect?src=email&trk=abc&refId=9"
+    followed: list[str] = []
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json",
+                   run=AlertSkill({"emails": 1, "jobs": [_tracked(tracking, "QA Automation Engineer")]}),
+                   fetch=_postings({tracking: "https://jobs.example.com/careers/1?utm_source=jobot"}, followed),
+                   clock=clock)
+    assert (summary.new, len(jobs.all())) == (0, 1)
+    assert followed == ([] if days_later == 1 else [tracking])
+    # Another posting of that board behind another tracking address is not taken for this one.
+    assert not jobs.has("https://www.jobot.com/redirect?src=email&trk=zzz&refId=99")
 
 
 def test_the_skill_reads_each_alert_in_plain_text_by_its_id_and_keeps_a_tracking_link() -> None:

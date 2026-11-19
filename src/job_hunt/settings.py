@@ -10,6 +10,10 @@
      "time_zone": "America/New_York",
      "linkedin_notes_daily": 15,
      "captcha": "ask",
+     "daily_applications": 20,
+     "auto_apply_from": 7,
+     "site_workers": 3,
+     "linkedin_daily": 25,
      "pushover": {"token": "...", "user": "..."},
      "companies": ["https://jobs.lever.co/example"],
      "keys": {"usajobs": {"email": "...", "key": "..."}, "adzuna": {"app_id": "...", "app_key": "..."},
@@ -26,6 +30,14 @@ notify` pushes the chat's questions
 with, may be left out; they are never printed. `captcha`, what happens to an application still on
 a CAPTCHA after it was tried again on its own, may be left out (`ask`): `ask` asks the person
 when they are free, `skip` never asks and leaves it to apply by hand.
+
+`daily_applications`, how many applications start in a day, may be left out (20); at most 100.
+`auto_apply_from`, a score from 1 to 10, may be left out or null: then the person picks every
+job, as before. With a score, each scored job at or above it is picked by itself, best first,
+up to the day's number, and those below it are skipped (`plan.auto_pick`). `site_workers`, how
+many company-site applications run at once, may be left out (3); at most 5. `linkedin_daily`,
+how many LinkedIn Easy Apply applications start in a day, may be left out (25); at most 30, as
+LinkedIn limits accounts that look automated.
 
 `hunt find` reads the alert emails and also searches the sites itself: LinkedIn signed out, and
 the public job boards (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable) of every
@@ -53,7 +65,7 @@ Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
 OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover", "linkedin_notes_daily", "companies",
-            "keys", "captcha")
+            "keys", "captcha", "daily_applications", "auto_apply_from", "site_workers", "linkedin_daily")
 Captcha = Literal["ask", "skip"]
 CAPTCHA: tuple[Captcha, ...] = ("ask", "skip")
 # The feeds that need a key, and the fields of each one's key.
@@ -61,6 +73,9 @@ FEED_KEYS = {"usajobs": ("email", "key"), "adzuna": ("app_id", "app_key"), "joob
 SUMMARY_HOUR = 18
 WORKING_HOURS = (9, 17)
 NOTES_DAILY = 15
+DAILY_APPLICATIONS, MOST_APPLICATIONS = 20, 100
+SITE_WORKERS, MOST_SITE_WORKERS = 3, 5
+LINKEDIN_DAILY, MOST_LINKEDIN = 25, 30
 
 
 class SettingsError(ValueError):
@@ -87,6 +102,11 @@ class Settings:
     linkedin_notes_daily: int = NOTES_DAILY
     companies: list[str] = field(default_factory=list)
     captcha: Captcha = "ask"
+    daily_applications: int = DAILY_APPLICATIONS
+    # The lowest score picked by itself; None when the person picks.
+    auto_apply_from: int | None = None
+    site_workers: int = SITE_WORKERS
+    linkedin_daily: int = LINKEDIN_DAILY
     # Each keyed feed's key, by the feed's name (`FEED_KEYS`).
     keys: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
@@ -210,6 +230,11 @@ def read_settings(path: Path) -> Settings:
     captcha = data.get("captcha", "ask")
     if captcha not in CAPTCHA:
         raise SettingsError(f"captcha must be one of {', '.join(CAPTCHA)}, not {captcha!r}")
+
+    def optional(name: str, low: int, high: int, default: int) -> int:
+        return _whole_number(data, name, low, high) if name in data else default
+
+    auto_from = data.get("auto_apply_from")
     return Settings(
         titles=titles,
         areas=areas,
@@ -223,5 +248,9 @@ def read_settings(path: Path) -> Settings:
         linkedin_notes_daily=notes_daily,
         companies=_companies(data),
         captcha=captcha,
+        daily_applications=optional("daily_applications", 1, MOST_APPLICATIONS, DAILY_APPLICATIONS),
+        auto_apply_from=None if auto_from is None else _whole_number(data, "auto_apply_from", 1, 10),
+        site_workers=optional("site_workers", 1, MOST_SITE_WORKERS, SITE_WORKERS),
+        linkedin_daily=optional("linkedin_daily", 0, MOST_LINKEDIN, LINKEDIN_DAILY),
         keys=_keys(data),
     )

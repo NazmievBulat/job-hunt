@@ -6,7 +6,9 @@ The state is all in `data/`, so a fresh session knows everything by running it:
    `data/morning.told`);
 2. new jobs, numbered as `hunt list` numbers them, for `hunt pick` and `hunt skip`. Asked again,
    the jobs of the last list keep their numbers, so a reply to it still names the same jobs;
-   only a job scored since numbers the whole list anew;
+   only a job scored since numbers the whole list anew. With the settings' `auto_apply_from`,
+   the jobs picked by their score instead, numbered for `hunt skip`, told once (`data/picks.told`)
+   and asking nothing: silence is yes;
 3. applications on a CAPTCHA after their try again on their own, all in one question, and only
    when the person is free right now (`available`); while they are not, the jobs are held and
    nothing is said. Each question a job is in is counted (`JobsList.asked`);
@@ -31,7 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from job_hunt.apply import NEEDS, UNSURE
+from job_hunt.apply import NEEDS, UNSURE, apply_running
 from job_hunt.jobs import Job, JobsList
 
 if TYPE_CHECKING:
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
 
 LOG = "morning.log"
 TOLD = "morning.told"
+PICKS_TOLD = "picks.told"
 KINDS = {"easy_apply": "Easy Apply", "company_site": "company site"}
 REMOTE_DESKTOP = "https://remotedesktop.google.com/access"
 
@@ -94,7 +97,8 @@ def _notes_to_send(notes: Notes | None, data: Path, daily: int) -> int:
 
 
 def anything_waiting(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
-                     daily: int = 15) -> bool:
+                     daily: int = 15, *, auto_from: int | None = None) -> bool:
+    """With `auto_from`, the scored jobs not picked wait for the next day's number, not for the person."""
     if notes is not None and (_notes_to_send(notes, data, daily) or notes.in_states("drafted", "unsure")):
         return True
     if threads is not None:
@@ -106,7 +110,7 @@ def anything_waiting(jobs: JobsList, data: Path, threads: Threads | None = None,
     # A CAPTCHA waits for the person to be free: `hunt watch` tells the chat then.
     captchas = {job.id for job in on_captcha(jobs)}
     paused = [job for job in jobs.in_states("paused") if job.id not in captchas]
-    return bool(untold_failures(data) or jobs.waiting() or paused or unfinished(jobs)
+    return bool(untold_failures(data) or (auto_from is None and jobs.waiting()) or paused or unfinished(jobs)
                 or (threads is not None and threads.in_states("drafted", "unsure")))
 
 
@@ -217,9 +221,39 @@ def _captchas(jobs: JobsList, waiting: list[Job], verdict: Verdict, remote_deskt
     return "\n".join(lines)
 
 
+def show_picks(jobs: JobsList, auto_from: int) -> str | None:
+    """The jobs picked that wait to start today, numbered for `hunt skip` from now on; None when
+    there are none."""
+    from job_hunt.plan import order
+
+    picks = order([job for job in jobs.in_states("picked", "resume_ready") if jobs.due(job)])
+    if not picks:
+        return None
+    jobs.show(picks)
+    count = f"{len(picks)} jobs" if len(picks) > 1 else "1 job"
+    return "\n".join([f"Applying to {count} today (score {auto_from} and up). Reply skip 3 12 to leave some out.",
+                      *(job_line(number, job) for number, job in enumerate(picks, start=1))])
+
+
+def _picks(jobs: JobsList, data: Path, auto_from: int) -> str | None:
+    """`show_picks`, only when one of them was not told yet."""
+    from job_hunt.plan import order
+
+    picks = order([job for job in jobs.in_states("picked", "resume_ready") if jobs.due(job)])
+    told = data / PICKS_TOLD
+    try:
+        before = {int(each) for each in told.read_text().split()}
+    except (FileNotFoundError, ValueError):
+        before = set()
+    if not picks or {job.id for job in picks} <= before:
+        return None
+    told.write_text(" ".join(str(job.id) for job in picks) + "\n")
+    return show_picks(jobs, auto_from)
+
+
 def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
               daily: int = 15, *, remote_desktop: bool = False,
-              available: Callable[[], Verdict] | None = None) -> str:
+              available: Callable[[], Verdict] | None = None, auto_from: int | None = None) -> str:
     """The questions as text. Showing them numbers the new jobs and marks the failures told.
     `available` says whether the person is free for a CAPTCHA now; without it they are not known
     to be, and the CAPTCHAs are held."""
@@ -228,13 +262,17 @@ def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes:
     failures = _lines(log[told:])
     if failures:
         parts.append("\n".join(["The morning run had a problem:", *map(_failure, failures)]))
-    left = unfinished(jobs)
+    # A `hunt apply` running, all day when spread, takes them itself: nothing to start.
+    left = unfinished(jobs) if not apply_running(data.parent) else []
     if left:
         parts.append("\n".join([f"Unfinished applications ({len(left)}): run hunt apply", *(
             f"  {job.id}. {job.title} at {job.company}" for job in left)]))
     if to_send := _notes_to_send(notes, data, daily):
         parts.append(f"Approved notes to hiring managers not sent yet ({to_send}): run hunt send-notes")
-    waiting = {job.id: job for job in jobs.waiting()}
+    # Picked by their score, the scored jobs left wait for the next day's number, not for a pick.
+    waiting = {job.id: job for job in jobs.waiting()} if auto_from is None else {}
+    if auto_from is not None and (picks := _picks(jobs, data, auto_from)):
+        parts.append(picks)
     kept = {number: waiting[job] for number, job in sorted(jobs.last_list().items()) if job in waiting}
     if waiting and len(kept) == len(waiting):
         parts.append("\n".join([f"New jobs ({len(kept)}):", *(job_line(number, job) for number, job in kept.items())]))

@@ -1,12 +1,13 @@
 ---
 description: Write a resume for each picked job and apply, on the company sites and through LinkedIn Easy Apply, then show where every picked job stands.
-allowed-tools: Bash(uv run hunt apply), Bash(uv run hunt status), Bash(uv run hunt answer:*), Bash(uv run hunt resume-job:*), Bash(uv run hunt applied:*)
+allowed-tools: Bash(uv run hunt apply), Bash(uv run hunt status), Bash(uv run hunt status --today), Bash(uv run hunt answer:*), Bash(uv run hunt resume-job:*), Bash(uv run hunt applied:*)
 ---
 
 # Apply to the picked jobs
 
 Run `uv run hunt apply` in the background: it writes the resumes and applies, and can take
-many minutes. Wait for it to finish, then run `uv run hunt status` and show what it prints
+many minutes; with many picks it spreads them over the day, up to the settings' daily numbers,
+and leaves the rest for the next morning. Wait for it to finish, then run `uv run hunt status` and show what it prints
 exactly as printed. When `hunt apply` refuses (another one is running), show its line.
 
 A paused job waits for the person. Its line says what it needs, in which Chrome tab, and the
@@ -24,7 +25,7 @@ numbers `hunt status` printed:
 - "12: yes, since 2021" → `uv run hunt answer 12 "yes, since 2021"`
 
 Then run `uv run hunt apply` again for those jobs, unless every reply was "sent", and show
-`uv run hunt status` once more.
+`uv run hunt status` once more. Asked how the day went, show `uv run hunt status --today`.
 
 Do nothing else: no other command, no file read or written, no Chrome tab opened. Never type
 a password and never solve a CAPTCHA.

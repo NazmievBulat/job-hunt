@@ -26,6 +26,9 @@ each part as a message of its own, one at a time, and wait for the reply before 
    `/jobs` says, with the numbers last printed. Asked again, the jobs keep their numbers; when
    the heading says "numbered anew", show the whole list again and say the numbers changed
    before taking any number.
+   **Applying today**, instead, when the settings pick by score: show the lines exactly as
+   printed and ask nothing; go on with the next part at once, as silence is yes. A later reply
+   like "skip 3 12" runs `uv run hunt skip 3 12` with the numbers last printed.
 4. **CAPTCHAs.** One message for all of them, the line as printed. "done" runs the command
    after it, `uv run hunt resume-job` with every job of it, then `uv run hunt apply` in the
    background. When the part ends with a line about Chrome Remote Desktop or this computer's
@@ -72,15 +75,17 @@ and wait for it without asking anything. When it ends, run `uv run hunt status` 
 `uv run hunt questions`, and ask only what is new. Say nothing about progress unless the user
 asks.
 
-At the end of the day, when nothing is running and nothing waits, send one summary: applied,
-waiting for the user, failed and why, as `uv run hunt status` prints it.
+At the end of the day, when nothing is running and nothing waits, send one summary: sent by
+kind, waiting for the user and for what, failed and why, and the time an application took, as
+`uv run hunt status --today` prints it.
 When a message says the day ends and CAPTCHAs waited all day (the watch's last run types it
 in), ask nothing: send that summary at once, with the CAPTCHAs it names, and stop.
 
 ## Rules
 
 - Nothing is sent in the user's name, an application, an email or a LinkedIn message, without
-  their word in this conversation. Picking a job is that word for its application; "yes" to a
+  their word in this conversation. Picking a job is that word for its application, and so is
+  the settings' `auto_apply_from` for each job it picks, unless the person skips it; "yes" to a
   reply, as last shown, is that word for that reply alone; "send" to the notes question is
   that word for the notes it names.
 - Never type a password and never solve a CAPTCHA. Say what is needed and in which Chrome tab,

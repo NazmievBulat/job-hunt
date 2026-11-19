@@ -18,7 +18,7 @@ import pytest
 
 from job_hunt import cli
 from job_hunt.apply import (
-    LINKEDIN_SKILL, MODEL, RESUME_SKILL, SITE_SKILL, SITE_WORKERS, ApplyError, AnswerError, answer, apply, read_report,
+    LINKEDIN_SKILL, MODEL, NAP, RESUME_SKILL, SITE_SKILL, SITE_WORKERS, ApplyError, AnswerError, answer, apply, read_report,
     resume_command, resume_job, site_command,
 )
 from job_hunt.career import Career, read_career, write_career
@@ -712,7 +712,8 @@ def test_hunt_apply_while_another_runs_says_so(hunt: JobsList, project: Path,
     with (project / "jobs" / "apply.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         assert cli.main(["apply"]) == 1
-    assert capsys.readouterr().err == "hunt apply: another hunt apply is already running\n"
+    assert capsys.readouterr().err == ("hunt apply: another hunt apply is already running;"
+                                         " it takes the jobs put back within a minute\n")
 
 
 def test_hunt_applied_ends_a_job_the_user_saw_was_sent(hunt: JobsList, project: Path,
@@ -1168,7 +1169,8 @@ def test_jobs_resumed_once_chrome_is_open_are_held_by_their_host(project: Path, 
     # A Chrome pause has no tab to go on in: each is a fresh start on the host.
     waiting = Waiting(clock)
     apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=waiting)
-    assert ([jobs.get(job).state for job in picked], waiting.slept) == (["applied"] * 2, [600.0])
+    # Ten minutes for the host, waited a minute at a time.
+    assert ([jobs.get(job).state for job in picked], waiting.slept) == (["applied"] * 2, [NAP] * 10)
 
 
 def test_the_host_is_the_company_site_a_linkedin_job_sends_to(project: Path, jobs: JobsList) -> None:
@@ -1215,7 +1217,8 @@ def test_an_easy_apply_sign_in_is_tried_again_through_linkedin_in_a_fresh_tab(pr
     apply(jobs, project, run_linkedin=run, run_resume=Resumes(project), run_site=no_linkedin, linkedin=lock)
     assert "tab_id" not in json.loads(commands[1][3].removeprefix(f"/{LINKEDIN_SKILL} "))
     assert jobs.get(job).state == "applied"
-    assert jobs.starts_on("linkedin.com", datetime(2026, 1, 1, tzinfo=UTC), but=0) == {}
+    # Kept for LinkedIn's daily number, once a job: its try again is the same application.
+    assert list(jobs.starts_on("linkedin.com", datetime(2026, 1, 1, tzinfo=UTC), but=0)) == [job]
 
 
 def test_the_host_is_where_a_tracked_link_ended(project: Path, jobs: JobsList) -> None:
@@ -1228,7 +1231,7 @@ def test_the_host_is_where_a_tracked_link_ended(project: Path, jobs: JobsList) -
         jobs.move(job, "picked")
     waiting = Waiting(clock)
     apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project), sleep=waiting)
-    assert waiting.slept == [600.0]
+    assert waiting.slept == [NAP] * 10
 
 
 def test_the_spacing_holds_across_midnight(project: Path, jobs: JobsList) -> None:
@@ -1243,7 +1246,7 @@ def test_the_spacing_holds_across_midnight(project: Path, jobs: JobsList) -> Non
     waiting = Waiting(clock)
     apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project), sleep=waiting)
     # The start two minutes before midnight still holds this one six minutes.
-    assert waiting.slept == [360.0] and jobs.get(job).state == "applied"
+    assert waiting.slept == [NAP] * 6 and jobs.get(job).state == "applied"
 
 
 def test_with_captcha_skip_the_captchas_already_waiting_fail_and_are_not_asked(

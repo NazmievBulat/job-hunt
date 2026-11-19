@@ -826,3 +826,79 @@ def test_a_later_time_picked_after_the_first_is_over_confirms_the_held_event(
     assert "offer" not in calendar.tasks()
     assert calendar.events == {"e1": {"title": "Call with Example Labs about QA Engineer", "start": "2026-11-23T14:30"}}
     assert Talks(project / "data" / "jobs.db").get(thread).state == "confirmed"
+
+
+def test_a_next_round_held_after_the_first_is_over_is_a_new_event(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    first, calendar = _held(project, threads, jobs, clock)
+    clock.now = _at(23, 15, 30)
+    second, = _saved(threads, jobs, _email(4, text="Great call! Could we set up a second round?",
+                                           date="2026-11-23T16:00:00-05:00"))
+    calendar.offer = ["2026-11-24T11:00:00-05:00", "2026-11-25T15:00:00-05:00"]
+    draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+    _send(threads, project, second, calendar)
+
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+
+    # The first round's event stays where it was: the call it held is in the past.
+    assert calendar.events == {
+        "e1": {"title": "Held: Call with Example Labs about QA Engineer", "start": "2026-11-19T10:00"},
+        "e2": {"title": "Held: Call with Example Labs about QA Engineer", "start": "2026-11-24T11:00"}}
+    talks = Talks(project / "data" / "jobs.db")
+    assert talks.get(first).state == "held" and talks.get(second).event_id == "e2"
+
+
+def test_a_first_offer_stopped_before_its_reply_was_saved_is_offered_again_whole(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (project / "jobs" / "1" / "resume.pdf").write_bytes(b"%PDF-1.4 Ada Example")
+    found, _ = read_messages({"linkedin_messages": [{
+        "conversation": "https://www.linkedin.com/messaging/thread/9/", "from": "Sam Recruiter",
+        "text": "Can we talk?", "date": "2026-11-18T06:40:00-05:00", "job_link": "https://jobs.example.com/1",
+        "company": "Example Labs", "asks_to_talk": True}]})
+    thread = threads.save(found[0], jobs)
+    calendar = Calendar(offer=["2026-11-19T10:00:00-05:00", "2026-11-23T14:30:00-05:00"])
+    saved_reply, saved_times = Threads.redrafted, Talks.offered
+
+    def stopped(*_: object) -> None:
+        raise KeyboardInterrupt
+
+    # The run stops between the reply and its times, whichever is saved first.
+    for first, second in ((Threads, "redrafted"), (Talks, "offered")):
+        monkeypatch.setattr(first, second, stopped)
+        with pytest.raises(KeyboardInterrupt):
+            draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+        monkeypatch.undo()
+        draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+        assert Threads.redrafted is saved_reply and Talks.offered is saved_times
+
+        asked = questions(jobs, project / "data", threads)
+        assert "Times offered: Thu 19 Nov 10:00, Mon 23 Nov 14:30 (EST)" in asked and "Resume attached" in asked
+        if second == "offered":
+            break
+        threads.move(thread, "new")
+        Talks(project / "data" / "jobs.db").forget(thread)
+    _send(threads, project, thread, calendar)
+    assert calendar.sent[-1]["resume"] == str(project / "jobs" / "1" / "resume.pdf")
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+    assert list(calendar.events) == ["e1"]
+
+
+def test_a_newer_message_read_while_a_pick_is_confirmed_is_told(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    thread, calendar = _held(project, threads, jobs, clock)
+    _saved(threads, jobs, _email(2, text="Monday 2:30 works, talk then!"))
+    calendar.chosen = "2026-11-23T14:30:00-05:00"
+
+    def newer_while_confirming(command: list[str]) -> None:
+        calendar(command)
+        if _arguments(command)[1].get("task") == "confirm":
+            _saved(threads, jobs, _email(3, text="Sorry, Thursday 10:00 after all"))
+
+    draft_replies(threads, project, run=newer_while_confirming, fetch=no_fetch, clock=clock)
+
+    assert Talks(project / "data" / "jobs.db").get(thread).state == "confirmed"
+    told = (project / "data" / "morning.log").read_text()
+    assert "newer message" in told and "Call with Example Labs about QA Engineer" in told

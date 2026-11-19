@@ -625,7 +625,11 @@ def _draft_replies(threads: Threads, root: Path, run: Run, fetch: Callable[[str]
         # is saved, as a thread drafted is never drafted again and its pick would be lost. An
         # answer a newer message replaced meanwhile picks nothing: the newer one is answered.
         if held is not None and chosen is not None and threads.get(thread.id).state == "new":
-            _confirm(talks, held, chosen, root, run, clock)
+            if _confirm(talks, held, chosen, root, run, clock) and threads.get(thread.id).state != "new":
+                # A newer message came while the event moved: it may name another time.
+                log_failure(root / "data", "hunt draft-replies",
+                            f"{held.title} was confirmed at {chosen}, but a newer message came meanwhile: "
+                            "look whether that time still holds", clock)
         if threads.drafted(thread.id, reply, draft):
             _write(here / "reply.md", reply + "\n")
             drafted += 1
@@ -640,15 +644,22 @@ def _offer(threads: Threads, talks: Talks, root: Path, thread: Thread, run: Run,
     command, read = times_command(thread, root, clock)
     run(command)
     offer = read(here / "reply.json")
+    title = talk_title(thread, JobsList(root / "data" / "jobs.db"))
+    first = talks.get(thread.id) is None
+    if first:
+        # A first offer's times are saved before its reply: a run stopped between the two leaves the
+        # thread waiting to be drafted, or a talk no reply of its own, never times nothing holds.
+        talks.offered(thread.id, thread.source, thread.conversation, title, offer.times, offer.reply)
     if not threads.redrafted(thread.id, offer.reply, offer.draft_id):
+        if first:
+            talks.forget(thread.id)
         return 0
-    talks.offered(thread.id, thread.source, thread.conversation,
-                  talk_title(thread, JobsList(root / "data" / "jobs.db")), offer.times, offer.reply)
+    talks.offered(thread.id, thread.source, thread.conversation, title, offer.times, offer.reply)
     _write(here / "reply.md", offer.reply + "\n")
     return 1
 
 
-def _confirm(talks: Talks, held: Any, chosen: str, root: Path, run: Run, clock: Callable[[], datetime]) -> None:
+def _confirm(talks: Talks, held: Any, chosen: str, root: Path, run: Run, clock: Callable[[], datetime]) -> bool:
     """The recruiter's answer named a time: move the held event to it when it is one offered."""
     try:
         where = zone(read_settings(root / "data" / "settings.json"))
@@ -658,6 +669,8 @@ def _confirm(talks: Talks, held: Any, chosen: str, root: Path, run: Run, clock: 
     except (SettingsError, ValueError, TimesError, ReplyError) as error:
         log_failure(root / "data", "hunt draft-replies",
                     f"the held event {held.title} was not confirmed at {chosen}: {error}", clock)
+        return False
+    return True
 
 
 def offer_times(threads: Threads, root: Path, thread: int, *, run: Run,

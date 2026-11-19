@@ -351,11 +351,13 @@ class Talks:
         return talk if last + LENGTH > now else None
 
     def held_before(self, talk: Talk) -> Talk | None:
-        """An earlier offer of the same conversation still held: a new offer moves its event."""
+        """An earlier offer of the same conversation still held and still to come: a new offer moves
+        its event. One whose times are all over keeps its event: the next round is a call of its own."""
         row = self._db.execute(
             "SELECT thread FROM talks WHERE source = ? AND conversation = ? AND state = 'held' AND thread < ?"
             " ORDER BY thread DESC LIMIT 1", (talk.source, talk.conversation, talk.thread)).fetchone()
-        return None if row is None else self.get(row["thread"])
+        earlier = None if row is None else self.get(row["thread"])
+        return earlier if earlier is not None and max(earlier.times()) + LENGTH > self._clock() else None
 
     def _set(self, thread: int, **values: object) -> None:
         names = ", ".join(f"{name} = ?" for name in values)

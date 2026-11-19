@@ -1075,6 +1075,28 @@ def test_a_jobs_own_try_again_is_not_held_by_its_host(project: Path, jobs: JobsL
     assert (jobs.get(captcha).state, waiting.slept) == ("applied", [])
 
 
+def test_jobs_resumed_in_their_tabs_after_done_are_not_held_by_their_host(project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    picked = []
+    for number in (1, 2):
+        job = jobs.add(_found(number, link=f"https://boards.greenhouse.io/example/jobs/{number}"), kind="company_site")
+        jobs.score(job, 8, "Good.")
+        jobs.move(job, "picked")
+        picked.append(job)
+    captcha = {"result": "paused", "needs": "captcha", "tab": "Apply"}
+    sites = Sites(project, {job: [captcha, captcha, {"result": "applied"}] for job in picked})
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=Waiting(clock))
+    clock.advance(hours=3)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=Waiting(clock))
+    assert [jobs.get(job).state for job in picked] == ["paused"] * 2
+    for job in picked:
+        resume_job(jobs, job)
+    # Both CAPTCHAs were solved for one "done": a solved CAPTCHA does not last 10 minutes.
+    waiting = Waiting(clock)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=waiting)
+    assert ([jobs.get(job).state for job in picked], waiting.slept) == (["applied"] * 2, [])
+
+
 def test_the_host_is_the_company_site_a_linkedin_job_sends_to(project: Path, jobs: JobsList) -> None:
     clock = jobs._clock
     found = []

@@ -32,7 +32,8 @@ is asked when they are free (`available`); after `CAPTCHA_ASKS` questions, or at
 settings' `captcha` set to `skip`, it is `failed`, to apply by hand.
 
 Fewer CAPTCHAs: two company-site workers start on one site's host at least `HOST_SPACING`
-apart, and at most `HOST_DAILY` a day; the rest wait for the next day.
+apart, and at most `HOST_DAILY` a day; the rest wait for the next day. A job going on in the tab
+it paused in is not held: it is the same application.
 """
 
 from __future__ import annotations
@@ -393,6 +394,10 @@ def _next_site(this: _Run, waiting: list[int]) -> tuple[int | None, float | None
     day = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
     soonest = None
     for job in list(waiting):
+        # Going on in the tab it paused in, after "done": the same application, and a solved
+        # CAPTCHA does not last the spacing.
+        if _paused(_folder(this.root, job) / "report.json", SITE_SKILL) is not None:
+            return job, None
         on = host(this.jobs.get(job))
         if len(this.jobs.starts_on(on, day, but=job)) >= HOST_DAILY:
             this.jobs.later(job, day + timedelta(days=1))

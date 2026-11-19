@@ -1,9 +1,9 @@
 """Applying: a resume for every picked job, then the applications.
 
-`apply` is the coordinator. It starts one resume worker per picked job, all at once (`claude -p`
-with the `write-resume` skill), and moves each job to `resume_ready` once its `resume.pdf` is
-built. Then up to three company-site workers at once (`claude --chrome -p` with the `apply-site`
-skill), and beside them one LinkedIn worker for the Easy Apply jobs (`apply-linkedin`), one job
+`apply` is the coordinator. It starts one resume worker per picked job, up to `RESUME_WORKERS` at
+once (`claude -p` with the `write-resume` skill), and moves each job to `resume_ready` once its
+`resume.pdf` is built. Then up to three company-site workers at once, or the day's plan's
+`site_workers` (`claude --chrome -p` with the `apply-site` skill), and beside them one LinkedIn worker for the Easy Apply jobs (`apply-linkedin`), one job
 after another under the LinkedIn lock (`linkedin_lock`), three to six minutes apart. Each
 applies to one job in a Chrome tab of its own and writes `jobs/<id>/report.json`:
 
@@ -24,6 +24,22 @@ can be read by may have sent the application, so its job is paused for the user 
 Chrome (`UNSURE`) and never tried again on its own. Run again, it picks up from each job's state
 and never starts a second worker on a job that was being applied to. A resume worker sends
 nothing: one that fails counts against its job.
+
+A pause for a CAPTCHA or a sign-in is first tried again on its own, once, `RETRY_AFTER` later and
+in a fresh tab (`JobsList.retry`): the site may not ask again, and a password manager may have
+signed the browser in meanwhile. A job still on a CAPTCHA after that waits for the person, who
+is asked when they are free (`available`); after `CAPTCHA_ASKS` questions, or at once with the
+settings' `captcha` set to `skip`, it is `failed`, to apply by hand.
+
+Fewer CAPTCHAs: two company-site workers start on one site's host at least `HOST_SPACING`
+apart, and at most `HOST_DAILY` a day; the rest wait for the next day. A job going on in the tab
+it paused in is not held: it is the same application.
+
+With the day's plan (`plan`), the jobs start in its order, leftovers of an earlier day first,
+spread over the day, up to its daily numbers, from the morning hour to the summary hour; the rest
+wait for the next morning hour. A job whose title was applied to at the same company lately is left out
+(skipped), whatever the plan. A job skipped while the run goes on is not started; one picked
+or put back meanwhile is taken by the same run, its resume written first.
 """
 
 from __future__ import annotations
@@ -34,14 +50,16 @@ import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
 from job_hunt.career import career_lock, read_career, write_career
 from job_hunt.finder import ONLY_NAMED_TOOLS
-from job_hunt.jobs import Job, JobsList, State
+from job_hunt.jobs import CAPTCHA_ASKS, Job, JobsList, MoveError, State
 from job_hunt.linkedin_lock import LinkedInLock
+from job_hunt.plan import LINKEDIN_HOST, RESUME_WORKERS, Plan, applied_lately, gap, midnight, order, started_today
 from resume_kit.contracts.form_answers import asks_self_identification
 
 MODEL = "claude-sonnet-5-5"
@@ -62,6 +80,18 @@ NEEDS = {"captcha": "a CAPTCHA solved", "sign_in": "a sign-in or a new account",
          "check_sent": UNSURE,
          # Chrome closed or its extension not connected: no tab, and no try of the job spent.
          "chrome": "Chrome open, with the Claude extension connected"}
+
+# A pause tried again once on its own, this much later.
+RETRIED = ("captcha", "sign_in")
+RETRY_AFTER = timedelta(hours=3)
+CAPTCHA_FAILED = "the site asks for a CAPTCHA"
+HOST_SPACING = timedelta(minutes=10)
+HOST_DAILY = 6
+# The longest the run waits without looking for jobs put back meanwhile: an answered job or a
+# solved CAPTCHA goes on in its tab within it, not after the spread's 15 minutes.
+NAP = 60.0
+# Half a second of tries at the run's lock.
+LOCK_TRIES = 10
 
 Run = Callable[[list[str]], None]
 
@@ -101,9 +131,15 @@ class Summary:
     applied: int = 0
     paused: int = 0
     failed: int = 0
+    # Left for a later hunt apply: a pause tried again later, or a site's or the day's limit.
+    later: int = 0
+    # Skipped: the same title at the same company was applied to lately.
+    left_out: int = 0
 
     def __str__(self) -> str:
-        return f"{self.resumes} resumes written; {self.applied} applied, {self.paused} paused, {self.failed} failed"
+        said = f"{self.resumes} resumes written; {self.applied} applied, {self.paused} paused, {self.failed} failed"
+        said += f", {self.later} left for later" if self.later else ""
+        return said + (f", {self.left_out} left out as applied to lately" if self.left_out else "")
 
 
 def _folder(root: Path, job: int) -> Path:
@@ -232,25 +268,59 @@ def read_report(path: Path, skill: str = SITE_SKILL) -> Report:
     return Report("paused", needs=needs, question=question if needs == "question" else None, tab=tab, tab_id=tab_id)
 
 
+@dataclass(frozen=True)
+class _Run:
+    """What the parts of one `hunt apply` share."""
+    jobs: JobsList
+    root: Path
+    summary: Summary
+    captcha: str
+    clock: Callable[[], datetime]
+    plan: Plan | None = None
+
+
 def apply(
-    jobs: JobsList, root: Path, *, run_resume: Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock | None = None
+    jobs: JobsList, root: Path, *, run_resume: Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock | None = None,
+    captcha: str = "ask", sleep: Callable[[float], None] = time.sleep, plan: Plan | None = None,
 ) -> Summary:
+    """Without a plan, only the limits of this module hold: no daily number, no spread, no end of
+    the day."""
     (root / "jobs").mkdir(exist_ok=True)
     # One run at a time: two would start two workers on one job.
     with (root / "jobs" / "apply.lock").open("w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise ApplyError("another hunt apply is already running") from error
+        # A few tries: `hunt questions` holds it for a moment to see whether a run holds it.
+        for tries in range(LOCK_TRIES, 0, -1):
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                if tries == 1:
+                    # Said to the person after "done" or an answer: the run going on takes it.
+                    raise ApplyError("another hunt apply is already running;"
+                                     " it takes the jobs put back within a minute") from error
+                time.sleep(0.05)
         summary = Summary()
-        _left_applying(jobs, root, summary)
+        this = _Run(jobs, root, summary, captcha, jobs.now, plan)
+        _left_applying(this)
         _resumes(jobs, root, run_resume, summary)
-        _applications(jobs, root, run_site, run_linkedin, linkedin or LinkedInLock(root / "data"), summary)
+        # A run spread over the day takes the jobs picked meanwhile too, by a later morning run.
+        while _applications(this, run_site, run_linkedin, linkedin or LinkedInLock(root / "data"), sleep):
+            _resumes(jobs, root, run_resume, summary)
         return summary
 
 
-def _save(jobs: JobsList, job: int, report: Report, summary: Summary) -> State:
-    if report.result == "applied":
+def _save(this: _Run, job: int, report: Report) -> State:
+    jobs, summary = this.jobs, this.summary
+    if report.result == "paused" and report.needs in RETRIED and not jobs.get(job).retries:
+        jobs.retry(job, this.clock() + RETRY_AFTER)
+        # The try again opens a fresh tab: the report of this pause is not carried on from.
+        (_folder(this.root, job) / "report.json").unlink(missing_ok=True)
+        summary.later += 1
+    elif report.result == "paused" and report.needs == "captcha" and (
+            this.captcha == "skip" or jobs.get(job).asks >= CAPTCHA_ASKS):
+        jobs.move(job, "failed", CAPTCHA_FAILED)
+        summary.failed += 1
+    elif report.result == "applied":
         jobs.move(job, "applied")
         summary.applied += 1
     elif report.result == "company_site":
@@ -263,17 +333,17 @@ def _save(jobs: JobsList, job: int, report: Report, summary: Summary) -> State:
     return jobs.get(job).state
 
 
-def _left_applying(jobs: JobsList, root: Path, summary: Summary) -> None:
+def _left_applying(this: _Run) -> None:
     """Jobs an earlier run stopped on while their worker ran: its report, when it wrote one, is
     saved; without one the application may have been sent, so the user looks."""
-    for job in jobs.in_states("applying"):
+    for job in this.jobs.in_states("applying"):
         try:
-            report = read_report(_folder(root, job.id) / "report.json", _skill(job))
+            report = read_report(_folder(this.root, job.id) / "report.json", _skill(job))
         except ApplyError:
-            jobs.move(job.id, "paused", f"{UNSURE}: the last hunt apply stopped while applying")
-            summary.paused += 1
+            this.jobs.move(job.id, "paused", f"{UNSURE}: the last hunt apply stopped while applying")
+            this.summary.paused += 1
             continue
-        _save(jobs, job.id, report, summary)
+        _save(this, job.id, report)
 
 
 def _write_resume(job: int, root: Path, run: Run) -> str | None:
@@ -285,6 +355,34 @@ def _write_resume(job: int, root: Path, run: Run) -> str | None:
     return None if (_folder(root, job) / "resume.pdf").exists() else f"the {RESUME_SKILL} run built no resume.pdf"
 
 
+def _moved(jobs: JobsList, job: int, state: State) -> bool:
+    """Move the job, or leave it as another command moved it meanwhile (`hunt skip` from the
+    chat): the run goes on with the others."""
+    try:
+        jobs.move(job, state)
+    except MoveError:
+        return False
+    return True
+
+
+def _failed(jobs: JobsList, job: int, failure: str) -> bool:
+    """Count a failed resume against the job: whether it failed for good. Skipped meanwhile, it
+    is left as it is."""
+    try:
+        return jobs.fail(job, failure) == "failed"
+    except MoveError:
+        return False
+
+
+def _later(jobs: JobsList, job: int, not_before: datetime) -> bool:
+    """Leave the job for `not_before`, unless another command moved it meanwhile."""
+    try:
+        jobs.later(job, not_before)
+    except MoveError:
+        return False
+    return True
+
+
 def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
     # A job failed once is written again at once; each pass has fewer, as failures count.
     while picked := jobs.in_states("picked"):
@@ -292,19 +390,21 @@ def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
         for job in picked:
             _folder(root, job.id).mkdir(parents=True, exist_ok=True)
             if (_folder(root, job.id) / "resume.pdf").exists():
-                jobs.move(job.id, "resume_ready")
+                _moved(jobs, job.id, "resume_ready")
             else:
                 todo.append(job.id)
         if not todo:
             return
-        with ThreadPoolExecutor(max_workers=len(todo)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(todo), RESUME_WORKERS)) as pool:
             failures = list(zip(todo, pool.map(lambda job: _write_resume(job, root, run), todo)))
         for job, failure in failures:
+            # Skipped meanwhile: its resume is never used.
+            if jobs.get(job).state != "picked":
+                continue
             if failure is None:
-                jobs.move(job, "resume_ready")
-                summary.resumes += 1
-            elif jobs.fail(job, failure) == "failed":
-                summary.failed += 1
+                summary.resumes += _moved(jobs, job, "resume_ready")
+            else:
+                summary.failed += _failed(jobs, job, failure)
 
 
 def _paused(report: Path, skill: str) -> Report | None:
@@ -338,54 +438,234 @@ def _apply_one(job: Job, root: Path, run: Run, paused: Report | None) -> Report:
         return _unsure(error)
 
 
-def _applications(jobs: JobsList, root: Path, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock,
-                  summary: Summary) -> None:
-    ready = jobs.in_states("resume_ready")
+def host(job: Job) -> str:
+    """The host a company-site worker applies on, without its `www.`: where its link ended, not
+    a click-tracking link's own host."""
+    return (urlsplit(job.apply_link or job.page_link or job.link).hostname or "").lower().removeprefix("www.")
+
+
+def _midnight(now: datetime, days: int = 0) -> datetime:
+    """Midnight of the computer's day of `now`, `days` on, at midnight's own offset: on a day the
+    clocks change, it is not the offset of `now`."""
+    return datetime.combine(now.astimezone().date() + timedelta(days=days), datetime.min.time()).astimezone()
+
+
+def _continues(this: _Run, job: int) -> bool:
+    """Going on in the tab it paused in, after "done": the same application, and a solved CAPTCHA
+    does not last a wait."""
+    paused = _paused(_folder(this.root, job) / "report.json", _skill(this.jobs.get(job)))
+    return paused is not None and paused.tab is not None
+
+
+def _held(this: _Run, job: int, skill: str) -> bool:
+    """Whether the job leaves the waiting: skipped meanwhile, left out as its title was applied to
+    lately, or past the day's plan, for the next morning."""
+    jobs, plan, now = this.jobs, this.plan, this.clock()
+    found = jobs.get(job)
+    if found.state != "resume_ready":
+        return True
+    if _continues(this, job):
+        return False
+    # One answered or put back after its CAPTCHA, before this starts, is still that application.
+    going_on = [other.id for other in jobs.in_states("resume_ready") if other.id != job and _continues(this, other.id)]
+    if applied_lately(jobs, found, now, going_on=going_on) is not None:
+        this.summary.left_out += _moved(jobs, job, "skipped")
+        return True
+    if plan is None:
+        return False
+    linkedin = jobs.starts_on(LINKEDIN_HOST, midnight(now), but=job)
+    if (not plan.day_start(now) <= now < plan.day_end(now) or len(started_today(jobs, now) - {job}) >= plan.daily
+            or (skill == LINKEDIN_SKILL and len(linkedin) >= plan.linkedin_daily)):
+        this.summary.later += _later(jobs, job, plan.next_morning(now))
+        return True
+    return False
+
+
+def _spread(this: _Run, waiting: int) -> float | None:
+    """How many seconds until the plan's spread lets a new application start, or None when one
+    may start now."""
+    if this.plan is None:
+        return None
+    now = this.clock()
+    starts = this.jobs.started_since(midnight(now))
+    if not starts:
+        return None
+    # From the last start, the day shared as it was then: rechecked each nap, it stays put.
+    last = max(starts.values())
+    left = last + gap(this.plan, last, min(waiting, this.plan.daily - len(starts))) - now
+    return left.total_seconds() if left > timedelta(0) else None
+
+
+def _next_site(this: _Run, waiting: list[int], spread: float | None = None) -> tuple[int | None, float | None]:
+    """The first waiting job whose host may be started on now, or None and how many seconds until
+    one may. A job whose host had its starts of the day waits for the next day; with a `spread`
+    to wait, only a job going on in its tab starts."""
+    now = this.clock()
+    day = _midnight(now)
+    soonest = spread
+    for job in list(waiting):
+        if _held(this, job, SITE_SKILL):
+            waiting.remove(job)
+            continue
+        if _continues(this, job):
+            return job, None
+        if spread is not None:
+            continue
+        on = host(this.jobs.get(job))
+        if len(this.jobs.starts_on(on, day, but=job)) >= HOST_DAILY:
+            this.summary.later += _later(this.jobs, job, _midnight(now, days=1))
+            waiting.remove(job)
+            continue
+        # Also across midnight: the last start of yesterday counts.
+        recent = this.jobs.starts_on(on, now - HOST_SPACING, but=job)
+        if recent and (left := (max(recent.values()) + HOST_SPACING - now).total_seconds()) > 0:
+            soonest = left if soonest is None else min(soonest, left)
+            continue
+        return job, None
+    return None, soonest
+
+
+def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock,
+                  sleep: Callable[[float], None]) -> bool:
+    """Apply to the jobs ready now and to those ready meanwhile. True when it stopped, with
+    nothing running, for jobs picked meanwhile, whose resumes are written first, or for jobs put
+    back as it ended."""
+    jobs, root = this.jobs, this.root
     waiting: dict[str, list[int]] = {SITE_SKILL: [], LINKEDIN_SKILL: []}
-    for job in ready:
-        if job.kind in ("easy_apply", "company_site"):
-            waiting[_skill(job)].append(job.id)
     running: dict[Future[Report], tuple[int, str]] = {}
 
-    def start(job: int, run: Run) -> None:
+    def gather() -> None:
+        """The jobs ready and due that wait for no worker yet: at the start, and each turn the ones
+        a time came for or another command put back."""
+        known = {job for line in waiting.values() for job in line} | {job for job, _ in running.values()}
+        new = [job for job in jobs.in_states("resume_ready")
+               if jobs.due(job) and job.id not in known and job.kind in ("easy_apply", "company_site")]
+        if not new:
+            return
+        for job in new:
+            waiting[_skill(job)].append(job.id)
+        # The whole line in the plan's order: a leftover due now goes before today's picks.
+        for skill, line in waiting.items():
+            waiting[skill] = [job.id for job in order([jobs.get(job) for job in line])]
+
+    def start(job: int, run: Run) -> bool:
+        """Start the job's worker; False when the job was moved meanwhile (skipped from the chat)."""
         skill = _skill(jobs.get(job))
         report = _folder(root, job) / "report.json"
         paused = _paused(report, skill)
         # Gone before the job is `applying`: a run stopped in between must not take an
         # earlier try's report for this one's.
         report.unlink(missing_ok=True)
-        jobs.move(job, "applying")
+        try:
+            jobs.move(job, "applying")
+        except MoveError:
+            return False
+        jobs.started_on(host(jobs.get(job)) if skill == SITE_SKILL else LINKEDIN_HOST, job)
         running[pool.submit(_apply_one, jobs.get(job), root, run, paused)] = (job, skill)
+        return True
 
     # The jobs list is written here only, on this thread; the workers run the skills.
     try:
-        with ThreadPoolExecutor(max_workers=SITE_WORKERS + 1) as pool:
+        workers = this.plan.site_workers if this.plan is not None else SITE_WORKERS
+        with ThreadPoolExecutor(max_workers=workers + 1) as pool:
+            def sites() -> float | None:
+                """Start the company-site jobs that may start now; how long until one may."""
+                busy = sum(skill == SITE_SKILL for _, skill in running.values())
+                site_later = None
+                while waiting[SITE_SKILL] and busy < workers:
+                    spread = _spread(this, sum(map(len, waiting.values())))
+                    chosen, site_later = _next_site(this, waiting[SITE_SKILL], spread)
+                    if chosen is None:
+                        break
+                    waiting[SITE_SKILL].remove(chosen)
+                    busy += start(chosen, run_site)
+                return site_later
+
+            def linkedin_one() -> float | None:
+                """Start the next LinkedIn job when it may; how long until it may, when it waits for
+                the lock or the spread. The lock alone keeps it to one; while this run's own
+                applies, it is not asked."""
+                in_line = waiting[LINKEDIN_SKILL]
+                # A job going on in its tab goes first: it waits for no spread, and a solved
+                # CAPTCHA does not last one.
+                going_on = [job for job in in_line if _continues(this, job)]
+                in_line[:] = going_on + [job for job in in_line if job not in going_on]
+                while in_line and all(skill != LINKEDIN_SKILL for _, skill in running.values()):
+                    if _held(this, in_line[0], LINKEDIN_SKILL):
+                        in_line.pop(0)
+                        continue
+                    if not _continues(this, in_line[0]) and (
+                            later := _spread(this, sum(map(len, waiting.values())))) is not None:
+                        return later
+                    later = linkedin.take(in_line[0])
+                    if later is None and not start(in_line.pop(0), run_linkedin):
+                        # Skipped as it started: the lock goes back, and the next one waits the pause.
+                        linkedin.release()
+                        continue
+                    return later
+                return None
+
+            gather()
             while any(waiting.values()) or running:
-                sites = sum(skill == SITE_SKILL for _, skill in running.values())
-                while waiting[SITE_SKILL] and sites < SITE_WORKERS:
-                    start(waiting[SITE_SKILL].pop(0), run_site)
-                    sites += 1
-                # How long until the LinkedIn worker may start, when it waits for the lock. The
-                # lock alone keeps it to one; while this run's own applies, it is not asked.
-                later = None
-                if waiting[LINKEDIN_SKILL] and all(skill != LINKEDIN_SKILL for _, skill in running.values()):
-                    later = linkedin.take(waiting[LINKEDIN_SKILL][0])
-                    if later is None:
-                        start(waiting[LINKEDIN_SKILL].pop(0), run_linkedin)
+                gather()
+                # The next start, of the spread or the day's number, goes to the job first in the
+                # plan's order, of either kind: the LinkedIn worker first when its job comes first.
+                first = [jobs.get(line[0]) for line in waiting.values() if line]
+                if len(first) == 2 and order(first)[0].id == waiting[LINKEDIN_SKILL][0]:
+                    linkedin_later = linkedin_one()
+                    site_later = sites()
+                else:
+                    site_later = sites()
+                    linkedin_later = linkedin_one()
+                later = min((each for each in (linkedin_later, site_later) if each is not None), default=None)
                 if not running:
-                    time.sleep(later or 0)
+                    if jobs.in_states("picked"):
+                        return True
+                    if later is not None:
+                        sleep(min(later, NAP))
                     continue
-                done, _ = wait(running, timeout=later, return_when=FIRST_COMPLETED)
+                done, _ = wait(running, timeout=min(later, NAP) if later is not None else NAP,
+                               return_when=FIRST_COMPLETED)
                 for future in done:
                     job, skill = running.pop(future)
                     if skill == LINKEDIN_SKILL:
                         linkedin.release()
-                    if _save(jobs, job, future.result(), summary) == "resume_ready":
+                    if _save(this, job, future.result()) == "resume_ready" and jobs.due(jobs.get(job)):
                         waiting[_skill(jobs.get(job))].append(job)
+            # Picked or put back while the last application ran: the same run goes on, a picked
+            # job's resume first.
+            return bool(jobs.in_states("picked")) or any(
+                job.kind in ("easy_apply", "company_site") and jobs.due(job) for job in jobs.in_states("resume_ready"))
     finally:
         # A run stopped while the LinkedIn worker applied still starts the pause, once the
         # worker ended.
         linkedin.release()
+    return False
+
+
+def apply_running(root: Path) -> bool:
+    """Whether a `hunt apply` holds its lock now: a run spread over the day takes the jobs ready
+    meanwhile itself."""
+    path = root / "jobs" / "apply.lock"
+    if not path.exists():
+        return False
+    with path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        # Let go at once: a run starting now must not find it held.
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    return False
+
+
+def skip_captchas(jobs: JobsList) -> list[Job]:
+    """With the settings' `captcha` set to `skip`: the jobs already waiting on a CAPTCHA are
+    failed too, to apply by hand, and never asked."""
+    skipped = [job for job in jobs.in_states("paused") if (job.state_reason or "").startswith(NEEDS["captcha"])]
+    for job in skipped:
+        jobs.move(job.id, "failed", CAPTCHA_FAILED)
+    return skipped
 
 
 def _paused_job(jobs: JobsList, job: int) -> Job:
@@ -406,8 +686,11 @@ def applied(jobs: JobsList, job: int) -> Job:
 
 
 def resume_job(jobs: JobsList, job: int) -> Job:
-    """Put a paused job back once the user did what it needed; the next run applies to it."""
-    _paused_job(jobs, job)
+    """Put a paused job back once the user did what it needed; the next run applies to it, in the
+    tab it paused in. A "done" to a CAPTCHA counts as its question, once a pause, also when it
+    was asked from `hunt status` and not `hunt questions`."""
+    if (_paused_job(jobs, job).state_reason or "").startswith(NEEDS["captcha"]):
+        jobs.asked(job)
     jobs.move(job, "resume_ready")
     return jobs.get(job)
 

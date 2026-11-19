@@ -1,0 +1,26 @@
+{
+ "data": [
+  {
+   "slug": "qa-automation-engineer-hamburg-305",
+   "company_name": "Muster GmbH",
+   "title": "QA Automation Engineer",
+   "description": "&lt;p&gt;Hamburg, remote.&lt;/p&gt;",
+   "remote": true,
+   "url": "https://www.arbeitnow.com/jobs/companies/muster-gmbh/qa-automation-engineer-hamburg-305",
+   "tags": [],
+   "job_types": [],
+   "location": "Hamburg",
+   "created_at": 1794940000
+  }
+ ],
+ "links": {
+  "first": "https://www.arbeitnow.com/api/job-board-api?page=1",
+  "last": null,
+  "prev": "https://www.arbeitnow.com/api/job-board-api?page=1",
+  "next": null
+ },
+ "meta": {
+  "current_page": 2,
+  "per_page": 300
+ }
+}

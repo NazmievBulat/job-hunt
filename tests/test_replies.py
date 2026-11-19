@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import threading
 from datetime import UTC, datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -413,6 +414,17 @@ def test_the_sender_gets_only_the_tools_of_its_channel(project: Path, threads: T
     assert "Gmail" not in linkedin_tools[linkedin_tools.index("--allowedTools") + 1]
 
 
+def test_a_linkedin_reply_without_a_resume_cannot_upload_a_file(project: Path, threads: Threads, jobs: JobsList) -> None:
+    # It types into a stranger's conversation with nobody watching: only a reply that goes out
+    # with the resume may upload, and test_times pins that one.
+    (linkedin,) = _saved(threads, jobs, _linkedin(2))
+    command = send_command(threads.get(linkedin), "Hi", project)
+    tools = command[command.index("--allowedTools") + 1].split(",")
+
+    assert "mcp__claude-in-chrome__computer" in tools and "mcp__claude-in-chrome__form_input" in tools
+    assert "mcp__claude-in-chrome__file_upload" not in tools
+
+
 # Reading LinkedIn
 
 
@@ -732,7 +744,9 @@ def test_hunt_watch_drafts_and_asks_and_send_reply_says_how_it_went(
     sent: dict | None, code: int, state: str
 ) -> None:
     threads = Threads(hunt / "data" / "jobs.db")
-    threads.finished_read("linkedin", datetime.now().astimezone())
+    # The watch's own clock, not the machine's: from the summary hour (23 here) it does nothing.
+    monkeypatch.setattr(cli, "watch", partial(watch, clock=lambda: MORNING))
+    threads.finished_read("linkedin", MORNING)
     monkeypatch.setattr(cli, "run_claude", FakeClaude({"emails": 0, "jobs": [], "recruiter_emails": [_email(1)],
                                                        "linkedin_notifications": 0}, sent))
 

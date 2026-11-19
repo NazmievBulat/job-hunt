@@ -16,23 +16,26 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from job_hunt.apply import (
-    LINKEDIN_SKILL, RESUME_SKILL, SITE_SKILL, AnswerError, ApplyError, answer, apply, applied, resume_job,
+    LINKEDIN_SKILL, NEEDS, RESUME_SKILL, SITE_SKILL, AnswerError, skip_captchas, ApplyError, answer, apply, applied, resume_job,
 )
+from job_hunt.available import TELL_JOBS, Verdict, available, day_ends, replied, run_quietly, watch_jobs
 from job_hunt.career import (
     STANDING, Career, CareerError, career_from_export, career_from_resume, career_lock, read_career,
     resume_text, with_ready_answers, write_career,
 )
 from job_hunt.doctor import Machine, doctor, remote_desktop_ready
 from job_hunt.companies import Companies, fill_index
+from job_hunt.feeds import Feeds
 from job_hunt.finder import SKILL as ALERTS_SKILL, FinderError, fetch_page, find, run_claude
 from job_hunt.finder import Summary as FindSummary
 from job_hunt.jobs import Job, JobsList, PickError
 from job_hunt.linkedin_lock import LinkedInLock
-from job_hunt.morning import morning, session_running, start_session
+from job_hunt.morning import FIRST_MESSAGE, morning, session_running, start_session
 from job_hunt.notes import DRAFT_SKILL as NOTE_DRAFT_SKILL, SEND_SKILL as NOTE_SEND_SKILL, NoteError, Notes, collect
 from job_hunt.notes import decide as decide_notes, draft_notes, note_pause, send_notes, stopped_today, went
 from job_hunt.notify import NotifyError, notify, post_pushover
-from job_hunt.questions import job_line, log_failure, questions, then
+from job_hunt.plan import Plan, auto_pick, today
+from job_hunt.questions import job_line, log_failure, questions, show_picks, then
 from job_hunt.replies import (
     DRAFT_SKILL, READ_SKILL, SEND_SKILL, EmailMessages, ReplyError, Threads, draft_replies, edit_reply, hold_times,
     offer_times, read_linkedin, send_reply, skip_reply,
@@ -41,9 +44,10 @@ from job_hunt.resume import ContentError, write_pdf
 from job_hunt.scoring import SKILL as SCORE_SKILL, ScoreError, score
 from job_hunt.scoring import Summary as ScoreSummary
 from job_hunt.search import Pace, Search, http_get
-from job_hunt.settings import SettingsError, read_settings
+from job_hunt.settings import Settings, SettingsError, read_settings
 from job_hunt.timer import TimerError, timer
-from job_hunt.watch import tell_session, watch
+from job_hunt.times import Talks, zone
+from job_hunt.watch import TELL, in_hours, tell_session, watch
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -169,6 +173,11 @@ def site_search() -> Search | None:
                   clock=lambda: datetime.now(UTC))
 
 
+def public_feeds() -> Feeds | None:
+    """The public job feeds, over the network."""
+    return Feeds(get=http_get, sleep=SLEEP)
+
+
 def find_step() -> FindSummary:
     # The settings first: without them nothing is made in data/.
     settings = read_settings(DATA / "settings.json")
@@ -182,6 +191,7 @@ def find_step() -> FindSummary:
         fetch=fetch_page,
         search=site_search(),
         messages=EmailMessages(Threads(DATA / "jobs.db"), jobs),
+        feeds=public_feeds(),
     )
     for problem in summary.problems:
         print(f"hunt find: left out {problem}", file=sys.stderr)
@@ -248,6 +258,11 @@ def _score(args: argparse.Namespace) -> int:
 
 
 def _list(args: argparse.Namespace) -> int:
+    plan = day_plan()
+    if plan is not None and plan.auto_from is not None:
+        # Picked by their score: today's picks, numbered for hunt skip.
+        print(show_picks(JobsList(DATA / "jobs.db"), plan.auto_from) or "No picks wait to start today.")
+        return 0
     shown = JobsList(DATA / "jobs.db").show()
     if not shown:
         print("No scored jobs wait for your pick.")
@@ -295,10 +310,35 @@ def run_linkedin(command: list[str]) -> None:
     run_claude(command, ROOT, skill=LINKEDIN_SKILL, error=ApplyError)
 
 
+def _captcha_setting() -> str:
+    """The settings' `captcha`; with settings that cannot be read, `ask`, as when it is left out."""
+    try:
+        return read_settings(DATA / "settings.json").captcha
+    except SettingsError:
+        return "ask"
+
+
+def day_plan() -> Plan | None:
+    """The day's plan of the settings; None when they cannot be read, and then only `apply`'s own
+    limits hold, as before there was a plan."""
+    try:
+        return Plan.of(read_settings(DATA / "settings.json"))
+    except SettingsError:
+        return None
+
+
+def pick_step() -> str | None:
+    """Pick the jobs at or above the settings' score, when they give one."""
+    plan = day_plan()
+    if plan is None or plan.auto_from is None:
+        return None
+    return str(auto_pick(JobsList(DATA / "jobs.db"), plan))
+
+
 def _apply(args: argparse.Namespace) -> int:
     try:
         summary = apply(JobsList(DATA / "jobs.db"), ROOT, run_resume=run_resume, run_site=run_site,
-                        run_linkedin=run_linkedin)
+                        run_linkedin=run_linkedin, captcha=_captcha_setting(), plan=day_plan())
     except ApplyError as error:
         print(f"hunt apply: {error}", file=sys.stderr)
         return 1
@@ -388,15 +428,27 @@ def _named(job: Job) -> str:
     return f"{job.title} at {job.company}"
 
 
+def _resume_jobs(args: argparse.Namespace) -> int:
+    """Every job of a reply "done": one that cannot go on is said, and the others go on."""
+    jobs, refused = JobsList(DATA / "jobs.db"), False
+    for each in dict.fromkeys(args.jobs):
+        try:
+            job = resume_job(jobs, each)
+        except AnswerError as error:
+            print(f"hunt resume-job: {error}", file=sys.stderr)
+            refused = True
+            continue
+        print(f"job {job.id} ({_named(job)}) goes on at the next hunt apply")
+    return 1 if refused else 0
+
+
 def _answer(args: argparse.Namespace) -> int:
     jobs = JobsList(DATA / "jobs.db")
     try:
         if args.command == "answer":
             job = answer(jobs, ROOT, args.job, args.text)
-        elif args.command == "applied":
-            job = applied(jobs, args.job)
         else:
-            job = resume_job(jobs, args.job)
+            job = applied(jobs, args.job)
     except AnswerError as error:
         print(f"hunt {args.command}: {error}", file=sys.stderr)
         return 1
@@ -408,11 +460,15 @@ def _answer(args: argparse.Namespace) -> int:
     return 0
 
 
-def _waits_for(job: Job) -> str:
+def _waits_for(job: Job, now: datetime) -> str:
     if job.state == "picked":
         return "resume not written yet"
     if job.state == "applying":
         return "being applied to"
+    if job.not_before is not None:
+        when = datetime.fromisoformat(job.not_before).astimezone()
+        day = "" if when.date() == now.astimezone().date() else when.strftime("%a %d %b ")
+        return f"resume ready, for a hunt apply from {day}{when:%H:%M} on"
     if job.kind in ("company_site", "easy_apply"):
         return "resume ready, for the next hunt apply"
     return "resume ready; the way to apply is not known"
@@ -439,13 +495,35 @@ def _notes_status(notes: Notes) -> list[str]:
     return lines
 
 
+def _not_asked(job: Job) -> str:
+    """A CAPTCHA held all day: the end of the day's summary names it, as it was never asked."""
+    held = (job.state_reason or "").startswith(NEEDS["captcha"]) and not job.asks
+    return "; not asked yet, as you were not free" if held else ""
+
+
 def _status(args: argparse.Namespace) -> int:
     jobs = JobsList(DATA / "jobs.db")
+    if _captcha_setting() == "skip":
+        # `/apply` asks from here, as `hunt questions` does from its own list.
+        skip_captchas(jobs)
+    paused = ("Paused", jobs.in_states("paused"),
+              lambda job: f": needs {job.state_reason}{_not_asked(job)} (then: {then(job)})")
+    if args.today:
+        # The day's summary, and what waits for the person with the command after it.
+        plan = day_plan()
+        for line in today(jobs, jobs.now(), auto_from=plan.auto_from if plan is not None else None).lines():
+            print(line)
+        name, listed, why = paused
+        if listed:
+            print(f"{name} ({len(listed)}):")
+        for job in listed:
+            print(f"  {job.id}. {_named(job)}{why(job)}")
+        return 0
     groups = [
         ("Applied", jobs.in_states("applied"), lambda job: ""),
-        ("Paused", jobs.in_states("paused"), lambda job: f": needs {job.state_reason} (then: {then(job)})"),
+        paused,
         ("Failed", jobs.in_states("failed"), lambda job: f": {job.state_reason}"),
-        ("Waiting", jobs.in_states("picked", "resume_ready", "applying"), lambda job: f": {_waits_for(job)}"),
+        ("Waiting", jobs.in_states("picked", "resume_ready", "applying"), lambda job: f": {_waits_for(job, jobs.now())}"),
     ]
     if not any(listed for _, listed, _ in groups):
         print("No picked jobs yet.")
@@ -464,7 +542,9 @@ def _morning(args: argparse.Namespace) -> int:
         print(morning(JobsList(DATA / "jobs.db"), DATA, find=_find_and_tell, score=_score_every_job,
                       start=lambda: start_session(ROOT), running=session_running, threads=Threads(DATA / "jobs.db"),
                       draft=draft_step, notes=Notes(DATA / "jobs.db"), notes_daily=notes_daily(),
-                      draft_notes=draft_notes_step))
+                      draft_notes=draft_notes_step, pick=pick_step,
+                      auto_from=plan.auto_from if (plan := day_plan()) is not None else None,
+                      tell=lambda: tell_session(ROOT, text=TELL_JOBS)))
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         # Today's session did not start, so the next morning's questions tell it.
         log_failure(DATA, "hunt morning", error, lambda: datetime.now(UTC))
@@ -473,9 +553,43 @@ def _morning(args: argparse.Namespace) -> int:
     return 0
 
 
+def _held_calls() -> list[datetime]:
+    """The starts of the calls the hunt held or confirmed in the person's Google Calendar."""
+    talks = Talks(DATA / "jobs.db").in_states("held", "confirmed")
+    return [datetime.fromisoformat(talk.start) for talk in talks if talk.start]
+
+
+def verdict() -> Verdict:
+    """Whether the person is free right now, read from this computer (`available`)."""
+    try:
+        settings: Settings | None = read_settings(DATA / "settings.json")
+    except SettingsError:
+        settings = None
+    where = zone(settings) if settings is not None else None
+    return available(DATA, settings, system=platform.system(), run=run_quietly, uid=os.getuid(), calls=_held_calls,
+                     clock=lambda: datetime.now(where) if where else datetime.now().astimezone())
+
+
+def _available(args: argparse.Namespace) -> int:
+    said = verdict()
+    print(f"{'ask' if said.ask else 'hold'}: {said.reason}")
+    return 0
+
+
+def _replied(args: argparse.Namespace) -> int:
+    # The session's prompt hook: it never stops the prompt, whatever happens here.
+    with contextlib.suppress(OSError):
+        replied(sys.stdin.read(), DATA, datetime.now(UTC), automatic=(FIRST_MESSAGE, TELL, TELL_JOBS))
+    return 0
+
+
 def _questions(args: argparse.Namespace) -> int:
+    if _captcha_setting() == "skip":
+        skip_captchas(JobsList(DATA / "jobs.db"))
+    plan = day_plan()
     print(questions(JobsList(DATA / "jobs.db"), DATA, Threads(DATA / "jobs.db"), Notes(DATA / "jobs.db"),
-                    notes_daily(), remote_desktop=remote_desktop_ready(this_machine())), end="")
+                    notes_daily(), remote_desktop=remote_desktop_ready(this_machine()), available=verdict,
+                    auto_from=plan.auto_from if plan is not None else None), end="")
     return 0
 
 
@@ -530,9 +644,29 @@ def _watch_linkedin() -> int | None:
     return new
 
 
+def _watch_jobs(jobs: JobsList, settings: Settings) -> None:
+    """The watch's part for the jobs, apart from the messages': one failing does not stop the other."""
+    # The computer's own clock, as the timer's runs and the messages' part (`watch`) read it.
+    now = datetime.now().astimezone()
+    if not in_hours(now, settings):
+        return
+    try:
+        if settings.captcha == "skip":
+            skip_captchas(jobs)
+        said = watch_jobs(jobs, DATA, verdict=verdict, tell=lambda text: tell_session(ROOT, text=text),
+                          ends=day_ends(now, settings))
+    except (ReplyError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+        _told_once("hunt watch jobs", error)
+        return
+    _worked("hunt watch jobs")
+    if said:
+        print(said)
+
+
 def _watch(args: argparse.Namespace) -> int:
     jobs, threads = JobsList(DATA / "jobs.db"), Threads(DATA / "jobs.db")
     try:
+        _watch_jobs(jobs, read_settings(DATA / "settings.json"))
         # An offer the person said yes to whose hold failed is tried again, also when nothing is new.
         hold_times(threads, ROOT, run=run_draft)
         said = watch(threads, jobs, DATA, read_settings(DATA / "settings.json"), check=run_check,
@@ -655,10 +789,11 @@ def _settings(args: argparse.Namespace) -> int:
         given = json.loads(args.settings)
         if not isinstance(given, dict):
             raise SettingsError("give the settings as one JSON object")
-        for kept in ("pushover", "working_hours", "time_zone", "companies"):
+        for kept in ("pushover", "working_hours", "time_zone", "companies", "keys", "daily_applications",
+                     "auto_apply_from", "site_workers", "linkedin_daily"):
             if kept not in given and path.exists():
-                # Keys given once stay, and so do the call hours and the companies added by hand: the search is
-                # changed without typing them again.
+                # Keys given once stay (Pushover's and the feeds'), and so do the call hours, the companies
+                # added by hand and the day's plan: the search is changed without typing them again.
                 with contextlib.suppress(json.JSONDecodeError, AttributeError):
                     if (value := json.loads(path.read_text()).get(kept)) is not None:
                         given[kept] = value
@@ -718,15 +853,23 @@ def main(argv: list[str] | None = None) -> int:
         "find",
         help="read the job alert emails since the last run into data/jobs.db (one claude -p on Haiku with the "
         "read-job-alerts skill, Gmail read-only), search LinkedIn signed out and every company's public job board "
-        "in data/companies.db (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable), save each new job's "
-        "page in jobs/<id>/posting.md and print, for each source, how many jobs it found and how many were new",
+        "in data/companies.db (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable), read the public job "
+        "feeds (Remotive, RemoteOK, Arbeitnow, Hacker News' Who is hiring; USAJobs, Adzuna and Jooble with a free key "
+        "in data/settings.json's keys), save each new job's page in jobs/<id>/posting.md and print, for each source, "
+        "how many jobs it found and how many were new",
         description="Every source in turn; one that fails is named and the others go on. The alert emails and "
         "LinkedIn's search (each title in each area, and once remote unless the settings exclude it; at most 5 pages "
         "a search, 2 to 5 seconds apart, a 429 or 999 ends LinkedIn for the run) read what came since their own "
         "last run. Every company's public board (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable) is "
         "read in the first run of a day, and in the later runs only the boards that posted in the last week; at "
         "most 4 requests at a time to one host. Once a week the company index is filled from Common Crawl first "
-        "(hunt companies), and a board an alert's link leads to joins it.",
+        "(hunt companies), and a board an alert's link leads to joins it. The public feeds are read side by side, "
+        "one request at a time to each: Remotive and RemoteOK (remote jobs only, skipped when the settings exclude "
+        "remote jobs), Arbeitnow, and the latest monthly Hacker News \"Who is hiring?\" thread, one comment a job, "
+        "need no key; USAJobs (each title), Adzuna's US jobs and Jooble (each title in each area, and once remote) "
+        "need a free key of your own under keys in data/settings.json, "
+        "{\"usajobs\": {\"email\", \"key\"}, \"adzuna\": {\"app_id\", \"app_key\"}, \"jooble\": {\"key\"}}, "
+        "and are skipped with one line without it.",
     )
     finder.set_defaults(run=_find)
     indexing = commands.add_parser(
@@ -740,7 +883,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     scoring.set_defaults(run=_score)
     listing = commands.add_parser(
-        "list", help="print the scored jobs not yet picked or skipped, best first, numbered for hunt pick and skip")
+        "list", help="print the scored jobs not yet picked or skipped, best first, numbered for hunt pick and skip; "
+        "when the settings pick by score, today's picks not started yet, numbered for hunt skip")
     listing.set_defaults(run=_list)
     pick = commands.add_parser("pick", help="pick jobs by their number on the last list, or all scored above a score")
     pick.add_argument("numbers", nargs="*", type=int)
@@ -751,9 +895,10 @@ def main(argv: list[str] | None = None) -> int:
     skip.set_defaults(run=_decide)
     applying = commands.add_parser(
         "apply",
-        help="write a resume for every picked job (claude -p with the write-resume skill, all at once), then apply "
-        "to the company-site jobs, up to three at once (claude --chrome -p with the apply-site skill), and to the "
-        "Easy Apply jobs one at a time, three to six minutes apart (claude --chrome -p with the apply-linkedin skill)",
+        help="write a resume for every picked job (claude -p with the write-resume skill, five at once), then apply "
+        "to the company-site jobs, up to the settings' site_workers at once (claude --chrome -p with the apply-site "
+        "skill), and to the Easy Apply jobs one at a time, three to six minutes apart (claude --chrome -p with the "
+        "apply-linkedin skill); spread over the day, up to the settings' daily numbers and the summary hour",
     )
     applying.set_defaults(run=_apply)
     answering = commands.add_parser(
@@ -763,14 +908,22 @@ def main(argv: list[str] | None = None) -> int:
     answering.set_defaults(run=_answer)
     resuming = commands.add_parser(
         "resume-job", help="put a paused job back once its CAPTCHA, sign-in or question is done in Chrome")
-    resuming.add_argument("job", type=int, help="the job's number, as hunt status prints it")
-    resuming.set_defaults(run=_answer)
+    resuming.add_argument("jobs", type=int, nargs="+", help="the jobs' numbers, as hunt status prints them")
+    resuming.set_defaults(run=_resume_jobs)
     sent = commands.add_parser(
         "applied", help="end a paused job as applied once Chrome shows its application was sent")
     sent.add_argument("job", type=int, help="the job's number, as hunt status prints it")
     sent.set_defaults(run=_answer)
+    free = commands.add_parser(
+        "available", help="whether you are free right now for a CAPTCHA in Chrome (ask) or not (hold), and why")
+    free.set_defaults(run=_available)
+    hook = commands.add_parser(
+        "replied", help="the job-hunt session's prompt hook: keeps when you last replied in the chat")
+    hook.set_defaults(run=_replied)
     status = commands.add_parser("status", help="print the picked jobs: applied, paused (what each needs), failed "
                                  "(why) and waiting")
+    status.add_argument("--today", action="store_true", help="print the day's summary instead: applications sent "
+                        "by kind, what waits for you, failures and why, and how long an application took")
     status.set_defaults(run=_status)
     starting = commands.add_parser(
         "morning",

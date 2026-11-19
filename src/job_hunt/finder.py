@@ -18,8 +18,9 @@ none of the settings' titles, and jobs the area and remote settings leave out, s
 as `new`, and saves each one's page as `jobs/<id>/posting.md`.
 
 Then the searches of `search.py` (LinkedIn signed out, and every company's public job board)
-hand their jobs to the same filters and saving; a board's job comes with its description, so
-its page is not read. Each source has its own line and its own time of the last run, and a
+hand their jobs to the same filters and saving, and so do the public job feeds of `feeds.py`; a
+board's job comes with its description, so its page is not read, as does a feed's but Adzuna's
+and Jooble's. Each source has its own line and its own time of the last run, and a
 source that fails is named without stopping the others.
 """
 
@@ -44,6 +45,7 @@ from job_hunt.jobs import FoundJob, Job, JobsList, Remote, clean_link
 from job_hunt.settings import Settings
 
 if TYPE_CHECKING:
+    from job_hunt.feeds import Feeds
     from job_hunt.search import Search
 
 MODEL = "claude-haiku-5-5"
@@ -55,9 +57,14 @@ GMAIL_READ_TOOLS = (
 )
 # Every background run: `--allowedTools` only adds to what the person's own settings allow (their
 # `Bash`, a plugin's browser, auto mode), so the run loads no user or local settings, and
-# `dontAsk` refuses any tool its command does not name. Claude Code still lets any run read the
-# project folder, by Read or a read-only command, without a rule.
-ONLY_NAMED_TOOLS = ("--setting-sources", "project", "--permission-mode", "dontAsk")
+# `dontAsk` refuses any tool its command does not name. `dontAsk` still lets WebFetch reach Claude
+# Code's preapproved documentation sites, itself or through a subagent, so those three are taken
+# away. Claude Code still lets any run read the project folder, by Read or a read-only command,
+# without a rule.
+ONLY_NAMED_TOOLS = (
+    "--setting-sources", "project", "--permission-mode", "dontAsk",
+    "--disallowedTools", "WebFetch,WebSearch,Agent",
+)
 FIRST_RUN = timedelta(days=14)
 SKILL_MINUTES = 30
 PAGE_SECONDS = 20
@@ -378,6 +385,7 @@ def find(
     clock: Callable[[], datetime] = _now,
     search: Search | None = None,
     messages: Messages | None = None,
+    feeds: Feeds | None = None,
 ) -> Summary:
     # One run at a time: two would write one jobs file, and one could save the other's jobs and
     # move the time the next run reads from past alerts it never saved.
@@ -387,7 +395,7 @@ def find(
         except BlockingIOError as error:
             raise FinderError("another hunt find is already running") from error
         return _find(settings, jobs, jobs_folder, found, run=run, fetch=fetch, clock=clock, search=search,
-                     messages=messages)
+                     messages=messages, feeds=feeds)
 
 
 def _find(
@@ -401,6 +409,7 @@ def _find(
     clock: Callable[[], datetime],
     search: Search | None,
     messages: Messages | None,
+    feeds: Feeds | None,
 ) -> Summary:
     started = clock()
     # The links the jobs met, whose job boards join the company index.
@@ -445,6 +454,14 @@ def _find(
         except Exception as error:
             # Whatever broke in the searches, the alerts' jobs still get their postings.
             lines, failed = [], [f"search: {type(error).__name__}: {error}"]
+        summary.lines += lines
+        summary.failed += failed
+    if feeds is not None:
+        try:
+            lines, failed = feeds.run(settings, jobs, started, save)
+        except Exception as error:
+            # Whatever broke in the feeds, the other sources' jobs still get their postings.
+            lines, failed = [], [f"feeds: {type(error).__name__}: {error}"]
         summary.lines += lines
         summary.failed += failed
     # Every new job has its posting, also one whose run stopped after saving it.

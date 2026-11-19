@@ -19,7 +19,7 @@ from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.questions import questions
 from job_hunt.replies import (
-    DRAFT_SKILL, SEND_SKILL, ReplyError, Threads, draft_replies, offer_times, read_messages, send_reply,
+    DRAFT_SKILL, SEND_SKILL, ReplyError, Threads, draft_replies, offer_times, read_messages, send_command, send_reply,
 )
 from job_hunt.settings import SettingsError, read_settings
 from job_hunt.times import (
@@ -713,6 +713,8 @@ def test_a_reply_saved_without_its_times_holds_nothing_and_goes_without_the_resu
     assert threads.get(thread).reply == calendar.reply
 
     assert "Times offered" not in questions(jobs, project / "data", threads)
+    command = send_command(threads.get(thread), calendar.reply, project)
+    assert "mcp__claude-in-chrome__file_upload" not in command[command.index("--allowedTools") + 1]
     _send(threads, project, thread, calendar)
     cli.hold_times(threads, project, run=calendar, clock=clock)
 

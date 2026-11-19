@@ -20,8 +20,10 @@ without them.
 - A background run may use only the tools its command names. It loads the project's settings
   and none of the person's own (`--setting-sources project`), so their plugins, hooks, allowed
   tools and permission mode stay out of it, and runs in `dontAsk`, which refuses every tool the
-  command does not name. Claude Code still lets it read files in the project folder without a
-  rule, by Read or a read-only shell command.
+  command does not name. WebFetch, WebSearch and subagents are taken away outright, since
+  `dontAsk` would still let WebFetch reach Claude Code's preapproved documentation sites. Claude
+  Code still lets it read files in the project folder without a rule, by Read or a read-only
+  shell command.
 - No app and no web screens. The chat session is the interface; `/setup` is the way in.
 - Choosing a job approves its resume. Nothing reviews or tests the model's writing. A bad
   resume is one lost application.
@@ -30,8 +32,20 @@ without them.
   the bullets and the skills to match the job as closely as it can. It is not asked for numbers.
 - Company-site accounts (Workday and others): the user creates them the first time, or their
   password manager fills them in. Claude never sees or types a password.
-- One LinkedIn worker handles every Easy Apply job, one at a time. Other workers handle jobs
-  on company sites, up to three at once.
+- One LinkedIn worker handles every Easy Apply job, one at a time, at most `linkedin_daily` a
+  day (25, never more than 30: LinkedIn has its own unpublished daily and speed limits, reported
+  near 50, and lowers them for accounts that look automated). Other workers handle jobs on
+  company sites, `site_workers` at once (3, at most 5), at most 6 a day and 10 minutes apart on
+  one site's host.
+- At most `daily_applications` start in a day (20, at most 100), spread over the day from the
+  morning hour to the summary hour, never more than 15 minutes apart; the ones left over go first
+  the next morning. The same title at the same company is never applied to twice in 30 days,
+  whichever source found it.
+- Applying without the daily pick: with `auto_apply_from`, a score from 1 to 10, every scored
+  job at or above it is picked by itself, best first, up to the day's number, and the ones below
+  it are skipped. That setting is the user's word for each job it picks; the morning message
+  lists them and asks nothing ("Applying to 64 jobs today (score 7 and up). Reply skip 3 12 to
+  leave some out."), and silence is yes. Left out (null), the user picks every job.
 - Nothing is sent without the user's word: applications go out for the jobs they picked, an
   email reply only after they approve its draft, and a note to a hiring manager only on their
   "send" to the day's notes question.
@@ -50,8 +64,11 @@ without them.
 - The questions, each a message of its own:
   - **A new job.** Title, company, area, score and its one-line reason, Easy Apply or company
     site: "Apply?" Several new jobs come as one numbered list, answered "1 3" or "all".
-  - **A paused application.** A CAPTCHA, a sign-in, or a form question the career file cannot
-    answer, with the Chrome tab: "done" or the answer.
+  - **A paused application.** A sign-in, or a form question the career file cannot answer,
+    with the Chrome tab: "done" or the answer.
+  - **CAPTCHAs.** Every application still on a CAPTCHA after its try again, in one question,
+    asked only when the user is free right now (`hunt available`): "3 applications wait for a
+    CAPTCHA in Chrome: Example Co, …. Reply done when solved." "done" resumes every one of them.
   - **A recruiter's message**, by email or on LinkedIn. The message, the job description when
     there is one, and a drafted reply: "Send?"
   - **Notes to hiring managers.** One question for all the notes drafted after the day's
@@ -108,6 +125,14 @@ Without it the job waits until the user is at the computer, and the other jobs g
      the settings' `companies`. The first run of a day reads every board's public JSON, the
      later runs only the boards that posted in the last week; at most 4 requests at a time to
      one host. A board that answers 404 twice is dropped.
+   - **Public job feeds** (`feeds.py`), the APIs meant to be read by programs, side by side and
+     one request at a time to each. No key: Remotive and RemoteOK (remote jobs only, skipped
+     when the settings exclude them), Arbeitnow, and the latest monthly Hacker News "Who is
+     hiring?" thread through the Algolia HN API, one top-level comment a job, its first line
+     read by code and a comment it cannot read kept with its text. With a free key of the
+     user's own under `keys` in the settings, skipped with one line without it: USAJobs,
+     Adzuna's US jobs and Jooble, the last two each title in each area and once remote, with
+     their job pages read since they give only a snippet.
    A script drops jobs already in the list (one link is one job, whichever source found it),
    wrong titles, and jobs outside the areas or the remote setting; a board's or LinkedIn's job
    gets its area from a table of the cities in each area. For each job left it saves the full
@@ -120,15 +145,31 @@ Without it the job waits until the user is at the computer, and the other jobs g
    is spent. A later run of the day leaves a running session alone, which asks for the new
    jobs at its next `hunt questions`, and opens one only when none runs.
 4. **The user replies** "apply 1 3 4", "apply all above 7" or "skip 2". The session runs the
-   `hunt` command with the picks. That is all it does, so it stays cheap.
-5. **Resumes (in parallel).** One resume worker per pick (see Resume).
-6. **Applying.** The LinkedIn worker takes the Easy Apply picks one after another, a few
-   minutes apart. Up to three company-site workers take the rest at once.
+   `hunt` command with the picks. That is all it does, so it stays cheap. With
+   `auto_apply_from` set, the morning run picks instead (`plan.auto_pick`), and the session only
+   tells the day's picks, numbered for "skip 3 12", and asks nothing; the scored jobs above the
+   score past the day's number wait for the next morning's.
+5. **Resumes (in parallel).** One resume worker per pick (see Resume), five at once, all
+   written before the first application starts.
+6. **Applying (the day's plan, `plan.py`).** The picks start in order, the ones left over from
+   an earlier day first, then best score first, each start spread from the last by what is left
+   of the day shared among the applications still to start, at most 15 minutes. The LinkedIn
+   worker takes the Easy Apply picks one after another, three to six minutes apart, up to its
+   daily number. Up to `site_workers` company-site workers take the rest at once. Past the
+   day's number, LinkedIn's, or the summary hour, a job waits for the next morning. A job
+   resumed in the tab it paused in is the same application and is never held: the run looks
+   for jobs put back at least once a minute, also while it waits for the spread. Jobs a later
+   run (12:00, 16:00) picks by their score are taken by the run still going, or, when it has
+   ended, the running session is told once and starts `hunt apply` for them. While a run
+   holds `jobs/apply.lock`, `hunt questions` asks nothing about unfinished applications.
 7. **Paused jobs.** A CAPTCHA, a site that needs an account, or a form question the career
    file cannot answer pauses that one job. The session says what is needed and in which Chrome
    tab, and the other jobs go on. The user replies "done" or gives the answer; an answer to a
    form question is saved, so it is not asked again.
-8. **Summary.** One message at the end: applied, waiting for the user, failed and why.
+8. **Summary.** One message at the end, as `hunt status --today` prints it at any time:
+   applications sent by kind, how many wait for the user and for what (a CAPTCHA, a sign-in,
+   an answer), failed and why, how many are left for tomorrow, and how long an application took
+   on average, so the user sees what the day's number really allows.
 9. **Recruiter messages (every 20 minutes during the day).** A recruiter gets an answer within
    the hour. `hunt watch` runs every 20 minutes from the morning hour to the summary hour: one
    small `claude -p` on Claude Haiku with only Gmail's read tools notes new emails from
@@ -165,12 +206,12 @@ Each piece has one job and talks to the others only through the jobs list and fi
 
 | Piece | Kind | What it does |
 |---|---|---|
-| `hunt` | Python command | Every mechanical step: `doctor`, `career`, `career-from-resume`, `settings`, `form-answers`, `resume`, `find`, `companies`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`, `watch`, `linkedin-messages`, `draft-replies`, `offer-times`, `send-reply`, `edit-reply`, `skip-reply`, `draft-notes`, `send-notes`, `skip-notes`, `note-went`. It is the coordinator. |
+| `hunt` | Python command | Every mechanical step: `doctor`, `career`, `career-from-resume`, `settings`, `form-answers`, `resume`, `find`, `companies`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `available`, `replied`, `notify`, `timer`, `watch`, `linkedin-messages`, `draft-replies`, `offer-times`, `send-reply`, `edit-reply`, `skip-reply`, `draft-notes`, `send-notes`, `skip-notes`, `note-went`. It is the coordinator. |
 | Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), source, score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
 | Company index | SQLite file `data/companies.db` | Every company found on a public job-board system, with its board and when it last posted. Only `hunt` writes it. |
 | Searches | Python (`search.py`) | LinkedIn's guest search and the boards' public JSON, plain HTTP, no model. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
-| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the morning hour, the summary hour (18 when left out), the notes to hiring managers a day (`linkedin_notes_daily`, 15 when left out, at most 15), the working hours a call is offered in (9 to 17), the time zone (the computer's), companies added by hand. |
+| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the morning hour, the summary hour (18 when left out), the notes to hiring managers a day (`linkedin_notes_daily`, 15 when left out, at most 15), the working hours a call is offered in (9 to 17), the time zone (the computer's), companies added by hand, and `captcha` (`ask` when left out, or `skip`). |
 | Resume worker | `claude -p` with the `write-resume` skill | Gets the career and one job description and writes `resume-content.json`. |
 | Resume builder | Python (`resume_kit`) | Merges that content with the career, checks it against the resume contract, builds `resume.pdf`. |
 | LinkedIn worker | `claude -p --chrome` with the `apply-linkedin` skill | Opens the job's LinkedIn page, presses Easy Apply, uploads the PDF, answers from the career, submits. |
@@ -221,7 +262,11 @@ PDF and the worker's report. A worker sees only its own folder and the career.
   same time (checked on 2026-11-18 with three).
 - Only one worker at a time may use LinkedIn: a lock file the LinkedIn worker holds for each
   application. Company-site workers are limited to three at once.
-- Workers do not solve CAPTCHAs. They pause and ask the user.
+- Workers do not solve CAPTCHAs, and the hunt uses no solving service or extension. They pause,
+  are tried again once on their own, and then ask the user (see "When things go wrong").
+- Fewer CAPTCHAs: the workers use the user's own signed-in Chrome profile, two applications to
+  one site's host start at least 10 minutes apart, and at most 6 a day go to one host; the rest
+  wait for the next day.
 
 ## When things go wrong
 
@@ -230,6 +275,22 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 - A worker that stops without saying what happened (a timeout, a crash, no report) may have
   sent the application. Its job is never tried again on its own: it pauses for the user to look
   in Chrome, and the user says it was sent or tries it again.
+- A CAPTCHA or a sign-in is first tried again on its own, once, 3 hours later in a fresh tab:
+  the site may not ask again, and a password manager may have signed the browser in meanwhile.
+  A sign-in still there is asked like any paused application. A CAPTCHA still there waits, with
+  its tab left open, until `hunt available` finds the user free, from signals on their own
+  computer in this order: at the computer (a key or the mouse in the last 3 minutes, the screen
+  not locked), then a reply in the chat in the last 10 minutes (asked with the Chrome Remote
+  Desktop link when set up), then a call the hunt held in their Google Calendar now, or the
+  night hours from the summary hour to the morning hour, both of which hold, as does anything
+  else. A signal that cannot be read counts as not known, and the next one is read. `hunt
+  watch` looks every 20 minutes during the day and has the chat ask once the user is free; the
+  check never asks the user anything itself. All waiting CAPTCHAs come in one question. A job
+  still on its CAPTCHA after two questions is failed, "the site asks for a CAPTCHA", to apply
+  by hand; one that waited all day is named in the end of the day's summary instead, which the
+  watch's last run of the day (the 20 minutes before the summary hour) has the chat send, once.
+  With the settings' `captcha` set to `skip`, none is asked: after its try again it is failed
+  at once.
 - If Chrome is closed or the computer is asleep, applying waits and says so once. (Built so
   far: a worker that cannot reach Chrome pauses its job, which costs it no try.)
 - Everything is files on the computer. If a session or worker stops halfway, `hunt apply`
@@ -251,7 +312,9 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 - The resume contract and layouts keep their tests. They test code, not the model, and run in
   seconds.
 - New code gets tests for what it decides: the finder's filters and email parsing, the
-  searches on saved answers (no test calls the network), never listing the same job twice, the jobs list's states, the LinkedIn lock and the limit of three.
+  searches on saved answers (no test calls the network), never listing the same job twice, the jobs list's states, the LinkedIn lock and the limit of three,
+  and the day's plan: picking by score, its limits, the leftovers and the 30-day rule, with
+  stand-in workers and a movable clock.
 - Nothing tests the model's writing or its scores.
 
 ## Not in the first version
@@ -259,7 +322,6 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 - Weekly statistics.
 - Indeed and Glassdoor without alert emails: their sites refuse plain HTTP, and the finder does
   not get past a bot check.
-- Applying without the user's daily pick.
 
 ## Build order
 

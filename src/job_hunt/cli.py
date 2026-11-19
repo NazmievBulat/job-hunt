@@ -480,6 +480,9 @@ def _not_asked(job: Job) -> str:
 
 def _status(args: argparse.Namespace) -> int:
     jobs = JobsList(DATA / "jobs.db")
+    if _captcha_setting() == "skip":
+        # `/apply` asks from here, as `hunt questions` does from its own list.
+        skip_captchas(jobs)
     groups = [
         ("Applied", jobs.in_states("applied"), lambda job: ""),
         ("Paused", jobs.in_states("paused"),

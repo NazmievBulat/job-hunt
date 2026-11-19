@@ -1210,3 +1210,16 @@ def test_with_captcha_skip_the_captchas_already_waiting_fail_and_are_not_asked(
         "captcha": "skip"}))
     assert cli.main(["questions"]) == 0
     assert (hunt.get(job).state, hunt.get(job).state_reason) == ("failed", "the site asks for a CAPTCHA")
+
+
+def test_with_captcha_skip_hunt_status_fails_the_captchas_already_waiting_too(
+        hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    job = _pause(project, hunt, {"result": "paused", "needs": "captcha", "tab": "Apply"})
+    (project / "data" / "settings.json").write_text(json.dumps({
+        "titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 7,
+        "captcha": "skip"}))
+    capsys.readouterr()
+    # `/apply` asks from `hunt status`: a CAPTCHA the setting skips is not shown there as paused.
+    assert cli.main(["status"]) == 0
+    assert (hunt.get(job).state, hunt.get(job).state_reason) == ("failed", "the site asks for a CAPTCHA")
+    assert "Paused" not in capsys.readouterr().out

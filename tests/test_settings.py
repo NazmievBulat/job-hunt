@@ -151,3 +151,14 @@ def test_hunt_settings_replaces_a_settings_file_that_cannot_be_read(
         assert cli.main(["settings", json.dumps(GOOD)]) == 0
 
         assert read_settings(tmp_path / "settings.json").titles == GOOD["titles"]
+
+
+def test_the_summary_hour_is_18_unless_the_settings_give_another(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).summary_hour == 18
+    assert read_settings(_write(tmp_path, {**GOOD, "summary_hour": 20})).summary_hour == 20
+
+
+@pytest.mark.parametrize("summary_hour", [7, 6, 24, "18", True])
+def test_a_summary_hour_not_after_the_morning_hour_is_refused(tmp_path: Path, summary_hour: object) -> None:
+    with pytest.raises(SettingsError, match="summary_hour"):
+        read_settings(_write(tmp_path, {**GOOD, "summary_hour": summary_hour}))

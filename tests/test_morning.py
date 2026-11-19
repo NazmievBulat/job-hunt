@@ -317,3 +317,29 @@ def test_jobs_the_finder_left_out_are_logged(tmp_path: Path, monkeypatch: pytest
 
     assert "hunt find: left out entry 1: no title" in (data / "morning.log").read_text()
     assert started == [tmp_path]
+
+
+def test_a_recruiters_email_found_in_the_morning_is_drafted_and_starts_the_session(
+    jobs: JobsList, tmp_path: Path, clock: MovableClock
+) -> None:
+    from job_hunt.replies import Threads, read_messages
+
+    data = tmp_path / "data"
+    threads = Threads(data / "jobs.db", clock=clock)
+    (message,), _ = read_messages({"recruiter_emails": [{
+        "email_id": "m1", "thread_id": "t1", "from": "Jane Recruiter <jane@example.com>", "text": "Hi Ada"}]})
+    steps = Steps(jobs)
+    drafted: list[int] = []
+
+    def find() -> None:
+        steps.find()
+        threads.save(message, jobs)
+
+    def draft() -> None:
+        for thread in threads.in_states("new"):
+            threads.drafted(thread.id, "Thanks, Jane.", None)
+            drafted.append(thread.id)
+
+    morning(jobs, data, find=find, score=steps.score, start=steps.start, clock=clock, threads=threads, draft=draft)
+
+    assert drafted and steps.ran == ["find", "start"]

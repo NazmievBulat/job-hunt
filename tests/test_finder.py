@@ -36,7 +36,7 @@ from job_hunt.finder import (
     skill_command,
     title_matches,
 )
-from job_hunt.jobs import FoundJob, JobsList
+from job_hunt.jobs import FoundJob, JobsList, clean_link
 from job_hunt.settings import Settings, read_settings
 from alert_skill import AlertSkill, arguments
 from movable_clock import MovableClock
@@ -728,6 +728,33 @@ def test_a_failed_middle_batch_is_named_the_others_save_and_the_next_run_reads_i
     assert len(jobs.all()) == 25
 
 
+def test_a_batch_that_read_fewer_emails_than_it_was_named_keeps_its_jobs_and_the_last_run_before_it(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    skill = AlertSkill(_alerts(25))
+
+    def run(command: list[str]) -> None:
+        skill(command)
+        args = arguments(command)
+        if args.get("email_ids", [""])[0] == "18c0ffee00000011":
+            # The second batch leaves out its last email.
+            out = Path(args["out"])
+            written = json.loads(out.read_text())
+            written["emails"] = 9
+            written["jobs"] = [job for job in written["jobs"] if job["email_id"] != "18c0ffee00000020"]
+            out.write_text(json.dumps(written))
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=run, fetch=_any_page,
+                   clock=clock)
+    assert summary.failed == ["alert: batch 2 of 3 read 9 of 10 emails"]
+    # Its jobs and the third batch's are saved.
+    assert (summary.emails, summary.jobs, summary.new) == (24, 24, 24)
+    # The last run stays before the second batch, so its emails are read again next run.
+    tenth = datetime(2026, 11, 5, 17, 0, tzinfo=UTC)
+    assert jobs.last_run() == tenth - timedelta(seconds=1)
+
+
 def test_a_failed_first_batch_leaves_the_last_run_where_it_was(
     tmp_path: Path, settings: Settings, clock: MovableClock
 ) -> None:
@@ -808,9 +835,35 @@ def test_a_click_tracking_link_is_saved_as_it_is_and_followed_to_its_page(
                    run=AlertSkill({"emails": 1, "jobs": [job]}), fetch=redirect, clock=clock)
     assert (summary.new, summary.problems) == (1, [])
     (saved,) = jobs.all()
-    assert followed == [saved.link]
+    assert followed == [tracking] and saved.link == clean_link(tracking)
     assert saved.page_link == "https://jobs.example.com/careers/1234"
     assert saved.description and saved.page_problem is None
+
+
+@pytest.mark.parametrize("tracking", [
+    "https://click.example.com/redirect?ref=job123",
+    "https://www.jobot.com/redirect?src=email&trk=abc&refId=9",
+])
+def test_a_tracking_link_is_followed_with_the_parameters_the_saved_link_leaves_out(
+    tmp_path: Path, settings: Settings, clock: MovableClock, tracking: str
+) -> None:
+    job = {**_job().__dict__, "link": tracking, "board": "company", "remote": "remote", "area": None}
+    del job["source"]
+
+    def redirect(link: str) -> tuple[str, str]:
+        # Only the address as the email gave it leads to the job.
+        if link != tracking:
+            raise PageError("HTTP 404")
+        return "https://jobs.example.com/careers/1234?utm_source=email", (HERE / "pages" / "company.html").read_text()
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json",
+                   run=AlertSkill({"emails": 1, "jobs": [job]}), fetch=redirect, clock=clock)
+    assert (summary.new, summary.problems) == (1, [])
+    (saved,) = jobs.all()
+    assert saved.page_problem is None and saved.description
+    # The duplicate check works on the cleaned addresses.
+    assert (saved.link, saved.page_link) == (clean_link(tracking), "https://jobs.example.com/careers/1234")
 
 
 def test_the_skill_reads_each_alert_in_plain_text_by_its_id_and_keeps_a_tracking_link() -> None:
@@ -819,6 +872,16 @@ def test_the_skill_reads_each_alert_in_plain_text_by_its_id_and_keeps_a_tracking
            "and never `get_thread`" in skill
     assert "Read each email of `email_ids`" in skill and "Read no other email and make no search." in skill
     assert "also a click-tracking address" in skill and "never leave a job out because of its link" in skill
+
+
+def test_the_skill_searches_a_thread_of_alerts_again_for_the_messages_its_result_leaves_out() -> None:
+    skill = " ".join((Path(cli.ROOT) / ".claude" / "skills" / "read-job-alerts" / "SKILL.md").read_text().split())
+    assert "a search result shows at most 5 messages of a thread" in skill
+    assert "When a thread of alerts shows 5 messages, or fewer than its `messageCount`" in skill
+    assert ("`after:<after> before:<the Unix seconds of the oldest message of it listed so far>` and "
+            '`"view": "THREAD_VIEW_METADATA_ONLY"`') in skill
+    assert "Repeat until a search adds no message of that thread." in skill
+    assert "Never open such a thread with `get_thread`" in skill
 
 
 def test_a_failed_batch_holding_an_email_without_a_date_leaves_the_last_run_where_it_was(

@@ -13,8 +13,8 @@ import shutil
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -165,6 +165,27 @@ def test_a_429_or_999_ends_linkedin_for_the_run(settings: Settings, clock: Movab
     assert len(sites.urls(LINKEDIN)) == 2
     assert result.stopped == f"LinkedIn answered {status} after 1 search page, so it is not searched again this run"
     assert len(result.jobs) == 10
+
+
+def test_a_linkedin_search_page_is_counted_before_its_turn_is_given_up(
+    settings: Settings, clock: MovableClock
+) -> None:
+    # A job page read in another thread may take the turn as soon as it is given up, and its
+    # stop names the pages counted by then.
+    class Watched(Pace):
+        counted: list[int] = []
+
+        @contextmanager
+        def turn(self) -> Iterator[None]:
+            with super().turn():
+                yield
+            self.counted.append(self.pages)
+
+    one = replace(settings, titles=["QA Automation Engineer"], areas=["Raleigh-Durham-Chapel Hill"], remote="exclude")
+    pace = Watched(sleep=lambda seconds: None, between=lambda: 3.0, order=lambda searches: None)
+    linkedin_search(one, clock.now - timedelta(days=1), clock.now, _linkedin_sites(["linkedin-full-page.html", ""]),
+                    pace)
+    assert pace.counted == [1, 2]
 
 
 def test_linkedin_pauses_two_to_five_seconds_between_requests(settings: Settings, clock: MovableClock) -> None:

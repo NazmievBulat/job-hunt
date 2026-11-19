@@ -404,6 +404,16 @@ def _write_posting(job: Job, folder: Path) -> None:
     part.replace(folder / "posting.md")
 
 
+def followed_link(link: str) -> str:
+    """The address a job's page is read at: a LinkedIn or Indeed job's own address, and any other
+    link as it was given, as a click-tracking address may need the very parameters `clean_link`
+    takes off to lead to the job."""
+    host = urlsplit(link.strip()).netloc.lower()
+    if host.removeprefix("www.") in ("linkedin.com", "indeed.com") or host.endswith((".linkedin.com", ".indeed.com")):
+        return clean_link(link)
+    return link.strip()
+
+
 def _read_page(
     link: str, fetch: Callable[[str], tuple[str, str]]
 ) -> tuple[str | None, str | None, str | None, str | None, str | None]:
@@ -521,7 +531,7 @@ def _find(
                 return jobs.add(each, description=description, kind="company_site") is not None
             reading.add(link)
         try:
-            ended_at, text, kind, problem, offsite = _read(link)
+            ended_at, text, kind, problem, offsite = _read(followed_link(each.link))
         finally:
             with lock:
                 reading.discard(link)
@@ -695,6 +705,20 @@ def _read_alerts(
     read: list[FoundJob] = []
     # Whether every batch so far succeeded, and the newest email they read.
     in_order, newest = True, None
+
+    def failed(batch: list[tuple[str, datetime | None]], line: str) -> None:
+        """Name a batch that failed, and keep the next run from reading past its emails."""
+        nonlocal in_order
+        done.failed.append(line)
+        if in_order:
+            # A second before it: the search's `after:` may leave out an email of that very second.
+            # Never past the run's start: an email that came while the search ran may be unlisted.
+            done.through = min(newest - timedelta(seconds=1), started) if newest else None
+            in_order = False
+        if any(date is None for _, date in batch):
+            # An email without a date may be older than any the batches before read.
+            done.through = None
+
     for number, batch in enumerate(batches, start=1):
         out = found.with_name(f"{found.stem}-{number}{found.suffix}")
         out.unlink(missing_ok=True)
@@ -705,18 +729,13 @@ def _read_alerts(
             count, found_jobs, left_out = read_found(out, settings)
         except Exception as error:
             said = str(error) if isinstance(error, FinderError) else f"{type(error).__name__}: {error}"
-            done.failed.append(f"alert: batch {number} of {len(batches)} failed: {said}")
-            if in_order:
-                # A second before it: the search's `after:` may leave out an email of that very second.
-                # Never past the run's start: an email that came while the search ran may be unlisted.
-                done.through = min(newest - timedelta(seconds=1), started) if newest else None
-                in_order = False
-            if any(date is None for _, date in batch):
-                # An email without a date may be older than any the batches before read.
-                done.through = None
+            failed(batch, f"alert: batch {number} of {len(batches)} failed: {said}")
             continue
         finally:
             out.unlink(missing_ok=True)
+        if count < len(batch):
+            # Its jobs count, but the email it did not read is read again next run.
+            failed(batch, f"alert: batch {number} of {len(batches)} read {count} of {len(batch)} emails")
         if in_order:
             newest = max([newest, *(date for _, date in batch)], key=lambda date: date or EARLIEST)
         done.problems += [f"batch {number} {problem}" if len(batches) > 1 else problem for problem in left_out]

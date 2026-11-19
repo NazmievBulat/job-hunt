@@ -120,12 +120,13 @@ Without it the job waits until the user is at the computer, and the other jobs g
    says how many jobs it found and how many were new, and one more line how long each took.
    - **Alerts.** `claude -p` on Claude Haiku reads the job alert emails through the Gmail
      connector, walked by the script: one run only searches and lists the alert emails since
-     the last run, then one run for each batch of at most 10 of them, oldest first, opens only
+     the last run (a thread of one board's daily alerts is searched again with `before:` for
+     the messages past the 5 a search result shows), then one run for each batch of at most 10 of them, oldest first, opens only
      the emails it is named, in plain text one at a time (an alert's HTML is larger than a
      tool's answer may be), and writes each job's link, title, company and place, and which of
      the user's areas each job is in. A click-tracking link is kept as it is and followed to the
-     job's page. Each batch's jobs are saved as it ends; a batch that fails is named and the
-     others still count, and the next run reads from the newest email of the batches that all
+     job's page as the email gave it. Each batch's jobs are saved as it ends; a batch that
+     fails, or reads fewer emails than it was named, is named and the others still count, and the next run reads from the newest email of the batches that all
      succeeded in order.
    - **LinkedIn, signed out.** Its public guest search, plain HTTP with no cookies and never the
      user's account: each title in each area, and once per title for remote jobs, over the time

@@ -350,6 +350,9 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
                 answer = None if pace.stopped else _linkedin_get(get, f"{LINKEDIN_SEARCH}?{query}")
                 if isinstance(answer, Answer) and answer.status in LINKEDIN_STOPS:
                     pace.stop(answer.status)
+                elif isinstance(answer, Answer) and answer.status == 200:
+                    # Counted inside the turn: a job page's stop after it names this page.
+                    pace.pages += 1
             if isinstance(answer, SearchError):
                 result.problems.append(f"{named}: {answer}")
                 break
@@ -360,7 +363,6 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
             if answer.status != 200:
                 result.problems.append(f"{named}: HTTP {answer.status}")
                 break
-            pace.pages += 1
             cards = linkedin_cards(answer.text)
             for card in cards:
                 job = found.setdefault(card.link, FoundJob(

@@ -396,7 +396,7 @@ def _next_site(this: _Run, waiting: list[int]) -> tuple[int | None, float | None
     for job in list(waiting):
         # Going on in the tab it paused in, after "done": the same application, and a solved
         # CAPTCHA does not last the spacing.
-        if _paused(_folder(this.root, job) / "report.json", SITE_SKILL) is not None:
+        if (paused := _paused(_folder(this.root, job) / "report.json", SITE_SKILL)) is not None and paused.tab:
             return job, None
         on = host(this.jobs.get(job))
         if len(this.jobs.starts_on(on, day, but=job)) >= HOST_DAILY:
@@ -501,8 +501,10 @@ def applied(jobs: JobsList, job: int) -> Job:
 
 def resume_job(jobs: JobsList, job: int) -> Job:
     """Put a paused job back once the user did what it needed; the next run applies to it, in the
-    tab it paused in."""
-    _paused_job(jobs, job)
+    tab it paused in. A "done" to a CAPTCHA counts as its question, once a pause, also when it
+    was asked from `hunt status` and not `hunt questions`."""
+    if (_paused_job(jobs, job).state_reason or "").startswith(NEEDS["captcha"]):
+        jobs.asked(job)
     jobs.move(job, "resume_ready")
     return jobs.get(job)
 

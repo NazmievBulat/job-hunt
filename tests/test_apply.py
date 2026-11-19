@@ -941,6 +941,17 @@ def test_a_captcha_still_there_after_two_questions_fails_to_apply_by_hand(
     assert jobs.get(other).state == "paused"
 
 
+def test_a_done_to_a_captcha_asked_from_hunt_status_counts_as_its_question(project: Path, jobs: JobsList) -> None:
+    # /apply asks from `hunt status`, not `hunt questions`: the "done" itself counts the question.
+    job = _pause(project, jobs, {"result": "paused", "needs": "captcha", "tab": "Apply"})
+    sites = Sites(project, {job: [{"result": "paused", "needs": "captcha", "tab": "Apply"}]})
+    for asked in (1, 2):
+        resume_job(jobs, job)
+        assert jobs.get(job).asks == asked
+        apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites)
+    assert (jobs.get(job).state, jobs.get(job).state_reason) == ("failed", "the site asks for a CAPTCHA")
+
+
 def test_with_captcha_skip_a_captcha_after_its_try_again_fails_at_once(project: Path, jobs: JobsList) -> None:
     job = _picked(jobs, 1)
     sites = Sites(project, {job: [{"result": "paused", "needs": "captcha", "tab": "Apply"}]})
@@ -1095,6 +1106,25 @@ def test_jobs_resumed_in_their_tabs_after_done_are_not_held_by_their_host(projec
     waiting = Waiting(clock)
     apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=waiting)
     assert ([jobs.get(job).state for job in picked], waiting.slept) == (["applied"] * 2, [])
+
+
+def test_jobs_resumed_once_chrome_is_open_are_held_by_their_host(project: Path, jobs: JobsList) -> None:
+    clock = jobs._clock
+    picked = []
+    for number in (1, 2):
+        job = jobs.add(_found(number, link=f"https://boards.greenhouse.io/example/jobs/{number}"), kind="company_site")
+        jobs.score(job, 8, "Good.")
+        jobs.move(job, "picked")
+        picked.append(job)
+    sites = Sites(project, {job: [{"result": "paused", "needs": "chrome"}, {"result": "applied"}] for job in picked})
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=Waiting(clock))
+    assert [jobs.get(job).state for job in picked] == ["paused"] * 2
+    for job in picked:
+        resume_job(jobs, job)
+    # A Chrome pause has no tab to go on in: each is a fresh start on the host.
+    waiting = Waiting(clock)
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=sites, sleep=waiting)
+    assert ([jobs.get(job).state for job in picked], waiting.slept) == (["applied"] * 2, [600.0])
 
 
 def test_the_host_is_the_company_site_a_linkedin_job_sends_to(project: Path, jobs: JobsList) -> None:

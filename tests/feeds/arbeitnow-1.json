@@ -1,8 +1,8 @@
 {
   "data": [
-    {"slug": "qa-automation-engineer-berlin-301", "company_name": "Example GmbH", "title": "QA Automation Engineer", "description": "&lt;p&gt;Test our &lt;b&gt;platform&lt;/b&gt;.&lt;/p&gt;", "remote": true, "url": "https://www.arbeitnow.com/jobs/companies/example-gmbh/qa-automation-engineer-berlin-301", "tags": ["QA"], "job_types": ["full time"], "location": "Berlin", "created_at": 1795300000},
-    {"slug": "sdet-durham-302", "company_name": "Example Inc", "title": "SDET", "description": "&lt;p&gt;Durham office.&lt;/p&gt;", "remote": false, "url": "https://www.arbeitnow.com/jobs/companies/example-inc/sdet-durham-302", "tags": [], "job_types": [], "location": "Durham, NC", "created_at": 1795290000},
-    {"slug": "sdet-munich-303", "company_name": "Beispiel AG", "title": "SDET", "description": "&lt;p&gt;Munich office.&lt;/p&gt;", "remote": false, "url": "https://www.arbeitnow.com/jobs/companies/beispiel-ag/sdet-munich-303", "tags": [], "job_types": [], "location": "Munich", "created_at": 1795280000}
+    {"slug": "qa-automation-engineer-berlin-301", "company_name": "Example GmbH", "title": "QA Automation Engineer", "description": "&lt;p&gt;Test our &lt;b&gt;platform&lt;/b&gt;.&lt;/p&gt;", "remote": true, "url": "https://www.arbeitnow.com/jobs/companies/example-gmbh/qa-automation-engineer-berlin-301", "tags": ["QA"], "job_types": ["full time"], "location": "Berlin", "created_at": 1794970000},
+    {"slug": "sdet-durham-302", "company_name": "Example Inc", "title": "SDET", "description": "&lt;p&gt;Durham office.&lt;/p&gt;", "remote": false, "url": "https://www.arbeitnow.com/jobs/companies/example-inc/sdet-durham-302", "tags": [], "job_types": [], "location": "Durham, NC", "created_at": 1794960000},
+    {"slug": "sdet-munich-303", "company_name": "Beispiel AG", "title": "SDET", "description": "&lt;p&gt;Munich office.&lt;/p&gt;", "remote": false, "url": "https://www.arbeitnow.com/jobs/companies/beispiel-ag/sdet-munich-303", "tags": [], "job_types": [], "location": "Munich", "created_at": 1794950000}
   ],
   "links": {"first": "https://www.arbeitnow.com/api/job-board-api?page=1", "last": null, "prev": null, "next": "https://www.arbeitnow.com/api/job-board-api?page=2"},
   "meta": {"current_page": 1, "per_page": 300, "terms": "This is a free public API for jobs, please do not abuse."}

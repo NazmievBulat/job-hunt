@@ -32,7 +32,7 @@ FINDER = Path(__file__).parent / "finder"
 KEYS = {"usajobs": {"email": "ada@example.com", "key": "usa-key"}, "adzuna": {"app_id": "ad-id", "app_key": "ad-key"},
         "jooble": {"key": "jo-key"}}
 USAJOBS = "https://data.usajobs.gov/api/search"
-ADZUNA = "https://api.adzuna.com/v1/api/jobs/us/search/1"
+ADZUNA = "https://api.adzuna.com/v1/api/jobs/us/search/"
 JOOBLE = "https://jooble.org/api/jo-key"
 STARTED = datetime(2026, 11, 18, 7, 0, tzinfo=UTC)
 
@@ -133,9 +133,23 @@ def test_arbeitnow_reads_its_escaped_descriptions_and_pages_only_while_they_are_
     assert sites.urls(ARBEITNOW) == [ARBEITNOW, f"{ARBEITNOW}?page=2"]
 
 
+def test_arbeitnow_stops_at_its_last_page_and_at_most_three_pages(settings: Settings) -> None:
+    sites = _sites()
+    sites.answers = {f"{ARBEITNOW}?page=2": _ok("arbeitnow-last.json"), **sites.answers}
+    read = _read("arbeitnow", settings, sites, since=datetime.fromtimestamp(1794900000, UTC))
+    # The last page has no next one; the jobs read so far are kept.
+    assert sites.urls(ARBEITNOW) == [ARBEITNOW, f"{ARBEITNOW}?page=2"] and len(read.jobs) == 4
+    sites = _sites()
+    # Every page new and another after it: the third is the last read.
+    page = json.loads((HERE / "arbeitnow-1.json").read_text())
+    sites.answers = {ARBEITNOW: Answer(200, json.dumps(page))}
+    _read("arbeitnow", settings, sites, since=datetime.fromtimestamp(1794900000, UTC))
+    assert len(sites.urls(ARBEITNOW)) == 3
+
+
 def test_arbeitnow_reads_one_page_when_it_holds_a_job_from_before_the_last_run(settings: Settings) -> None:
     sites = _sites()
-    _read("arbeitnow", settings, sites, since=datetime.fromtimestamp(1795285000, UTC))
+    _read("arbeitnow", settings, sites, since=datetime.fromtimestamp(1794955000, UTC))
     assert sites.urls(ARBEITNOW) == [ARBEITNOW]
 
 
@@ -179,6 +193,23 @@ def test_a_hybrid_comment_is_hybrid_and_a_title_part_is_found_wherever_it_is(set
         "Lead SDET", "Raleigh, NC", "hybrid", "Raleigh-Durham-Chapel Hill")
 
 
+@pytest.mark.parametrize("line", ["Example Labs | SDET | Raleigh, NC | NO REMOTE",
+                                  "Example Labs | SDET | Raleigh, NC | ONSITE | not remote",
+                                  "Example Labs | SDET | Raleigh, NC | Remote: no"])
+def test_a_comment_that_says_not_remote_is_on_site(settings: Settings, line: str) -> None:
+    job, _ = hn_job({"id": 9, "text": line}, settings)
+    assert (job.remote, job.place, job.area) == ("on_site", "Raleigh, NC", "Raleigh-Durham-Chapel Hill")
+
+
+def test_a_comment_of_two_parts_is_kept_as_text_and_a_part_that_is_no_place_is_not_its_place(
+    settings: Settings
+) -> None:
+    job, _ = hn_job({"id": 10, "text": "Example Labs | SDET"}, settings)
+    assert (job.company, job.title) == (HN_UNKNOWN_COMPANY, "Example Labs | SDET")
+    job, _ = hn_job({"id": 11, "text": "Example Labs | SDET | Full-time | $150k"}, settings)
+    assert (job.company, job.title, job.place, job.area) == ("Example Labs", "SDET", "", None)
+
+
 def test_hacker_news_without_a_who_is_hiring_thread_fails(settings: Settings) -> None:
     sites = _sites(hn=Answer(200, json.dumps({"hits": [{"title": "Ask HN: Who wants to be hired?", "objectID": "1"}]})))
     with pytest.raises(Exception, match='no "Ask HN: Who is hiring\\?" thread'):
@@ -193,15 +224,37 @@ def test_usajobs_asks_with_the_key_in_its_headers_for_each_title_since_the_last_
     read = _read("usajobs", settings, sites, since=STARTED - timedelta(days=2, hours=1))
     asked = [(url, headers) for url, _, headers in sites.asked]
     assert [parse_qs(urlsplit(url).query) for url, _ in asked] == [
-        {"Keyword": [title], "DatePosted": ["3"], "ResultsPerPage": ["500"]} for title in settings.titles]
+        {"Keyword": [title], "DatePosted": ["3"], "ResultsPerPage": ["500"], "Page": ["1"]}
+        for title in settings.titles]
     assert all(headers == {"User-Agent": "ada@example.com", "Authorization-Key": "usa-key"} for _, headers in asked)
-    # Both titles found both jobs; each is kept once.
+    # Both titles found every job; each wanted one is kept once, the budget analyst not at all.
     assert _jobs(read) == [
         ("QA Automation Engineer", "Example Agency", "Durham, North Carolina", "on_site", "Raleigh-Durham-Chapel Hill"),
         ("SDET (Software Test Engineer)", "Example Bureau", "Anywhere in the U.S. (remote job)", "remote", None),
+        ("SDET", "Example Office", "Raleigh, North Carolina", "on_site", "Raleigh-Durham-Chapel Hill"),
     ]
     assert read.jobs[0][0].link == "https://www.usajobs.gov/job/801"
-    assert read.jobs[0][1] == "Test the agency's public systems.\n\n- Write automated tests\n- Review releases"
+    # What the job needs is kept with what it does; a job that says neither has its page read.
+    assert [description for _, description in read.jobs] == [
+        "Test the agency's public systems.\n\n- Write automated tests\n- Review releases\n\n"
+        "One year of test automation experience.\n\nUS citizenship.",
+        "Build the bureau's test tools.",
+        None,
+    ]
+
+
+def test_usajobs_reads_every_page_of_a_search_and_asks_at_most_60_days_back(settings: Settings) -> None:
+    page = json.loads((HERE / "usajobs.json").read_text())
+    page["SearchResult"]["SearchResultCountAll"] = 1200
+    asked: list[str] = []
+
+    def get(url: str, body: object = None, headers: object = None) -> Answer:
+        asked.append(url)
+        return Answer(200, json.dumps(page))
+
+    Feeds(get=get).read("usajobs", replace(settings, titles=["SDET"]), STARTED - timedelta(days=90), STARTED)
+    assert [parse_qs(urlsplit(url).query)["Page"] for url in asked] == [["1"], ["2"], ["3"]]
+    assert {parse_qs(urlsplit(url).query)["DatePosted"][0] for url in asked} == {"60"}
 
 
 def test_adzuna_searches_each_title_in_each_area_and_once_remote_and_reads_the_pages(settings: Settings) -> None:
@@ -325,7 +378,7 @@ def test_find_saves_every_feeds_jobs_once_with_a_line_for_each(
         # Munich is in no area and not remote.
         "arbeitnow: 4 found, 3 new",
         "hn_hiring: 3 found, 3 new",
-        "usajobs: 2 found, 2 new",
+        "usajobs: 3 found, 3 new",
         "adzuna: 1 found, 1 new",
         # The Durham job is the alert's LinkedIn job, saved once.
         "jooble: 2 found, 1 new",
@@ -448,3 +501,87 @@ def test_http_get_sends_the_headers_it_is_given(monkeypatch: pytest.MonkeyPatch)
     # urllib spells a header's name with only its first letter in capitals.
     assert sent[0]["Authorization-key"] == "k" and sent[0]["User-agent"] == "ada@example.com"
     assert "Authorization-key" not in sent[1] and sent[1]["User-agent"] == search.USER_AGENT
+
+
+def test_adzuna_reads_every_page_of_a_search(settings: Settings) -> None:
+    full = {"count": 120, "results": [
+        {"id": str(number), "title": "SDET", "company": {"display_name": "Example Labs"},
+         "location": {"display_name": "Raleigh, NC"}} for number in range(50)]}
+    asked: list[str] = []
+
+    def get(url: str, body: object = None, headers: object = None) -> Answer:
+        asked.append(url)
+        return Answer(200, json.dumps(full))
+
+    read = Feeds(get=get).read("adzuna", replace(settings, titles=["SDET"], remote="exclude",
+                                                  areas=["Raleigh-Durham-Chapel Hill"]), STARTED, STARTED)
+    assert [urlsplit(url).path.rsplit("/", 1)[1] for url in asked] == ["1", "2", "3"]
+    assert len(read.jobs) == 50 and read.problems == []
+
+
+def test_jooble_reads_pages_up_to_its_total(settings: Settings) -> None:
+    page = json.loads((HERE / "jooble.json").read_text())
+    page["totalCount"] = 5
+    bodies: list[object] = []
+
+    def get(url: str, body: object = None, headers: object = None) -> Answer:
+        bodies.append(body)
+        # Two jobs a page, new ones each page, an empty page after the total.
+        number = int(body["page"])  # type: ignore[index]
+        for job, at in zip(page["jobs"], (0, 1)):
+            job["id"] = number * 10 + at
+        return Answer(200, json.dumps(page))
+
+    read = Feeds(get=get).read("jooble", replace(settings, titles=["SDET"], remote="only"), STARTED, STARTED)
+    assert [body["page"] for body in bodies] == ["1", "2", "3"]  # type: ignore[index]
+    assert len(read.jobs) == 3  # the SDETs of three pages; the senior QA engineers are not wanted
+
+
+def test_one_failed_search_of_a_feed_keeps_the_others_jobs(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    sites = _sites()
+
+    def get(url: str, body: object = None, headers: object = None) -> Answer:
+        if url.startswith(ADZUNA) and "where=San+Francisco" in url:
+            return Answer(500, "down")
+        return sites(url, body, headers)
+
+    summary, jobs = _find(tmp_path, settings, clock, get)  # type: ignore[arg-type]
+    assert summary.failed == ["adzuna: QA Automation Engineer in San Francisco, CA: HTTP 500",
+                              "adzuna: SDET in San Francisco, CA: HTTP 500"]
+    assert "adzuna: 1 found, 1 new" in str(summary).splitlines()
+    assert any(job.source == "adzuna" for job in jobs.all())
+    # Its jobs are saved; it reads from the same time next run.
+    assert jobs.last_run("adzuna") is None and jobs.last_run("jooble") == clock.now
+
+
+def test_the_next_run_of_a_feed_reads_from_its_last_run(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    _, jobs = _find(tmp_path, settings, clock, _sites())
+    clock.now += timedelta(hours=5)
+    sites = _sites()
+    _find(tmp_path, settings, clock, sites, jobs)
+    assert {parse_qs(urlsplit(url).query)["max_days_old"][0] for url in sites.urls(ADZUNA)} == {"1"}
+    assert {parse_qs(urlsplit(url).query)["DatePosted"][0] for url in sites.urls(USAJOBS)} == {"1"}
+    # Arbeitnow's first page holds a job from before the last run.
+    assert sites.urls(ARBEITNOW) == [ARBEITNOW]
+
+
+def test_a_job_two_searches_found_keeps_the_area_one_gave_and_an_unknown_area_its_search(
+    settings: Settings
+) -> None:
+    from job_hunt.feeds import FeedRead, _job
+
+    read = FeedRead()
+    read.add((_job("jooble", settings, link="https://jooble.org/desc/1", title="SDET", company="Example Labs",
+                   places=["Somewhere"], remote="remote"), None))
+    read.add((_job("jooble", settings, link="https://jooble.org/desc/1", title="SDET", company="Example Labs",
+                   places=["Somewhere"], remote="on_site", area="San Francisco Bay Area"), None))
+    assert [(job.remote, job.area) for job, _ in read.jobs] == [("remote", "San Francisco Bay Area")]
+    # An area the table does not know keeps its search's area whatever state the place names.
+    lisbon = replace(settings, areas=["Lisbon"])
+    job = _job("jooble", lisbon, link="https://jooble.org/desc/2", title="SDET", company="Example Labs",
+               places=["Lisboa, PT"], remote="on_site", area="Lisbon")
+    assert job.area == "Lisbon"

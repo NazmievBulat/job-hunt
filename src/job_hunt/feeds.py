@@ -56,9 +56,14 @@ HN_TITLE_LETTERS = 150
 USAJOBS = "https://data.usajobs.gov/api/search"
 USAJOBS_PAGE = 500
 USAJOBS_DAYS = 60
-ADZUNA = "https://api.adzuna.com/v1/api/jobs/us/search/1"
+# The page's number follows.
+ADZUNA = "https://api.adzuna.com/v1/api/jobs/us/search/"
 ADZUNA_PAGE = 50
 JOOBLE = "https://jooble.org/api/"
+# A keyed feed's search is read page by page up to its total; this only stops one that pages for ever.
+KEYED_PAGES = 10
+# "NO REMOTE", "not remote", "Remote: no": a first line that says the job is not remote.
+NOT_REMOTE = re.compile(r"\b(?:no|not|non)[\s-]+remote\b|\bremote\s*[:=]?\s*(?:no|none)\b", re.IGNORECASE)
 
 
 class Get(Protocol):
@@ -188,13 +193,15 @@ def hn_job(comment: dict[str, Any], settings: Settings) -> Found:
     first = " ".join(html_text(re.split(r"<p>", text, maxsplit=1)[0]).split())
     parts = [part.strip() for part in first.split("|") if part.strip()]
     remote: Remote = ("hybrid" if re.search(r"\bhybrid\b", first, re.IGNORECASE)
+                      else "on_site" if NOT_REMOTE.search(first)
                       else "remote" if re.search(r"\bremote\b", first, re.IGNORECASE) else "on_site")
     if len(parts) >= 3:
         company, rest = parts[0], parts[1:]
         title = next((part for part in rest if title_matches(part, settings.titles)), rest[0])
         places = [part for part in rest if part is not title]
         in_area = [part for part in places if area_of(part, settings.areas) is not None]
-        remote_named = [part for part in places if re.search(r"\bremote\b", part, re.IGNORECASE)]
+        remote_named = [part for part in places
+                        if re.search(r"\bremote\b", part, re.IGNORECASE) and not NOT_REMOTE.search(part)]
         places = in_area[:1] or remote_named[:1]
     else:
         # A comment the code cannot read: its first line, cut at a word, stands for the title.
@@ -225,32 +232,42 @@ def _hn_hiring(settings: Settings, ask: Ask, since: datetime, now: datetime) -> 
     return read
 
 
+def _usajobs_job(entry: dict[str, Any], settings: Settings) -> Found:
+    job = entry["MatchedObjectDescriptor"]
+    details = (job.get("UserArea") or {}).get("Details") or {}
+    display = job.get("PositionLocationDisplay") or ""
+    places = [each.get("LocationName") or "" for each in job.get("PositionLocation") or []] or [display]
+    remote = ("remote" if details.get("RemoteIndicator") is True or re.search(r"\bremote\b", display, re.IGNORECASE)
+              else _remote(None, places))
+    duties = "\n".join(f"- {duty}" for duty in details.get("MajorDuties") or [] if isinstance(duty, str))
+    # What the job needs, besides what it does: the scoring and the resume read it.
+    parts = [details.get("JobSummary"), duties, job.get("QualificationSummary"), details.get("Requirements"),
+             details.get("Education")]
+    description = "\n\n".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
+    # Without a description the job's page is read.
+    return (_job("usajobs", settings, link=job["PositionURI"], title=job["PositionTitle"],
+                 company=job.get("OrganizationName") or "", places=places, remote=remote), description or None)
+
+
 def _usajobs(settings: Settings, ask: Ask, since: datetime, now: datetime) -> FeedRead:
     key = settings.keys["usajobs"]
     headers = {"User-Agent": key["email"], "Authorization-Key": key["key"]}
     read = FeedRead()
     for title in settings.titles:
-        query = urlencode({"Keyword": title, "DatePosted": min(_days(since, now), USAJOBS_DAYS),
-                           "ResultsPerPage": USAJOBS_PAGE})
-        try:
-            entries = ask(f"{USAJOBS}?{query}", None, headers)["SearchResult"]["SearchResultItems"]
-        except SearchError as error:
-            read.problems.append(f"{title}: {error}")
-            continue
-        for entry in entries:
-            job = entry["MatchedObjectDescriptor"]
-            if not title_matches(_plain(job["PositionTitle"]), settings.titles):
-                continue
-            details = (job.get("UserArea") or {}).get("Details") or {}
-            display = job.get("PositionLocationDisplay") or ""
-            places = [each.get("LocationName") or "" for each in job.get("PositionLocation") or []] or [display]
-            remote = ("remote" if details.get("RemoteIndicator") is True or re.search(r"\bremote\b", display, re.IGNORECASE)
-                      else _remote(None, places))
-            duties = "\n".join(f"- {duty}" for duty in details.get("MajorDuties") or [] if isinstance(duty, str))
-            description = "\n\n".join(part for part in (details.get("JobSummary") or "", duties) if part)
-            read.add((_job("usajobs", settings, link=job["PositionURI"], title=job["PositionTitle"],
-                           company=job.get("OrganizationName") or "", places=places, remote=remote),
-                      description or None))
+        for page in range(1, KEYED_PAGES + 1):
+            query = urlencode({"Keyword": title, "DatePosted": min(_days(since, now), USAJOBS_DAYS),
+                               "ResultsPerPage": USAJOBS_PAGE, "Page": page})
+            try:
+                result = ask(f"{USAJOBS}?{query}", None, headers)["SearchResult"]
+            except SearchError as error:
+                read.problems.append(f"{title}: {error}")
+                break
+            entries = result["SearchResultItems"]
+            for entry in entries:
+                if title_matches(_plain(entry["MatchedObjectDescriptor"]["PositionTitle"]), settings.titles):
+                    read.add(_usajobs_job(entry, settings))
+            if not entries or page * USAJOBS_PAGE >= int(result.get("SearchResultCountAll") or 0):
+                break
     return read
 
 
@@ -262,11 +279,16 @@ def _adzuna(settings: Settings, ask: Ask, since: datetime, now: datetime) -> Fee
             query = {"app_id": key["app_id"], "app_key": key["app_key"], "results_per_page": ADZUNA_PAGE,
                      "what_phrase": title, "max_days_old": _days(since, now), "content-type": "application/json"}
             query |= {"what_and": "remote"} if area is None else {"where": where}
-            try:
-                entries = ask(f"{ADZUNA}?{urlencode(query)}")["results"]
-            except SearchError as error:
-                read.problems.append(f"{title} in {where}: {error}")
-                continue
+            entries: list[Any] = []
+            for page in range(1, KEYED_PAGES + 1):
+                try:
+                    data = ask(f"{ADZUNA}{page}?{urlencode(query)}")
+                except SearchError as error:
+                    read.problems.append(f"{title} in {where}: {error}")
+                    break
+                entries += data["results"]
+                if len(data["results"]) < ADZUNA_PAGE or page * ADZUNA_PAGE >= int(data.get("count") or 0):
+                    break
             for entry in entries:
                 place = (entry.get("location") or {}).get("display_name") or ""
                 remote = "remote" if area is None else _remote(None, [place, _plain(entry["title"])])
@@ -283,13 +305,17 @@ def _jooble(settings: Settings, ask: Ask, since: datetime, now: datetime) -> Fee
     read = FeedRead()
     for title in settings.titles:
         for where, area in _searches(settings):
-            body = ({"keywords": f"{title} remote", "page": "1"} if area is None
-                    else {"keywords": title, "location": where, "page": "1"})
-            try:
-                entries = ask(f"{JOOBLE}{quote(key)}", body)["jobs"]
-            except SearchError as error:
-                read.problems.append(f"{title} in {where}: {error}")
-                continue
+            search = {"keywords": f"{title} remote"} if area is None else {"keywords": title, "location": where}
+            entries: list[Any] = []
+            for page in range(1, KEYED_PAGES + 1):
+                try:
+                    data = ask(f"{JOOBLE}{quote(key)}", {**search, "page": str(page)})
+                except SearchError as error:
+                    read.problems.append(f"{title} in {where}: {error}")
+                    break
+                entries += data["jobs"]
+                if not data["jobs"] or len(entries) >= int(data.get("totalCount") or 0):
+                    break
             for entry in entries:
                 place = _plain(entry.get("location"))
                 remote = "remote" if area is None else _remote(None, [place, _plain(entry["title"])])

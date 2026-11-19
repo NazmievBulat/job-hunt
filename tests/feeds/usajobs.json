@@ -1,4 +1,105 @@
-{"LanguageCode": "EN", "SearchParameters": {}, "SearchResult": {"SearchResultCount": 2, "SearchResultCountAll": 2, "SearchResultItems": [
-  {"MatchedObjectId": "801", "MatchedObjectDescriptor": {"PositionID": "EX-801", "PositionTitle": "QA Automation Engineer", "PositionURI": "https://www.usajobs.gov/job/801", "OrganizationName": "Example Agency", "PositionLocationDisplay": "Durham, North Carolina", "PositionLocation": [{"LocationName": "Durham, North Carolina", "CountryCode": "United States"}], "PublicationStartDate": "2026-11-16T00:00:00.0000", "UserArea": {"Details": {"JobSummary": "Test the agency's public systems.", "MajorDuties": ["Write automated tests", "Review releases"], "RemoteIndicator": false}}}},
-  {"MatchedObjectId": "802", "MatchedObjectDescriptor": {"PositionID": "EX-802", "PositionTitle": "SDET (Software Test Engineer)", "PositionURI": "https://www.usajobs.gov/job/802", "OrganizationName": "Example Bureau", "PositionLocationDisplay": "Anywhere in the U.S. (remote job)", "PositionLocation": [{"LocationName": "Anywhere in the U.S. (remote job)", "CountryCode": "United States"}], "PublicationStartDate": "2026-11-15T00:00:00.0000", "UserArea": {"Details": {"JobSummary": "Build the bureau's test tools.", "MajorDuties": [], "RemoteIndicator": true}}}}
-]}}
+{
+ "LanguageCode": "EN",
+ "SearchParameters": {},
+ "SearchResult": {
+  "SearchResultCount": 4,
+  "SearchResultCountAll": 4,
+  "SearchResultItems": [
+   {
+    "MatchedObjectId": "801",
+    "MatchedObjectDescriptor": {
+     "PositionID": "EX-801",
+     "PositionTitle": "QA Automation Engineer",
+     "PositionURI": "https://www.usajobs.gov/job/801",
+     "OrganizationName": "Example Agency",
+     "PositionLocationDisplay": "Durham, North Carolina",
+     "PositionLocation": [
+      {
+       "LocationName": "Durham, North Carolina",
+       "CountryCode": "United States"
+      }
+     ],
+     "PublicationStartDate": "2026-11-16T00:00:00.0000",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "Test the agency's public systems.",
+       "MajorDuties": [
+        "Write automated tests",
+        "Review releases"
+       ],
+       "RemoteIndicator": false,
+       "Requirements": "US citizenship."
+      }
+     },
+     "QualificationSummary": "One year of test automation experience."
+    }
+   },
+   {
+    "MatchedObjectId": "802",
+    "MatchedObjectDescriptor": {
+     "PositionID": "EX-802",
+     "PositionTitle": "SDET (Software Test Engineer)",
+     "PositionURI": "https://www.usajobs.gov/job/802",
+     "OrganizationName": "Example Bureau",
+     "PositionLocationDisplay": "Anywhere in the U.S. (remote job)",
+     "PositionLocation": [
+      {
+       "LocationName": "Anywhere in the U.S. (remote job)",
+       "CountryCode": "United States"
+      }
+     ],
+     "PublicationStartDate": "2026-11-15T00:00:00.0000",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "Build the bureau's test tools.",
+       "MajorDuties": [],
+       "RemoteIndicator": true
+      }
+     }
+    }
+   },
+   {
+    "MatchedObjectId": "803",
+    "MatchedObjectDescriptor": {
+     "PositionID": "EX-803",
+     "PositionTitle": "Budget Analyst",
+     "PositionURI": "https://www.usajobs.gov/job/803",
+     "OrganizationName": "Example Agency",
+     "PositionLocationDisplay": "Durham, North Carolina",
+     "PositionLocation": [
+      {
+       "LocationName": "Durham, North Carolina"
+      }
+     ],
+     "UserArea": {
+      "Details": {
+       "JobSummary": "Budgets.",
+       "MajorDuties": []
+      }
+     }
+    }
+   },
+   {
+    "MatchedObjectId": "804",
+    "MatchedObjectDescriptor": {
+     "PositionID": "EX-804",
+     "PositionTitle": "SDET",
+     "PositionURI": "https://www.usajobs.gov/job/804",
+     "OrganizationName": "Example Office",
+     "PositionLocationDisplay": "Raleigh, North Carolina",
+     "PositionLocation": [
+      {
+       "LocationName": "Raleigh, North Carolina"
+      }
+     ],
+     "UserArea": {
+      "Details": {
+       "JobSummary": "",
+       "MajorDuties": []
+      }
+     }
+    }
+   }
+  ]
+ }
+}

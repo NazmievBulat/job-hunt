@@ -512,3 +512,131 @@ def test_a_reply_that_is_not_numbers_is_refused(hunt: tuple[Path, FakeClaude],
                                                 capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["send-notes", "one"]) == 1
     assert "numbers" in capsys.readouterr().err
+
+
+# What the reviews found untested
+
+
+def _approved(notes: Notes, threads: Threads, jobs: JobsList, project: Path, *posters: dict) -> list[int]:
+    drafted = _drafted(notes, jobs, project, *posters)
+    questions(jobs, project / "data", threads, notes)
+    decide(notes, "send", None)
+    return drafted
+
+
+def test_the_command_keeps_the_daily_cap_of_the_settings(
+        hunt: tuple[Path, FakeClaude], monkeypatch: pytest.MonkeyPatch) -> None:
+    project, fake = hunt
+    settings = json.loads((project / "data" / "settings.json").read_text())
+    (project / "data" / "settings.json").write_text(json.dumps({**settings, "linkedin_notes_daily": 1}))
+    jobs = JobsList(project / "data" / "jobs.db")
+    for number in (1, 2, 3):
+        _applied(jobs, project, number, _poster(number))
+    cli.main(["draft-notes"])
+    cli.main(["questions"])
+
+    assert cli.main(["send-notes", "all"]) == 0
+
+    assert fake.sent == ["Jane Doe 1"]
+
+
+def test_a_note_that_may_have_gone_counts_against_the_daily_cap(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    _approved(notes, threads, jobs, project, _poster(1), _poster(2), _poster(3))
+    sender = Sender(None)
+
+    _send(notes, threads, jobs, project, clock, sender, daily=2)
+
+    assert [note.state for note in notes.all()] == ["unsure", "sent", "approved"]
+
+
+def test_skip_2_skips_only_that_note_and_approves_the_others(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path) -> None:
+    first, second, third = _drafted(notes, jobs, project, _poster(1), _poster(2), _poster(3))
+    questions(jobs, project / "data", threads, notes)
+
+    decide(notes, "skip", [second])
+
+    assert [notes.get(note).state for note in (first, second, third)] == ["approved", "skipped", "approved"]
+
+
+def test_a_note_left_sending_by_a_run_that_died_is_unsure(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path) -> None:
+    [note] = _approved(notes, threads, jobs, project, _poster(1))
+    notes.move(note, "sending")
+
+    anything_waiting(jobs, project / "data", threads, notes)
+
+    assert notes.get(note).state == "unsure"
+
+
+def test_a_send_stopped_in_the_middle_is_unsure_and_the_stop_goes_on(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    [note] = _approved(notes, threads, jobs, project, _poster(1))
+
+    def stopped(command: list[str]) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        _send(notes, threads, jobs, project, clock, stopped)  # type: ignore[arg-type]
+
+    assert notes.get(note).state == "unsure"
+    assert not (project / "data" / "linkedin.lock").exists()
+
+
+def test_a_failed_send_is_tried_once_more_then_failed(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    [note] = _approved(notes, threads, jobs, project, _poster(1))
+    sender = Sender({"result": "failed", "reason": "the box did not open"},
+                    {"result": "failed", "reason": "the box did not open"})
+
+    said = _send(notes, threads, jobs, project, clock, sender)
+
+    assert notes.get(note).state == "failed" and said.failed == 1
+    assert sender.reports == [] and sender.sent == []
+
+
+def test_two_approved_notes_to_one_person_send_one(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    first, second = _approved(notes, threads, jobs, project, _poster(1), _poster(2))
+    # Saved before the rule of one note per person: the same person on both.
+    notes._db.execute("UPDATE notes SET profile = ?", (notes.get(first).profile,))
+    notes._db.commit()
+    sender = Sender()
+
+    _send(notes, threads, jobs, project, clock, sender)
+
+    assert len(sender.sent) == 1
+    assert notes.get(second).state == "skipped"
+
+
+def test_approved_notes_over_the_cap_are_named_for_the_chat_to_send_the_next_day(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    _approved(notes, threads, jobs, project, _poster(1), _poster(2))
+    _send(notes, threads, jobs, project, clock, Sender(), daily=1)
+
+    assert "not sent yet" not in questions(jobs, project / "data", threads, notes, 1)
+    clock.now = NOON + timedelta(days=1)
+    assert ("Approved notes to hiring managers not sent yet (1): run hunt send-notes"
+            in questions(jobs, project / "data", threads, notes, 1))
+
+
+def test_a_note_sent_without_its_conversation_makes_no_thread(
+        notes: Notes, threads: Threads, jobs: JobsList, project: Path, clock: MovableClock) -> None:
+    [note] = _approved(notes, threads, jobs, project, _poster(1))
+
+    _send(notes, threads, jobs, project, clock, Sender({"result": "sent"}))
+
+    assert notes.get(note).state == "sent"
+    assert threads.in_states("sent") == []
+
+
+def test_hunt_apply_drafts_the_notes_at_its_end(
+        hunt: tuple[Path, FakeClaude], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    project, _ = hunt
+    _applied(JobsList(project / "data" / "jobs.db"), project, 1, _poster(1))
+    monkeypatch.setattr(cli, "apply", lambda *args, **kwargs: "0 resumes written")
+
+    assert cli.main(["apply"]) == 0
+
+    assert "1 notes to hiring managers drafted" in capsys.readouterr().out

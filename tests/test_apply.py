@@ -1215,7 +1215,8 @@ def test_an_easy_apply_sign_in_is_tried_again_through_linkedin_in_a_fresh_tab(pr
     apply(jobs, project, run_linkedin=run, run_resume=Resumes(project), run_site=no_linkedin, linkedin=lock)
     assert "tab_id" not in json.loads(commands[1][3].removeprefix(f"/{LINKEDIN_SKILL} "))
     assert jobs.get(job).state == "applied"
-    assert jobs.starts_on("linkedin.com", datetime(2026, 1, 1, tzinfo=UTC), but=0) == {}
+    # Kept for LinkedIn's daily number, once a job: its try again is the same application.
+    assert list(jobs.starts_on("linkedin.com", datetime(2026, 1, 1, tzinfo=UTC), but=0)) == [job]
 
 
 def test_the_host_is_where_a_tracked_link_ended(project: Path, jobs: JobsList) -> None:

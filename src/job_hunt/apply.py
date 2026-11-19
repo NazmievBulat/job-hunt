@@ -1,9 +1,9 @@
 """Applying: a resume for every picked job, then the applications.
 
-`apply` is the coordinator. It starts one resume worker per picked job, all at once (`claude -p`
-with the `write-resume` skill), and moves each job to `resume_ready` once its `resume.pdf` is
-built. Then up to three company-site workers at once (`claude --chrome -p` with the `apply-site`
-skill), and beside them one LinkedIn worker for the Easy Apply jobs (`apply-linkedin`), one job
+`apply` is the coordinator. It starts one resume worker per picked job, up to `RESUME_WORKERS` at
+once (`claude -p` with the `write-resume` skill), and moves each job to `resume_ready` once its
+`resume.pdf` is built. Then up to three company-site workers at once, or the day's plan's
+`site_workers` (`claude --chrome -p` with the `apply-site` skill), and beside them one LinkedIn worker for the Easy Apply jobs (`apply-linkedin`), one job
 after another under the LinkedIn lock (`linkedin_lock`), three to six minutes apart. Each
 applies to one job in a Chrome tab of its own and writes `jobs/<id>/report.json`:
 
@@ -34,6 +34,11 @@ settings' `captcha` set to `skip`, it is `failed`, to apply by hand.
 Fewer CAPTCHAs: two company-site workers start on one site's host at least `HOST_SPACING`
 apart, and at most `HOST_DAILY` a day; the rest wait for the next day. A job going on in the tab
 it paused in is not held: it is the same application.
+
+With the day's plan (`plan`), the jobs start in its order, leftovers of an earlier day first,
+spread over the day, up to its daily numbers and not past the summary hour; the rest wait for
+the next morning. A job whose title was applied to at the same company lately is left out
+(skipped), whatever the plan. A job skipped while the run goes on is not started.
 """
 
 from __future__ import annotations
@@ -53,6 +58,7 @@ from job_hunt.career import career_lock, read_career, write_career
 from job_hunt.finder import ONLY_NAMED_TOOLS
 from job_hunt.jobs import CAPTCHA_ASKS, Job, JobsList, State
 from job_hunt.linkedin_lock import LinkedInLock
+from job_hunt.plan import LINKEDIN_HOST, RESUME_WORKERS, Plan, applied_lately, gap, midnight, order, started_today
 from resume_kit.contracts.form_answers import asks_self_identification
 
 MODEL = "claude-sonnet-5-5"
@@ -119,12 +125,15 @@ class Summary:
     applied: int = 0
     paused: int = 0
     failed: int = 0
-    # Left for a later hunt apply: a pause tried again later, or a site's limit for the day.
+    # Left for a later hunt apply: a pause tried again later, or a site's or the day's limit.
     later: int = 0
+    # Skipped: the same title at the same company was applied to lately.
+    left_out: int = 0
 
     def __str__(self) -> str:
         said = f"{self.resumes} resumes written; {self.applied} applied, {self.paused} paused, {self.failed} failed"
-        return said + (f", {self.later} left for later" if self.later else "")
+        said += f", {self.later} left for later" if self.later else ""
+        return said + (f", {self.left_out} left out as applied to lately" if self.left_out else "")
 
 
 def _folder(root: Path, job: int) -> Path:
@@ -261,12 +270,15 @@ class _Run:
     summary: Summary
     captcha: str
     clock: Callable[[], datetime]
+    plan: Plan | None = None
 
 
 def apply(
     jobs: JobsList, root: Path, *, run_resume: Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock | None = None,
-    captcha: str = "ask", sleep: Callable[[float], None] = time.sleep,
+    captcha: str = "ask", sleep: Callable[[float], None] = time.sleep, plan: Plan | None = None,
 ) -> Summary:
+    """Without a plan, only the limits of this module hold: no daily number, no spread, no end of
+    the day."""
     (root / "jobs").mkdir(exist_ok=True)
     # One run at a time: two would start two workers on one job.
     with (root / "jobs" / "apply.lock").open("w") as lock:
@@ -275,7 +287,7 @@ def apply(
         except BlockingIOError as error:
             raise ApplyError("another hunt apply is already running") from error
         summary = Summary()
-        this = _Run(jobs, root, summary, captcha, jobs.now)
+        this = _Run(jobs, root, summary, captcha, jobs.now, plan)
         _left_applying(this)
         _resumes(jobs, root, run_resume, summary)
         _applications(this, run_site, run_linkedin, linkedin or LinkedInLock(root / "data"), sleep)
@@ -340,9 +352,12 @@ def _resumes(jobs: JobsList, root: Path, run: Run, summary: Summary) -> None:
                 todo.append(job.id)
         if not todo:
             return
-        with ThreadPoolExecutor(max_workers=len(todo)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(todo), RESUME_WORKERS)) as pool:
             failures = list(zip(todo, pool.map(lambda job: _write_resume(job, root, run), todo)))
         for job, failure in failures:
+            # Skipped meanwhile: its resume is never used.
+            if jobs.get(job).state != "picked":
+                continue
             if failure is None:
                 jobs.move(job, "resume_ready")
                 summary.resumes += 1
@@ -393,17 +408,65 @@ def _midnight(now: datetime, days: int = 0) -> datetime:
     return datetime.combine(now.astimezone().date() + timedelta(days=days), datetime.min.time()).astimezone()
 
 
-def _next_site(this: _Run, waiting: list[int]) -> tuple[int | None, float | None]:
+def _continues(this: _Run, job: int) -> bool:
+    """Going on in the tab it paused in, after "done": the same application, and a solved CAPTCHA
+    does not last a wait."""
+    paused = _paused(_folder(this.root, job) / "report.json", _skill(this.jobs.get(job)))
+    return paused is not None and paused.tab is not None
+
+
+def _held(this: _Run, job: int, skill: str) -> bool:
+    """Whether the job leaves the waiting: skipped meanwhile, left out as its title was applied to
+    lately, or past the day's plan, for the next morning."""
+    jobs, plan, now = this.jobs, this.plan, this.clock()
+    found = jobs.get(job)
+    if found.state != "resume_ready":
+        return True
+    if _continues(this, job):
+        return False
+    if applied_lately(jobs, found, now) is not None:
+        jobs.move(job, "skipped")
+        this.summary.left_out += 1
+        return True
+    if plan is None:
+        return False
+    linkedin = jobs.starts_on(LINKEDIN_HOST, midnight(now), but=job)
+    if (now >= plan.day_end(now) or len(started_today(jobs, now) - {job}) >= plan.daily
+            or (skill == LINKEDIN_SKILL and len(linkedin) >= plan.linkedin_daily)):
+        jobs.later(job, plan.next_morning(now))
+        this.summary.later += 1
+        return True
+    return False
+
+
+def _spread(this: _Run, waiting: int) -> float | None:
+    """How many seconds until the plan's spread lets a new application start, or None when one
+    may start now."""
+    if this.plan is None:
+        return None
+    now = this.clock()
+    starts = this.jobs.started_since(midnight(now))
+    if not starts:
+        return None
+    left = (max(starts.values()) + gap(this.plan, now, min(waiting, this.plan.daily - len(starts))) - now)
+    return left.total_seconds() if left > timedelta(0) else None
+
+
+def _next_site(this: _Run, waiting: list[int], spread: float | None = None) -> tuple[int | None, float | None]:
     """The first waiting job whose host may be started on now, or None and how many seconds until
-    one may. A job whose host had its starts of the day waits for the next day."""
+    one may. A job whose host had its starts of the day waits for the next day; with a `spread`
+    to wait, only a job going on in its tab starts."""
     now = this.clock()
     day = _midnight(now)
-    soonest = None
+    soonest = spread
     for job in list(waiting):
-        # Going on in the tab it paused in, after "done": the same application, and a solved
-        # CAPTCHA does not last the spacing.
-        if (paused := _paused(_folder(this.root, job) / "report.json", SITE_SKILL)) is not None and paused.tab:
+        if _held(this, job, SITE_SKILL):
+            waiting.remove(job)
+            continue
+        if _continues(this, job):
             return job, None
+        if spread is not None:
+            continue
         on = host(this.jobs.get(job))
         if len(this.jobs.starts_on(on, day, but=job)) >= HOST_DAILY:
             this.jobs.later(job, _midnight(now, days=1))
@@ -422,7 +485,7 @@ def _next_site(this: _Run, waiting: list[int]) -> tuple[int | None, float | None
 def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: LinkedInLock,
                   sleep: Callable[[float], None]) -> None:
     jobs, root = this.jobs, this.root
-    ready = [job for job in jobs.in_states("resume_ready") if jobs.due(job)]
+    ready = order([job for job in jobs.in_states("resume_ready") if jobs.due(job)])
     waiting: dict[str, list[int]] = {SITE_SKILL: [], LINKEDIN_SKILL: []}
     for job in ready:
         if job.kind in ("easy_apply", "company_site"):
@@ -437,30 +500,39 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         # earlier try's report for this one's.
         report.unlink(missing_ok=True)
         jobs.move(job, "applying")
-        if skill == SITE_SKILL:
-            jobs.started_on(host(jobs.get(job)), job)
+        jobs.started_on(host(jobs.get(job)) if skill == SITE_SKILL else LINKEDIN_HOST, job)
         running[pool.submit(_apply_one, jobs.get(job), root, run, paused)] = (job, skill)
 
     # The jobs list is written here only, on this thread; the workers run the skills.
     try:
-        with ThreadPoolExecutor(max_workers=SITE_WORKERS + 1) as pool:
+        workers = this.plan.site_workers if this.plan is not None else SITE_WORKERS
+        with ThreadPoolExecutor(max_workers=workers + 1) as pool:
             while any(waiting.values()) or running:
                 sites = sum(skill == SITE_SKILL for _, skill in running.values())
                 site_later = None
-                while waiting[SITE_SKILL] and sites < SITE_WORKERS:
-                    chosen, site_later = _next_site(this, waiting[SITE_SKILL])
+                while waiting[SITE_SKILL] and sites < workers:
+                    spread = _spread(this, sum(map(len, waiting.values())))
+                    chosen, site_later = _next_site(this, waiting[SITE_SKILL], spread)
                     if chosen is None:
                         break
                     waiting[SITE_SKILL].remove(chosen)
                     start(chosen, run_site)
                     sites += 1
-                # How long until the LinkedIn worker may start, when it waits for the lock. The
-                # lock alone keeps it to one; while this run's own applies, it is not asked.
+                # How long until the LinkedIn worker may start, when it waits for the lock or the
+                # spread. The lock alone keeps it to one; while this run's own applies, it is not asked.
                 later = None
-                if waiting[LINKEDIN_SKILL] and all(skill != LINKEDIN_SKILL for _, skill in running.values()):
-                    later = linkedin.take(waiting[LINKEDIN_SKILL][0])
+                in_line = waiting[LINKEDIN_SKILL]
+                while in_line and all(skill != LINKEDIN_SKILL for _, skill in running.values()):
+                    if _held(this, in_line[0], LINKEDIN_SKILL):
+                        in_line.pop(0)
+                        continue
+                    if not _continues(this, in_line[0]) and (
+                            later := _spread(this, sum(map(len, waiting.values())))) is not None:
+                        break
+                    later = linkedin.take(in_line[0])
                     if later is None:
-                        start(waiting[LINKEDIN_SKILL].pop(0), run_linkedin)
+                        start(in_line.pop(0), run_linkedin)
+                    break
                 later = min((each for each in (later, site_later) if each is not None), default=None)
                 if not running:
                     if later is not None:

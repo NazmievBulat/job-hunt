@@ -122,14 +122,24 @@ def test_a_job_already_decided_the_other_way_is_named_and_nothing_is_decided(job
     jobs.show()
     jobs.decide([1], "picked")
     with pytest.raises(PickError, match=r"^1 \(QA Engineer 1 at Example Labs\) is already picked$"):
-        jobs.decide([2, 1], "skipped")
-    with pytest.raises(PickError, match=r"^1 \(QA Engineer 1 at Example Labs\) is already picked$"):
         jobs.decide([1], "picked")
-    assert (jobs.get(one).state, jobs.get(two).state) == ("picked", "scored")
-    # A pick that has gone further than picked is still a pick.
+    # A pick that started is still a pick.
     jobs.move(one, "resume_ready")
-    with pytest.raises(PickError, match="is already picked"):
-        jobs.decide([1], "skipped")
+    jobs.move(one, "applying")
+    with pytest.raises(PickError, match=r"^1 \(QA Engineer 1 at Example Labs\) is already picked$"):
+        jobs.decide([2, 1], "skipped")
+    assert (jobs.get(one).state, jobs.get(two).state) == ("applying", "scored")
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_a_pick_not_started_yet_may_be_skipped(jobs: JobsList, ready: bool) -> None:
+    one = _scored(jobs, 1, 9)
+    jobs.show()
+    jobs.decide([1], "picked")
+    if ready:
+        jobs.move(one, "resume_ready")
+    assert [job.id for _, job in jobs.decide([1], "skipped")] == [one]
+    assert (jobs.get(one).state, jobs.get(one).decision) == ("skipped", "skipped")
 
 
 @pytest.fixture

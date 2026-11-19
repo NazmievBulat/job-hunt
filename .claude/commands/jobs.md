@@ -19,6 +19,9 @@ below is one reply and its command; use the numbers the person wrote, no others:
 - "skip 2 and 5" → `uv run hunt skip 2 5`
 - "apply 1, skip 2" → `uv run hunt pick 1`, then `uv run hunt skip 2`
 
+When the settings pick by score, the list shown is "Applying to N jobs today": "skip 3 12"
+leaves those out (`uv run hunt skip 3 12`) and nothing else is asked.
+
 The numbers are always those of the list shown. Show what the command printed. When it refuses
 (a number not on the list), show its line and ask again. A reply that is not one of these is
 answered by asking which numbers they mean.

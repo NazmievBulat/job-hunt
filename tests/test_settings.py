@@ -206,6 +206,27 @@ def test_captcha_is_ask_or_skip_and_ask_when_left_out(tmp_path: Path) -> None:
         read_settings(_write(tmp_path, {**GOOD, "captcha": "solve"}))
 
 
+def test_the_days_plan_has_its_defaults_when_left_out(tmp_path: Path) -> None:
+    settings = read_settings(_write(tmp_path, GOOD))
+    assert (settings.daily_applications, settings.auto_apply_from, settings.site_workers,
+            settings.linkedin_daily) == (20, None, 3, 25)
+    given = {**GOOD, "daily_applications": 100, "auto_apply_from": 7, "site_workers": 5, "linkedin_daily": 30}
+    settings = read_settings(_write(tmp_path, given))
+    assert (settings.daily_applications, settings.auto_apply_from, settings.site_workers,
+            settings.linkedin_daily) == (100, 7, 5, 30)
+    assert read_settings(_write(tmp_path, {**GOOD, "auto_apply_from": None})).auto_apply_from is None
+
+
+@pytest.mark.parametrize("field, value", [
+    ("daily_applications", 0), ("daily_applications", 101), ("daily_applications", "20"),
+    ("auto_apply_from", 0), ("auto_apply_from", 11), ("auto_apply_from", True),
+    ("site_workers", 0), ("site_workers", 6), ("linkedin_daily", -1), ("linkedin_daily", 31),
+])
+def test_the_days_plan_is_refused_past_its_limits(tmp_path: Path, field: str, value: object) -> None:
+    with pytest.raises(SettingsError, match=field):
+        read_settings(_write(tmp_path, {**GOOD, field: value}))
+
+
 def test_feed_keys_are_optional_and_never_printed(tmp_path: Path) -> None:
     assert read_settings(_write(tmp_path, GOOD)).keys == {}
     keys = {"usajobs": {"email": " ada@example.com ", "key": "uExampleKey"}, "jooble": {"key": "jExampleKey"}}

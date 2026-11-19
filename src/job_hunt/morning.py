@@ -1,7 +1,8 @@
 """`hunt morning`: the day's start, run by the timer, and its two later runs.
 
 It runs `hunt find`, then `hunt score` when any job is new (one a failed run left new too),
-and drafts a reply to each recruiter's message the find noted (`hunt draft-replies`) and a
+then, with the settings' `auto_apply_from`, picks the jobs at or above that score for the day
+(`plan.auto_pick`), and drafts a reply to each recruiter's message the find noted (`hunt draft-replies`) and a
 note to each hiring manager not drafted yet, a poster `hunt apply` stopped before or a failed
 drafting (`hunt draft-notes`).
 When anything waits for the person, notes to hiring managers included,
@@ -85,6 +86,8 @@ def morning(
     notes: Notes | None = None,
     notes_daily: int = 15,
     draft_notes: Callable[[], object] | None = None,
+    pick: Callable[[], object] | None = None,
+    auto_from: int | None = None,
 ) -> str:
     # The person's own day: the computer's clock, not UTC.
     today = clock().astimezone().date().isoformat()
@@ -102,6 +105,12 @@ def morning(
             score()
         except Exception as error:
             log_failure(data, "hunt score", _said(error), clock)
+    if pick is not None:
+        # Also with nothing new: jobs left over above the score are picked for a new day.
+        try:
+            pick()
+        except Exception as error:
+            log_failure(data, "hunt pick by score", _said(error), clock)
     if draft is not None and threads is not None and threads.in_states("new"):
         try:
             draft()
@@ -114,7 +123,7 @@ def morning(
             draft_notes()
         except Exception as error:
             log_failure(data, "hunt draft-notes", _said(error), clock)
-    if not anything_waiting(jobs, data, threads, notes, notes_daily):
+    if not anything_waiting(jobs, data, threads, notes, notes_daily, auto_from=auto_from):
         return "Nothing new and nothing waiting: no session started."
     if not first and running():
         return f"The {SESSION} session already runs: it asks for anything new at its next hunt questions."

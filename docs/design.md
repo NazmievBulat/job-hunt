@@ -32,8 +32,20 @@ without them.
   the bullets and the skills to match the job as closely as it can. It is not asked for numbers.
 - Company-site accounts (Workday and others): the user creates them the first time, or their
   password manager fills them in. Claude never sees or types a password.
-- One LinkedIn worker handles every Easy Apply job, one at a time. Other workers handle jobs
-  on company sites, up to three at once.
+- One LinkedIn worker handles every Easy Apply job, one at a time, at most `linkedin_daily` a
+  day (25, never more than 30: LinkedIn has its own unpublished daily and speed limits, reported
+  near 50, and lowers them for accounts that look automated). Other workers handle jobs on
+  company sites, `site_workers` at once (3, at most 5), at most 6 a day and 10 minutes apart on
+  one site's host.
+- At most `daily_applications` start in a day (20, at most 100), spread over the day from the
+  morning hour to the summary hour, never more than 15 minutes apart; the ones left over go first
+  the next morning. The same title at the same company is never applied to twice in 30 days,
+  whichever source found it.
+- Applying without the daily pick: with `auto_apply_from`, a score from 1 to 10, every scored
+  job at or above it is picked by itself, best first, up to the day's number, and the ones below
+  it are skipped. That setting is the user's word for each job it picks; the morning message
+  lists them and asks nothing ("Applying to 64 jobs today (score 7 and up). Reply skip 3 12 to
+  leave some out."), and silence is yes. Left out (null), the user picks every job.
 - Nothing is sent without the user's word: applications go out for the jobs they picked, an
   email reply only after they approve its draft, and a note to a hiring manager only on their
   "send" to the day's notes question.
@@ -133,15 +145,27 @@ Without it the job waits until the user is at the computer, and the other jobs g
    is spent. A later run of the day leaves a running session alone, which asks for the new
    jobs at its next `hunt questions`, and opens one only when none runs.
 4. **The user replies** "apply 1 3 4", "apply all above 7" or "skip 2". The session runs the
-   `hunt` command with the picks. That is all it does, so it stays cheap.
-5. **Resumes (in parallel).** One resume worker per pick (see Resume).
-6. **Applying.** The LinkedIn worker takes the Easy Apply picks one after another, a few
-   minutes apart. Up to three company-site workers take the rest at once.
+   `hunt` command with the picks. That is all it does, so it stays cheap. With
+   `auto_apply_from` set, the morning run picks instead (`plan.auto_pick`), and the session only
+   tells the day's picks, numbered for "skip 3 12", and asks nothing; the scored jobs above the
+   score past the day's number wait for the next morning's.
+5. **Resumes (in parallel).** One resume worker per pick (see Resume), five at once, all
+   written before the first application starts.
+6. **Applying (the day's plan, `plan.py`).** The picks start in order, the ones left over from
+   an earlier day first, then best score first, each start spread from the last by what is left
+   of the day shared among the applications still to start, at most 15 minutes. The LinkedIn
+   worker takes the Easy Apply picks one after another, three to six minutes apart, up to its
+   daily number. Up to `site_workers` company-site workers take the rest at once. Past the
+   day's number, LinkedIn's, or the summary hour, a job waits for the next morning. A job
+   resumed in the tab it paused in is the same application and is never held.
 7. **Paused jobs.** A CAPTCHA, a site that needs an account, or a form question the career
    file cannot answer pauses that one job. The session says what is needed and in which Chrome
    tab, and the other jobs go on. The user replies "done" or gives the answer; an answer to a
    form question is saved, so it is not asked again.
-8. **Summary.** One message at the end: applied, waiting for the user, failed and why.
+8. **Summary.** One message at the end, as `hunt status --today` prints it at any time:
+   applications sent by kind, how many wait for the user and for what (a CAPTCHA, a sign-in,
+   an answer), failed and why, how many are left for tomorrow, and how long an application took
+   on average, so the user sees what the day's number really allows.
 9. **Recruiter messages (every 20 minutes during the day).** A recruiter gets an answer within
    the hour. `hunt watch` runs every 20 minutes from the morning hour to the summary hour: one
    small `claude -p` on Claude Haiku with only Gmail's read tools notes new emails from
@@ -284,7 +308,9 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 - The resume contract and layouts keep their tests. They test code, not the model, and run in
   seconds.
 - New code gets tests for what it decides: the finder's filters and email parsing, the
-  searches on saved answers (no test calls the network), never listing the same job twice, the jobs list's states, the LinkedIn lock and the limit of three.
+  searches on saved answers (no test calls the network), never listing the same job twice, the jobs list's states, the LinkedIn lock and the limit of three,
+  and the day's plan: picking by score, its limits, the leftovers and the 30-day rule, with
+  stand-in workers and a movable clock.
 - Nothing tests the model's writing or its scores.
 
 ## Not in the first version
@@ -292,7 +318,6 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 - Weekly statistics.
 - Indeed and Glassdoor without alert emails: their sites refuse plain HTTP, and the finder does
   not get past a bot check.
-- Applying without the user's daily pick.
 
 ## Build order
 

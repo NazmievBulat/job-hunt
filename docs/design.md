@@ -286,7 +286,8 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 - One other browser may be named instead, by its `deviceId`: `chrome_browser` in
   `data/settings.json`, set with `hunt chrome-browser <deviceId>` and cleared with
   `hunt chrome-browser off` (the owner, 2026-11-19: "For now work on mac", while the PC's own
-  Chrome is not signed in). Every browser worker is then given that deviceId as `browser` and
+  Chrome is not signed in); `hunt chrome-browser --list` gives each connected browser's deviceId,
+  also while this computer's Chrome is not connected. Every browser worker is then given that deviceId as `browser` and
   selects exactly that browser with `select_browser`, on whatever computer it runs, never
   another one and never this computer's; with it not connected it does nothing in any browser
   and pauses (an application at no cost of a try) or fails (a note, a reply, the LinkedIn

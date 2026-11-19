@@ -153,6 +153,34 @@ def test_hunt_chrome_browser_refuses_what_is_not_a_device_id_and_keeps_the_setti
     assert path.read_text() == before
 
 
+def test_hunt_chrome_browser_list_gives_the_device_ids_and_changes_nothing(
+        hunt: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    path = _settings(hunt / "data", daily_applications=40)
+    before = path.read_text()
+    asked: list[object] = []
+
+    def listing(machine: object) -> tuple[bool, str]:
+        asked.append(machine)
+        return True, f"connected now: Browser 1 (macOS, deviceId {WORK_MAC}), Browser 2 (macOS, deviceId {HOME_MAC})"
+
+    monkeypatch.setattr(cli, "this_machine", lambda: "this machine")
+    monkeypatch.setattr(cli, "browsers_to_name", listing)
+
+    assert cli.main(["chrome-browser", "--list"]) == 0
+    assert capsys.readouterr().out == (f"connected now: Browser 1 (macOS, deviceId {WORK_MAC}), Browser 2 (macOS, "
+                                       f"deviceId {HOME_MAC})\n")
+    assert asked == ["this machine"] and path.read_text() == before
+
+    # Not with a deviceId too: it changes nothing, so it never names one.
+    assert cli.main(["chrome-browser", HOME_MAC, "--list"]) == 1
+    assert "give a deviceId, off or --list, one of them" in capsys.readouterr().err
+    assert len(asked) == 1 and path.read_text() == before
+
+    monkeypatch.setattr(cli, "browsers_to_name", lambda machine: (False, "Claude in Chrome needs Claude Code first"))
+    assert cli.main(["chrome-browser", "--list"]) == 1
+    assert capsys.readouterr().err == "hunt chrome-browser: Claude in Chrome needs Claude Code first\n"
+
+
 def test_hunt_chrome_browser_needs_the_settings_first(hunt: Path, capsys: pytest.CaptureFixture[str]) -> None:
     for argv in (["chrome-browser", HOME_MAC], ["chrome-browser"]):
         assert cli.main(argv) == 1

@@ -33,7 +33,8 @@ on another computer your Claude account is connected to. Sign in to LinkedIn and
 in this computer's Chrome." The doctor's Chrome line names the other browsers it saw.
 
 The browser (also `/setup browser`): when the person wants the hunt to use one of the other
-browsers instead, the doctor's Chrome line lists each with its deviceId. Ask which one, by its
+browsers instead, run `uv run hunt chrome-browser --list`, which lists each connected browser
+with its deviceId, also while this computer's Chrome is not connected. Ask which one, by its
 name and system, and never pick one they did not choose: run
 `uv run hunt chrome-browser <its deviceId>`, show the line it prints, then run the doctor
 again. From then on every worker uses only that browser, wherever it runs, and they sign in to

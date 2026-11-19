@@ -177,6 +177,21 @@ def _chrome_named(machine: Machine, named: str) -> Line:
                 "workers use only it" + (f"; also connected: {others}; workers never use them" if others else ""))
 
 
+def browsers_to_name(machine: Machine) -> tuple[bool, str]:
+    """The browsers the account has connected, each with its deviceId, for `hunt chrome-browser` to
+    name one: the Chrome line's listing, run also while this computer's Chrome is not connected, as
+    when the browser to name runs on another computer. False with what to do when it cannot list them."""
+    if machine.which("claude") is None:
+        return False, "Claude in Chrome needs Claude Code first"
+    browsers = _connected_browsers(machine)
+    if browsers is None:
+        return False, ("Claude in Chrome did not say which browsers are connected: click the Claude extension once in "
+                       "the Chrome to use, signed in to the same Claude account, then run it again")
+    if not browsers:
+        return True, "no browser is connected to Claude in Chrome"
+    return True, "connected now: " + ", ".join(map(_named, browsers))
+
+
 def _connected_browsers(machine: Machine) -> list[dict] | None:
     """The account's connected browsers, or None when the listing cannot be read."""
     done = machine.run_background(["claude", "--chrome", "-p", LIST_PROMPT, "--model", BROWSER_MODEL, *ONLY_NAMED_TOOLS,

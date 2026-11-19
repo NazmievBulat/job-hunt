@@ -23,7 +23,7 @@ from job_hunt.career import (
     STANDING, Career, CareerError, career_from_export, career_from_resume, career_lock, read_career,
     resume_text, with_ready_answers, write_career,
 )
-from job_hunt.doctor import Machine, doctor, remote_desktop_ready
+from job_hunt.doctor import Machine, browsers_to_name, doctor, remote_desktop_ready
 from job_hunt.companies import Companies, fill_index
 from job_hunt.feeds import Feeds
 from job_hunt.finder import SKILL as ALERTS_SKILL, FinderError, fetch_page, find, run_claude
@@ -861,6 +861,14 @@ def _chrome_browser(args: argparse.Namespace) -> int:
     """Name the one browser the workers use, by its deviceId, or `off` for this computer's Chrome;
     without either, say which they use. Only chrome_browser changes in data/settings.json."""
     path = DATA / "settings.json"
+    if args.list:
+        if args.device is not None:
+            print("hunt chrome-browser: give a deviceId, off or --list, one of them", file=sys.stderr)
+            return 1
+        # Changes nothing: the browsers to name one from, whatever this computer's Chrome is doing.
+        found, said = browsers_to_name(this_machine())
+        print(said if found else f"hunt chrome-browser: {said}", file=sys.stdout if found else sys.stderr)
+        return 0 if found else 1
     try:
         if args.device is None:
             print(_browser_said(read_settings(path).chrome_browser))
@@ -1053,6 +1061,8 @@ def main(argv: list[str] | None = None) -> int:
         "on whatever computer it runs; off for only this computer's Chrome (as when none is named); without "
         "either, say which they use. Saved as chrome_browser in data/settings.json")
     naming.add_argument("device", nargs="?", help="the browser's deviceId, or off")
+    naming.add_argument("--list", action="store_true", help="list the browsers the account has connected, each "
+                        "with its deviceId, and change nothing")
     naming.set_defaults(run=_chrome_browser)
     checking = commands.add_parser(
         "doctor", help="check what the hunt needs (Claude Code signed in, uv, Python 3.14, Claude in Chrome connected, "

@@ -7,6 +7,7 @@ folders. Nothing real is run or read."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
@@ -574,6 +575,40 @@ def test_without_this_computers_chrome_the_others_ids_are_given_to_name_one(tmp_
     # Without deviceIds in the listing there is none to give.
     runner.answers["claude___chrome"] = listed(WORK_MAC, HOME_MAC)
     assert "hunt chrome-browser" not in lines(machine)["chrome"]
+
+
+@pytest.mark.parametrize("local", ["not running", "not installed"])
+def test_the_browsers_to_name_are_listed_while_this_computers_chrome_is_not_connected(
+        tmp_path: Path, local: str) -> None:
+    from job_hunt.doctor import browsers_to_name
+
+    machine, runner = everything_ready(tmp_path)
+    # The PC's own extension is not connected; the browser to name runs on a Mac.
+    if local == "not running":
+        runner.answers["pgrep__f"] = (1, "")
+    else:
+        (machine.home / ".config/google-chrome/NativeMessagingHosts" / NATIVE_HOST).unlink()
+    runner.answers["claude___chrome"] = listed({**WORK_MAC, "deviceId": WORK_ID}, {**HOME_MAC, "deviceId": HOME_ID})
+
+    assert browsers_to_name(machine) == (True, f"connected now: Browser 1 (macOS, deviceId {WORK_ID}), Browser 2 "
+                                               f"(macOS, deviceId {HOME_ID})")
+    # The doctor's own line still makes the free checks first and runs no listing for them.
+    assert lines(machine)["chrome"].startswith("missing:")
+    assert len([command for command in runner.background if command[:2] == ["claude", "--chrome"]]) == 1
+
+
+def test_the_browsers_to_name_say_what_to_do_when_they_cannot_be_listed(tmp_path: Path) -> None:
+    from job_hunt.doctor import browsers_to_name
+
+    machine, runner = everything_ready(tmp_path)
+    runner.answers["claude___chrome"] = listed()
+    assert browsers_to_name(machine) == (True, "no browser is connected to Claude in Chrome")
+    for answer in (None, (1, "error"), (0, "I could not list them.")):
+        runner.answers["claude___chrome"] = answer
+        found, said = browsers_to_name(machine)
+        assert not found and said.startswith("Claude in Chrome did not say which browsers are connected")
+    machine = dataclasses.replace(machine, which=lambda name: None)
+    assert browsers_to_name(machine) == (False, "Claude in Chrome needs Claude Code first")
 
 
 def test_a_device_id_that_is_not_text_is_none(tmp_path: Path) -> None:

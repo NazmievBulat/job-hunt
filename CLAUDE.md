@@ -19,6 +19,8 @@ each part as a message of its own, one at a time, and wait for the reply before 
    question of its own. It is told once.
 2. **Unfinished applications.** These the user already approved; ask nothing. Run
    `uv run hunt apply` in the background for them (see below) and go on with the questions.
+   "Approved notes to hiring managers not sent yet" is the same: run `uv run hunt send-notes`
+   in the background and ask nothing.
 3. **New jobs.** Show the numbered lines exactly as printed, then: "Apply? Reply like 1 3, all,
    all above 7, or skip 2." Turn the reply into `uv run hunt pick …` or `uv run hunt skip …` as
    `/jobs` says, with the numbers last printed. Asked again, the jobs keep their numbers; when
@@ -37,6 +39,11 @@ each part as a message of its own, one at a time, and wait for the reply before 
    built yet, so the reply only says times will follow. A reply that "needs a look whether it
    was sent" asks the person to look in Gmail or LinkedIn: "it went" runs `hunt skip-reply`,
    "send it" runs `hunt send-reply`.
+6. **Notes to hiring managers.** One message for all of them: "N notes to hiring managers for
+   today's LinkedIn applications:", each numbered line exactly as printed, then "Reply send
+   all, send 1 3, or skip." "send all" runs `uv run hunt send-notes all`, "send 1 3" runs
+   `uv run hunt send-notes 1 3` (the others are skipped), "skip" runs `uv run hunt skip-notes`.
+   Sending takes a few minutes a note: run it in the background, as `hunt apply`.
 
 With each question, run `uv run hunt notify "<the question in one line>"` once, before you ask
 it. When it prints that it has no keys, go on without it.
@@ -60,7 +67,8 @@ waiting for the user, failed and why, as `uv run hunt status` prints it.
 
 - Nothing is sent in the user's name, an application, an email or a LinkedIn message, without
   their word in this conversation. Picking a job is that word for its application; "yes" to a
-  reply, as last shown, is that word for that reply alone.
+  reply, as last shown, is that word for that reply alone; "send" to the notes question is
+  that word for the notes it names.
 - Never type a password and never solve a CAPTCHA. Say what is needed and in which Chrome tab,
   and wait for the user.
 - Fewer messages are better: one question per decision, nothing about progress unless asked.

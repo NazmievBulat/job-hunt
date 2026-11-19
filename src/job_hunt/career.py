@@ -207,12 +207,12 @@ def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Car
     _unknown(draft, DRAFT_FIELDS, "the draft", problems)
     person = draft.get("person") if isinstance(draft.get("person"), dict) else {}
     try:
-        Person.model_validate(person)
+        # As the resume prints it: the contract writes a link's path in printable characters.
+        _printable(Person.model_validate(person).model_dump(mode="json"), "person", problems)
     except ValidationError as error:
         problems += [f"person.{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
     if not _text(person.get("email")):
         problems.append("person has no email: forms and the resume need one")
-    _printable(person, "person", problems)
     entries = draft.get("jobs") if isinstance(draft.get("jobs"), list) else []
     if not entries:
         problems.append("the draft has no jobs: a resume prints at least one")

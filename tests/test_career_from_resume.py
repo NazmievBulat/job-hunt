@@ -483,3 +483,32 @@ def test_a_header_linked_to_the_section_before_is_read_once(tmp_path: Path) -> N
     document.save(tmp_path / "resume.docx")
 
     assert resume_text(tmp_path / "resume.docx").splitlines().count("Ada Example · ada@example.com") == 1
+
+
+def test_a_link_the_contract_writes_in_printable_characters_is_kept() -> None:
+    person = {**DRAFT["person"], "links": [{"url": "https://example.com/作品", "label": "Portfolio"}]}
+
+    assert career_from_resume(draft(person=person)).person["links"][0]["url"] == "https://example.com/作品"
+
+
+def test_a_later_section_with_a_header_of_its_own_is_read_too(tmp_path: Path) -> None:
+    from docx import Document
+    from docx.enum.section import WD_SECTION
+
+    from job_hunt.career import resume_text
+
+    document = Document()
+    document.sections[0].header.paragraphs[0].text = "Ada Example"
+    document.add_paragraph("QA Engineer, Acme")
+    later = document.add_section(WD_SECTION.NEW_PAGE)
+    later.header.is_linked_to_previous = False
+    later.header.paragraphs[0].text = "ada@example.com"
+    later.footer.is_linked_to_previous = False
+    later.footer.paragraphs[0].text = "+1 555 010 0000"
+    document.add_paragraph("Example State University")
+    document.save(tmp_path / "resume.docx")
+
+    text = resume_text(tmp_path / "resume.docx").splitlines()
+
+    assert text[:2] == ["Ada Example", "ada@example.com"]
+    assert text[-1] == "+1 555 010 0000"

@@ -26,13 +26,18 @@ each part as a message of its own, one at a time, and wait for the reply before 
    `/jobs` says, with the numbers last printed. Asked again, the jobs keep their numbers; when
    the heading says "numbered anew", show the whole list again and say the numbers changed
    before taking any number.
-4. **Paused applications.** Each line says what the job needs, in which Chrome tab, and the
+4. **CAPTCHAs.** One message for all of them, the line as printed. "done" runs the command
+   after it, `uv run hunt resume-job` with every job of it, then `uv run hunt apply` in the
+   background. When the part ends with a line about Chrome Remote Desktop or this computer's
+   Chrome, say that line too. It is printed only while the person is free; never ask about a
+   CAPTCHA it did not print.
+5. **Paused applications.** Each line says what the job needs, in which Chrome tab, and the
    command after it. Ask once for all of them, offering each job only the replies its command
    takes: "done 12" for `hunt resume-job 12` (a CAPTCHA, a sign-in, Chrome to open), "12: and
    the answer" for `hunt answer 12`, and "sent 12" or "done 12" for a job whose command is
    `hunt applied 12`. Run the commands `/apply` names. When the part ends with a line about
    Chrome Remote Desktop or about waiting for the computer, say that line too.
-5. **Recruiter messages.** One message each: who wrote and about which job, the message, the
+6. **Recruiter messages.** One message each: who wrote and about which job, the message, the
    job description when there is one, then the drafted reply exactly as printed, and "Send?".
    "yes" runs `uv run hunt send-reply <n>`; a change runs `uv run hunt edit-reply <n> "<the
    whole new reply>"`, shows the new reply and asks "Send?" again; "skip" runs
@@ -42,7 +47,7 @@ each part as a message of its own, one at a time, and wait for the reply before 
    reply. After `hunt send-reply` says a time was held, say it in one line. A reply that "needs a look whether it
    was sent" asks the person to look in Gmail or LinkedIn: "it went" runs `hunt skip-reply`,
    "send it" runs `hunt send-reply`.
-6. **Notes to hiring managers.** One message for all of them: "N notes to hiring managers for
+7. **Notes to hiring managers.** One message for all of them: "N notes to hiring managers for
    today's LinkedIn applications:", each numbered line exactly as printed, then "Reply send
    all, send 1 3, or skip." "send all" runs `uv run hunt send-notes all`, "send 1 3" runs
    `uv run hunt send-notes 1 3` (the others are skipped), "skip" runs `uv run hunt skip-notes`.
@@ -56,8 +61,9 @@ it. When it prints that it has no keys, go on without it.
 
 When `hunt questions` prints "Nothing waits for you.", say so in one line and stop.
 
-When a message says a recruiter's message waits (`hunt watch` types it in during the day), run
-`uv run hunt questions` and ask only what is new.
+When a message says a recruiter's message waits, or that applications wait or may go on
+(`hunt watch` types these in during the day), run `uv run hunt questions` and ask only what is
+new.
 
 ## Work in the background
 

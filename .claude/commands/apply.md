@@ -18,6 +18,8 @@ When the person replies, turn it into the commands it means and run them, using 
 numbers `hunt status` printed:
 
 - "done 12" (or "done" when only one job is paused) → `uv run hunt resume-job 12`
+- "done" to the CAPTCHAs question → `uv run hunt resume-job` with every job its line names, such
+  as `uv run hunt resume-job 12 14`
 - "sent 12" (or "sent" when only one job waits for that look) → `uv run hunt applied 12`
 - "12: yes, since 2021" → `uv run hunt answer 12 "yes, since 2021"`
 

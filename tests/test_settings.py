@@ -197,3 +197,10 @@ def test_the_summary_hour_is_18_unless_the_settings_give_another(tmp_path: Path)
 def test_a_summary_hour_not_after_the_morning_hour_is_refused(tmp_path: Path, summary_hour: object) -> None:
     with pytest.raises(SettingsError, match="summary_hour"):
         read_settings(_write(tmp_path, {**GOOD, "summary_hour": summary_hour}))
+
+
+def test_captcha_is_ask_or_skip_and_ask_when_left_out(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).captcha == "ask"
+    assert read_settings(_write(tmp_path, {**GOOD, "captcha": "skip"})).captcha == "skip"
+    with pytest.raises(SettingsError, match="captcha must be one of ask, skip"):
+        read_settings(_write(tmp_path, {**GOOD, "captcha": "solve"}))

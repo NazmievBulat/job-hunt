@@ -13,6 +13,9 @@ starts one only when none runs. With nothing waiting it starts nothing. The day 
 is kept in `data/morning-day`. A failed step is written to `data/morning.log` and goes on;
 the next `hunt questions` tells it once, so a failure alone also starts the session.
 
+The session alone has a prompt hook (`--settings`), `hunt replied`, which keeps when the person
+last replied (`data/chat-reply`), so `hunt available` knows they are talking to the chat.
+
 Yesterday's session is ended only while no `hunt apply` runs (`jobs/apply.lock`): ending it
 then would stop a worker in the middle of an application.
 """
@@ -22,6 +25,7 @@ from __future__ import annotations
 import fcntl
 import json
 import re
+import shlex
 import subprocess
 import time
 from collections.abc import Callable
@@ -131,10 +135,18 @@ def session_running(*, run: Run = tmux) -> bool:
     return run(["tmux", "has-session", "-t", TARGET]).returncode == 0
 
 
+def hook_settings(root: Path) -> str:
+    """The session's own settings: its prompt hook. A background worker has none."""
+    command = f"uv run --project {shlex.quote(str(root))} hunt replied"
+    return json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": command,
+                                                                  "timeout": 10}]}]}})
+
+
 def session_command(root: Path) -> list[str]:
     # The prompt comes last, after an option that takes one value: --allowedTools takes many.
     return ["tmux", "new-session", "-d", "-s", SESSION, "-c", str(root),
-            "claude", "--allowedTools", TOOLS, "--remote-control", SESSION, "--name", SESSION, FIRST_MESSAGE]
+            "claude", "--allowedTools", TOOLS, "--remote-control", SESSION, "--name", SESSION,
+            "--settings", hook_settings(root), FIRST_MESSAGE]
 
 
 def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None] = time.sleep) -> None:

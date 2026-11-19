@@ -11,8 +11,10 @@ words, one step at a time: one message a step, then wait for the reply. Say noth
 the hunt is built.
 
 The step to change, if they named one: `$ARGUMENTS`. When it names a step, do only that step,
-then run `uv run hunt doctor` and show what it prints. Otherwise go through the steps in order.
-A step already done is said in one line ("Your resume is read: 4 jobs.") and skipped.
+even when it is done: show what is saved now in one line, ask for what to change, and save the
+change as the step says. Then run `uv run hunt doctor` and show what it prints. Otherwise go
+through the steps in order; a step already done is said in one line ("Your resume is read: 4
+jobs.") and skipped.
 
 ## 1. What the hunt needs
 

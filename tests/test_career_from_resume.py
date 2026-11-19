@@ -247,3 +247,69 @@ def test_a_file_that_is_not_a_pdf_or_word_resume_is_refused(tmp_path: Path) -> N
 
     with pytest.raises(CareerError, match="PDF or a Word"):
         resume_text(tmp_path / "resume.pages")
+
+
+def test_a_school_without_its_degree_is_refused() -> None:
+    with pytest.raises(CareerError, match=r'school 1 \("Example State University"\) needs both its school and its degree'):
+        career_from_resume(draft(education=[{"school": "Example State University"}]))
+
+
+def test_a_broken_career_is_replaced_by_the_resume_keeping_its_form_answers(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    career_file = tmp_path / "career.json"
+    # What hunt doctor names as needing a fix: JSON, but not a whole career.
+    career_file.write_text(json.dumps({"person": {}, "form_answers": {"ready": {"authorized": "yes"}}}))
+    monkeypatch.setattr(cli, "CAREER", career_file)
+    written = tmp_path / "career-draft.json"
+    written.write_text(json.dumps(DRAFT))
+
+    assert main(["career-from-resume", str(written), "--save"]) == 0
+
+    saved = read_career(career_file)
+    assert [job.id for job in saved.jobs] == ["initech-inc-2021-01", "acme-2018-03"]
+    assert saved.form_answers == {"ready": {"authorized": "yes"}}
+    career_file.write_text("{")
+    assert main(["career-from-resume", str(written), "--save"]) == 0
+    assert read_career(career_file).form_answers == {}
+
+
+@pytest.mark.parametrize("name", ["resume.pdf", "resume.docx"])
+def test_a_damaged_resume_file_is_refused_in_words(
+        tmp_path: Path, name: str, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / name).write_bytes(b"not a resume at all")
+
+    assert main(["resume-text", str(tmp_path / name)]) == 1
+    assert f"hunt resume-text: {name} could not be read" in capsys.readouterr().err
+
+
+def test_skills_that_differ_only_by_punctuation_are_all_kept() -> None:
+    career = career_from_resume(draft(skills=["C", "C++", "C#", "c", ".NET", "  Python ", "python"]))
+
+    assert career.skills == ["C", "C++", "C#", ".NET", "Python"]
+
+
+@pytest.mark.parametrize("field_name", ["start_date", "end_date"])
+def test_a_date_given_as_a_number_is_refused_not_dropped(field_name: str) -> None:
+    jobs = [{**DRAFT["jobs"][0], field_name: 2019}, DRAFT["jobs"][1]]
+
+    with pytest.raises(CareerError, match=r"is not written as text"):
+        career_from_resume(draft(jobs=jobs))
+
+
+def test_the_name_and_contacts_in_a_word_header_are_read_first(tmp_path: Path) -> None:
+    from docx import Document
+
+    from job_hunt.career import resume_text
+
+    document = Document()
+    document.sections[0].header.paragraphs[0].text = "Ada Example · ada@example.com"
+    document.sections[0].footer.paragraphs[0].text = "Durham, NC"
+    document.add_paragraph("QA Engineer, Acme")
+    document.save(tmp_path / "resume.docx")
+
+    text = resume_text(tmp_path / "resume.docx")
+
+    assert text.splitlines()[0] == "Ada Example · ada@example.com"
+    assert "Durham, NC" in text and "QA Engineer, Acme" in text

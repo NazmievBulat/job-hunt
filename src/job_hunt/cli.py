@@ -72,11 +72,29 @@ def _shown(career: Career) -> list[str]:
     return lines
 
 
+def _kept_career() -> Career | None:
+    """The career a resume replaces. One hunt doctor says needs a fix is replaced too, since
+    reading the resume again is the fix; its form answers stay when they can still be read."""
+    if not CAREER.exists():
+        return None
+    try:
+        return read_career(CAREER)
+    except (ValueError, KeyError, TypeError):
+        pass
+    try:
+        answers = json.loads(CAREER.read_text()).get("form_answers")
+    except (ValueError, AttributeError):
+        answers = None
+    if not isinstance(answers, dict):
+        return None
+    return Career(person={}, summary="", titles=[], skills=[], jobs=[], education=[], certifications=[],
+                  form_answers=answers)
+
+
 def _career_from_resume(args: argparse.Namespace) -> int:
     try:
         draft = json.loads(Path(args.draft).read_text())
-        kept = read_career(CAREER) if CAREER.exists() else None
-        career = career_from_resume(draft, kept=kept)
+        career = career_from_resume(draft, kept=_kept_career())
     except (OSError, json.JSONDecodeError, CareerError) as error:
         print(f"hunt career-from-resume: {error}", file=sys.stderr)
         return 1

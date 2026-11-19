@@ -138,3 +138,16 @@ def test_hunt_settings_refuses_settings_it_cannot_read_and_keeps_the_old_ones(
     assert "titles must name at least one job title" in capsys.readouterr().err
     assert (tmp_path / "settings.json").read_text() == before
     assert sorted(path.name for path in tmp_path.iterdir()) == ["settings.json"]
+
+
+def test_hunt_settings_replaces_a_settings_file_that_cannot_be_read(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    for broken in ("{", "[1, 2]"):
+        (tmp_path / "settings.json").write_text(broken)
+
+        assert cli.main(["settings", json.dumps(GOOD)]) == 0
+
+        assert read_settings(tmp_path / "settings.json").titles == GOOD["titles"]

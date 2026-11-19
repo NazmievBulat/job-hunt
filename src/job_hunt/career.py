@@ -140,13 +140,27 @@ def _text(value: Any) -> str:
 
 
 def _texts(value: Any) -> list[str]:
-    return _unique([text for text in value if isinstance(text, str)]) if isinstance(value, list) else []
+    """Each text once. Unlike `_unique`, punctuation counts: C, C++ and C# are three skills."""
+    seen: set[str] = set()
+    kept: list[str] = []
+    for text in value if isinstance(value, list) else []:
+        key = " ".join(text.casefold().split()) if isinstance(text, str) else ""
+        if key and key not in seen:
+            seen.add(key)
+            kept.append(" ".join(text.split()))
+    return kept
 
 
 def _dates(entry: dict[str, Any], named: str, problems: list[str], *, start_needed: bool) -> tuple[str | None, str | None]:
     dates: list[str | None] = []
     for field_name, words in (("start_date", "start date"), ("end_date", "end date")):
-        value = _text(entry.get(field_name)) or None
+        given = entry.get(field_name)
+        if given is not None and not isinstance(given, str):
+            # A year given as a number is a date, not a missing one: dropped, an end would read as now.
+            problems.append(f"{named}: the {words} {given!r} is not written as text (\"2019\", \"2019-03\")")
+            dates.append(None)
+            continue
+        value = _text(given) or None
         if value is None:
             if field_name == "start_date" and start_needed:
                 problems.append(f"{named} has no start date")
@@ -256,18 +270,28 @@ def resume_text(path: Path) -> str:
     """The text of a PDF or Word resume, for the read-resume skill: Claude reads a PDF itself,
     but not a .docx. A Word resume laid out in a table keeps its cells, one a line."""
     suffix = path.suffix.lower()
-    if suffix == ".pdf":
-        from pypdf import PdfReader
+    if suffix not in (".pdf", ".docx"):
+        raise CareerError(f"{path.name} is not a PDF or a Word (.docx) file: save it as one, or paste its text")
+    try:
+        if suffix == ".pdf":
+            from pypdf import PdfReader
 
-        return "\n".join(page.extract_text() or "" for page in PdfReader(path).pages).strip()
-    if suffix == ".docx":
+            return "\n".join(page.extract_text() or "" for page in PdfReader(path).pages).strip()
         from docx import Document
 
         document = Document(str(path))
-        lines = [paragraph.text for paragraph in document.paragraphs]
-        lines += [cell.text for table in document.tables for row in table.rows for cell in row.cells]
-        return "\n".join(line for line in lines if line.strip())
-    raise CareerError(f"{path.name} is not a PDF or a Word (.docx) file: save it as one, or paste its text")
+    except FileNotFoundError:
+        raise
+    except Exception as error:
+        # pypdf and python-docx each raise their own errors for a damaged or misnamed file.
+        raise CareerError(f"{path.name} could not be read ({type(error).__name__}): save it again, "
+                          "or paste its text") from None
+    # A name and contacts are often in the page header, so it comes first.
+    lines = [paragraph.text for section in document.sections for paragraph in section.header.paragraphs]
+    lines += [paragraph.text for paragraph in document.paragraphs]
+    lines += [cell.text for table in document.tables for row in table.rows for cell in row.cells]
+    lines += [paragraph.text for section in document.sections for paragraph in section.footer.paragraphs]
+    return "\n".join(line for line in lines if line.strip())
 
 
 def write_career(career: Career, path: Path) -> None:

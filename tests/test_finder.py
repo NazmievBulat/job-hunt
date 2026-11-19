@@ -780,7 +780,8 @@ def test_a_short_batch_holding_an_email_without_a_date_leaves_the_last_run_where
     summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=run, fetch=_any_page,
                    clock=clock)
     assert summary.failed == ["alert: batch 2 of 2 read 1 of 2 emails"]
-    assert jobs.last_run() is None
+    # A first run: the next one reads from where this one began.
+    assert jobs.last_run() == clock.now - finder.FIRST_RUN
 
 
 @pytest.mark.parametrize(("link", "cleaned"), [
@@ -805,7 +806,28 @@ def test_a_failed_first_batch_leaves_the_last_run_where_it_was(
     summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=skill, fetch=_any_page,
                    clock=clock)
     assert [line.split(":", 2)[1] for line in summary.failed] == [" batch 1 of 2 failed"]
-    assert (summary.new, jobs.last_run()) == (2, None)
+    assert (summary.new, jobs.last_run()) == (2, clock.now - finder.FIRST_RUN)
+
+
+def test_a_first_run_whose_first_batch_failed_is_read_again_from_where_it_began(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    first = AlertSkill(_alerts(12), fail={2})
+    find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=first, fetch=_any_page, clock=clock)
+    began = jobs.last_run()
+    # With a last run, a run whose first batch fails leaves it where it was.
+    clock.advance(days=1)
+    find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=AlertSkill(_alerts(12), fail={2}),
+         fetch=_any_page, clock=clock)
+    assert jobs.last_run() == began
+    clock.advance(days=1)
+    again = AlertSkill(_alerts(12))
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=again, fetch=_any_page,
+                   clock=clock)
+    # Not 14 days before this run: that would leave the oldest day of the failed batch unread.
+    assert arguments(again.commands[0])["after"] == arguments(first.commands[0])["after"]
+    assert (summary.failed, summary.new, jobs.last_run()) == ([], 10, clock.now)
 
 
 def test_a_batch_whose_run_fails_is_named_with_why_and_the_others_still_count(
@@ -930,6 +952,8 @@ def _postings(pages: dict[str, str], followed: list[str]) -> Callable[[str], tup
     ("https://click.example.com/redirect?ref=job123", "https://click.example.com/redirect?ref=job456"),
     ("https://www.jobot.com/redirect?src=email&trk=abc&refId=9",
      "https://www.jobot.com/redirect?src=email&trk=def&refId=10"),
+    # A parameter they share does not make them one job.
+    ("https://click.example.com/redirect?ref=job123&lang=en", "https://click.example.com/redirect?ref=job456&lang=en"),
 ])
 def test_two_tracking_links_that_differ_only_in_their_tracking_parameters_are_two_jobs(
     tmp_path: Path, settings: Settings, clock: MovableClock, links: tuple[str, str]
@@ -1049,8 +1073,8 @@ def test_a_failed_batch_holding_an_email_without_a_date_leaves_the_last_run_wher
     jobs = JobsList(tmp_path / "jobs.db", clock=clock)
     summary = find(settings, jobs, tmp_path / "jobs", found, run=run, fetch=_any_page, clock=clock)
     assert [line.split(":", 2)[1] for line in summary.failed] == [" batch 2 of 2 failed"]
-    # Its email may have come before the ten read: the next run reads from the same time again.
-    assert jobs.last_run() is None
+    # Its email may have come before the ten read: the next run reads from where this one began.
+    assert jobs.last_run() == clock.now - finder.FIRST_RUN
 
 
 @pytest.mark.parametrize(("written", "said"), [

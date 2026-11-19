@@ -687,7 +687,11 @@ def _read_alerts(
 ) -> _Alerts:
     """The alert emails since the alerts' last run, listed by one run and read in batches, each
     batch's jobs saved as it ends."""
-    since = jobs.last_run() or started - FIRST_RUN
+    last = jobs.last_run()
+    since = last or started - FIRST_RUN
+    # What the last run stays at when a batch fails before any has read: on a first run, where
+    # this one began, as the next run's 14 days would begin a day later than this one's.
+    kept = None if last else since
     # A file an earlier run left must not pass for this run's.
     found.unlink(missing_ok=True)
     run(skill_command(since, found, messages_after))
@@ -713,11 +717,11 @@ def _read_alerts(
         if in_order:
             # A second before it: the search's `after:` may leave out an email of that very second.
             # Never past the run's start: an email that came while the search ran may be unlisted.
-            done.through = min(newest - timedelta(seconds=1), started) if newest else None
+            done.through = min(newest - timedelta(seconds=1), started) if newest else kept
             in_order = False
         if any(date is None for _, date in batch):
             # An email without a date may be older than any the batches before read.
-            done.through = None
+            done.through = kept
 
     for number, batch in enumerate(batches, start=1):
         out = found.with_name(f"{found.stem}-{number}{found.suffix}")

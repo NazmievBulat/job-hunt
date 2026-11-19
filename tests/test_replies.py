@@ -192,6 +192,17 @@ def test_a_company_with_two_jobs_links_the_thread_to_neither(threads: Threads, j
     assert threads.get(thread).job is None
 
 
+@pytest.mark.parametrize("link", ["https://jobs.example.com/2?source=LinkedIn", "https://jobs.example.com/2?src=email",
+                                  "https://jobs.example.com/2?gh_src=abc"])
+def test_a_posting_link_with_a_source_tag_finds_its_job_among_its_companys(
+    threads: Threads, jobs: JobsList, link: str
+) -> None:
+    jobs.add(_found(1, company="Example Labs"))
+    job = jobs.add(_found(2, company="Example Labs"))
+    thread, = _saved(threads, jobs, _email(1, job_link=link))
+    assert threads.get(thread).job == job
+
+
 def test_the_finder_saves_the_recruiter_emails_it_read_and_reads_them_from_the_last_time(
     project: Path, jobs: JobsList, threads: Threads, clock: MovableClock
 ) -> None:

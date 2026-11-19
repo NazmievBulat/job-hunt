@@ -251,16 +251,16 @@ def cleaned_on_purpose(link: str) -> bool:
 
 def job_link(link: str) -> str:
     """The link a job of an alert email is known by: `clean_link`'s, except that a click-tracking
-    address off LinkedIn and Indeed is kept as it was given when `clean_link` would leave it with
-    no parameter and takes off one that may name where it leads (`/redirect?ref=job123` and
-    `?ref=job456` are two jobs). A link left with a parameter that names the job
-    (`?reference=JR-1`) or carrying only a campaign's (`/careers/1234?utm_source=email`) is cleaned."""
+    address off LinkedIn and Indeed is kept as it was given when `clean_link` would take off a
+    parameter that may name where it leads, whatever else it has (`/redirect?ref=job123&lang=en`
+    and `?ref=job456&lang=en` are two jobs). A link with no such parameter (`?reference=JR-1`, or
+    only a campaign's, `/careers/1234?utm_source=email`) is cleaned."""
     if cleaned_on_purpose(link):
         return clean_link(link)
     parts = urlsplit(link.strip())
     route_query = parts.fragment.partition("?")[2] if parts.fragment.startswith(("/", "!")) else ""
     names = [name for query in (parts.query, route_query) for name, _ in parse_qsl(query)]
-    if names and all(TRACKING.match(name) for name in names) and not all(CAMPAIGN.match(name) for name in names):
+    if any(TRACKING.match(name) and not CAMPAIGN.match(name) for name in names):
         return link.strip()
     return clean_link(link)
 

@@ -381,8 +381,9 @@ def _apply_one(job: Job, root: Path, run: Run, paused: Report | None) -> Report:
 
 
 def host(job: Job) -> str:
-    """The host a company-site worker applies on, without its `www.`."""
-    return (urlsplit(job.apply_link or job.link).hostname or "").lower().removeprefix("www.")
+    """The host a company-site worker applies on, without its `www.`: where its link ended, not
+    a click-tracking link's own host."""
+    return (urlsplit(job.apply_link or job.page_link or job.link).hostname or "").lower().removeprefix("www.")
 
 
 def _next_site(this: _Run, waiting: list[int]) -> tuple[int | None, float | None]:
@@ -393,13 +394,14 @@ def _next_site(this: _Run, waiting: list[int]) -> tuple[int | None, float | None
     soonest = None
     for job in list(waiting):
         on = host(this.jobs.get(job))
-        starts = this.jobs.starts_on(on, day, but=job)
-        if len(starts) >= HOST_DAILY:
+        if len(this.jobs.starts_on(on, day, but=job)) >= HOST_DAILY:
             this.jobs.later(job, day + timedelta(days=1))
             waiting.remove(job)
             this.summary.later += 1
             continue
-        if starts and (left := (max(starts.values()) + HOST_SPACING - now).total_seconds()) > 0:
+        # Also across midnight: the last start of yesterday counts.
+        recent = this.jobs.starts_on(on, now - HOST_SPACING, but=job)
+        if recent and (left := (max(recent.values()) + HOST_SPACING - now).total_seconds()) > 0:
             soonest = left if soonest is None else min(soonest, left)
             continue
         return job, None
@@ -464,6 +466,15 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         # A run stopped while the LinkedIn worker applied still starts the pause, once the
         # worker ended.
         linkedin.release()
+
+
+def skip_captchas(jobs: JobsList) -> list[Job]:
+    """With the settings' `captcha` set to `skip`: the jobs already waiting on a CAPTCHA are
+    failed too, to apply by hand, and never asked."""
+    skipped = [job for job in jobs.in_states("paused") if (job.state_reason or "").startswith(NEEDS["captcha"])]
+    for job in skipped:
+        jobs.move(job.id, "failed", CAPTCHA_FAILED)
+    return skipped
 
 
 def _paused_job(jobs: JobsList, job: int) -> Job:

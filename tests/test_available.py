@@ -10,12 +10,15 @@ from pathlib import Path
 
 import pytest
 
+from job_hunt import cli
 from job_hunt.available import TELL_JOBS, Verdict, available, replied, watch_jobs
 from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.morning import FIRST_MESSAGE, hook_settings, session_command
 from job_hunt.settings import Settings
 from movable_clock import MovableClock
 
+# Taken before the tests' stand-in replaces it (conftest.py).
+REAL_VERDICT = cli.verdict
 SETTINGS = Settings(titles=["QA Engineer"], areas=[], remote="only", lowest_salary=None, morning_hour=7,
                     summary_hour=18)
 # 10:00 on a working day, the person's own time.
@@ -235,3 +238,106 @@ def test_hunt_replied_reads_the_hook_from_its_input(tmp_path: Path, monkeypatch:
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"prompt": "done"})))
     assert cli.main(["replied"]) == 0
     assert datetime.fromisoformat((tmp_path / "chat-reply").read_text().strip()) <= datetime.now(UTC)
+
+
+def test_a_try_again_and_a_captcha_are_told_together_and_a_held_captcha_later(
+        tmp_path: Path, jobs: JobsList, clock: MovableClock) -> None:
+    again = _job(jobs, 1, reason=None)
+    jobs.retry(again, clock.now)
+    _job(jobs, 2)
+    tell = Tell()
+    held = watch_jobs(jobs, tmp_path, verdict=lambda: Verdict(False, "it is night"), tell=tell)
+    assert (held, tell.times) == ("told the chat: 1 application may go on", 1)
+    free = watch_jobs(jobs, tmp_path, verdict=lambda: Verdict(True, "you are at the computer"), tell=tell)
+    assert (free, tell.times) == ("told the chat: 1 CAPTCHA waits and you are at the computer", 2)
+
+
+def test_a_captcha_paused_again_after_done_is_told_again_at_once(
+        tmp_path: Path, jobs: JobsList, clock: MovableClock) -> None:
+    job = _job(jobs, 1)
+    tell, free = Tell(), lambda: Verdict(True, "you are at the computer")
+    watch_jobs(jobs, tmp_path, verdict=free, tell=tell)
+    jobs.asked(job)
+    jobs.move(job, "resume_ready")
+    jobs.move(job, "applying")
+    clock.advance(seconds=60)
+    jobs.move(job, "paused", 'a CAPTCHA solved, in the Chrome tab "Apply"')
+    watch_jobs(jobs, tmp_path, verdict=free, tell=tell)
+    assert tell.times == 2
+    # Only what still waits is kept.
+    assert list(json.loads((tmp_path / "jobs.told").read_text())) == [f"captcha {job} {jobs.get(job).updated_at}"]
+
+
+# The command line
+
+
+@pytest.fixture
+def hunt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    from job_hunt import cli
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "settings.json").write_text(json.dumps({
+        "titles": ["QA Engineer"], "areas": [], "remote": "only", "lowest_salary": None, "morning_hour": 7,
+        "time_zone": "America/New_York"}))
+    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    monkeypatch.setattr(cli, "DATA", tmp_path / "data")
+    return tmp_path
+
+
+def test_hunt_available_reads_the_settings_zone_and_the_held_calls(
+        hunt: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+    from job_hunt.times import Talks
+
+    talks = Talks(hunt / "data" / "jobs.db")
+    talks.offered(1, "email", "c1", "Call with Example Co", [NOON], "Tuesday?")
+    talks.move(1, "held", start=NOON.isoformat())
+    seen: dict = {}
+
+    def spy(data: Path, settings: Settings | None, **given: object) -> Verdict:
+        seen.update(given, settings=settings)
+        return Verdict(False, "it is night, from 18:00 to 07:00")
+
+    monkeypatch.setattr(cli, "available", spy)
+    monkeypatch.setattr(cli, "verdict", REAL_VERDICT)
+    assert cli.main(["available"]) == 0
+    assert capsys.readouterr().out == "hold: it is night, from 18:00 to 07:00\n"
+    assert str(seen["clock"]().tzinfo) == "America/New_York"
+    assert seen["calls"]() == [NOON]
+
+
+
+def _captcha_waits(hunt: Path) -> None:
+    _job(JobsList(hunt / "data" / "jobs.db"), 1)
+
+
+def test_hunt_watch_tells_the_chat_of_waiting_captchas_in_its_hours_only(
+        hunt: Path, monkeypatch: pytest.MonkeyPatch, told) -> None:  # type: ignore[no-untyped-def]
+    _captcha_waits(hunt)
+    monkeypatch.setattr(cli, "watch", lambda *args, **kwargs: "")
+    monkeypatch.setattr(cli, "hold_times", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "verdict", lambda: Verdict(True, "you are at the computer"))
+    monkeypatch.setattr(cli, "in_hours", lambda now, settings: False)
+    assert cli.main(["watch"]) == 0
+    assert told.texts == []
+    monkeypatch.setattr(cli, "in_hours", lambda now, settings: True)
+    assert cli.main(["watch"]) == 0
+    assert told.texts == [TELL_JOBS]
+
+
+def test_a_failing_jobs_part_of_the_watch_leaves_the_messages_part_running(
+        hunt: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    messages = []
+    monkeypatch.setattr(cli, "watch", lambda *args, **kwargs: messages.append(1) or "")
+    monkeypatch.setattr(cli, "hold_times", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "in_hours", lambda now, settings: True)
+
+    def broken(*args: object, **kwargs: object) -> str:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cli, "watch_jobs", broken)
+    assert cli.main(["watch"]) == 0
+    assert cli.main(["watch"]) == 0
+    assert messages == [1, 1]
+    # Told once, not every 20 minutes.
+    assert (hunt / "data" / "morning.log").read_text().count("hunt watch jobs: disk full") == 1

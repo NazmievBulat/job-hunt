@@ -220,9 +220,9 @@ def _captchas(jobs: JobsList, waiting: list[Job], verdict: Verdict, remote_deskt
 def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
               daily: int = 15, *, remote_desktop: bool = False,
               available: Callable[[], Verdict] | None = None) -> str:
-    """`available` says whether the person is free for a CAPTCHA now; without it they are not
-    known to be, and the CAPTCHAs are held."""
-    """The questions as text. Showing them numbers the new jobs and marks the failures told."""
+    """The questions as text. Showing them numbers the new jobs and marks the failures told.
+    `available` says whether the person is free for a CAPTCHA now; without it they are not known
+    to be, and the CAPTCHAs are held."""
     parts: list[str] = []
     log, told = _told(data)
     failures = _lines(log[told:])

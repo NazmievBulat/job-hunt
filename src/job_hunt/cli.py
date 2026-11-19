@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from job_hunt.apply import (
-    LINKEDIN_SKILL, NEEDS, RESUME_SKILL, SITE_SKILL, AnswerError, ApplyError, answer, apply, applied, resume_job,
+    LINKEDIN_SKILL, NEEDS, RESUME_SKILL, SITE_SKILL, AnswerError, skip_captchas, ApplyError, answer, apply, applied, resume_job,
 )
 from job_hunt.available import TELL_JOBS, Verdict, available, replied, run_quietly, watch_jobs
 from job_hunt.career import (
@@ -430,14 +430,14 @@ def _answer(args: argparse.Namespace) -> int:
     return 0
 
 
-def _waits_for(job: Job) -> str:
+def _waits_for(job: Job, now: datetime) -> str:
     if job.state == "picked":
         return "resume not written yet"
     if job.state == "applying":
         return "being applied to"
     if job.not_before is not None:
         when = datetime.fromisoformat(job.not_before).astimezone()
-        day = "" if when.date() == datetime.now().astimezone().date() else when.strftime("%a %d %b ")
+        day = "" if when.date() == now.astimezone().date() else when.strftime("%a %d %b ")
         return f"resume ready, for a hunt apply from {day}{when:%H:%M} on"
     if job.kind in ("company_site", "easy_apply"):
         return "resume ready, for the next hunt apply"
@@ -478,7 +478,7 @@ def _status(args: argparse.Namespace) -> int:
         ("Paused", jobs.in_states("paused"),
          lambda job: f": needs {job.state_reason}{_not_asked(job)} (then: {then(job)})"),
         ("Failed", jobs.in_states("failed"), lambda job: f": {job.state_reason}"),
-        ("Waiting", jobs.in_states("picked", "resume_ready", "applying"), lambda job: f": {_waits_for(job)}"),
+        ("Waiting", jobs.in_states("picked", "resume_ready", "applying"), lambda job: f": {_waits_for(job, jobs.now())}"),
     ]
     if not any(listed for _, listed, _ in groups):
         print("No picked jobs yet.")
@@ -537,6 +537,8 @@ def _replied(args: argparse.Namespace) -> int:
 
 
 def _questions(args: argparse.Namespace) -> int:
+    if _captcha_setting() == "skip":
+        skip_captchas(JobsList(DATA / "jobs.db"))
     print(questions(JobsList(DATA / "jobs.db"), DATA, Threads(DATA / "jobs.db"), Notes(DATA / "jobs.db"),
                     notes_daily(), remote_desktop=remote_desktop_ready(this_machine()), available=verdict), end="")
     return 0
@@ -598,6 +600,8 @@ def _watch_jobs(jobs: JobsList, settings: Settings) -> None:
     if not in_hours(datetime.now(zone(settings)), settings):
         return
     try:
+        if settings.captcha == "skip":
+            skip_captchas(jobs)
         said = watch_jobs(jobs, DATA, verdict=verdict, tell=lambda: tell_session(ROOT, text=TELL_JOBS))
     except (ReplyError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         _told_once("hunt watch jobs", error)

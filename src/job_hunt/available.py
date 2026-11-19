@@ -19,6 +19,7 @@ calls the hunt itself put there are the busy times it knows.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -29,7 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from job_hunt.jobs import JobsList
+from job_hunt.jobs import Job, JobsList
 from job_hunt.settings import Settings
 
 IDLE = timedelta(minutes=3)
@@ -181,11 +182,23 @@ def watch_jobs(jobs: JobsList, data: Path, *, verdict: Callable[[], Verdict], te
     # Imported here: `questions` reads this module's verdicts.
     from job_hunt.questions import on_captcha
 
+    data.mkdir(parents=True, exist_ok=True)
+    # One at a time: two watches at once would both tell, and both start a session.
+    with (data / "jobs.told.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return ""
+        return _watch_jobs(jobs, data, verdict, tell, on_captcha(jobs))
+
+
+def _watch_jobs(jobs: JobsList, data: Path, verdict: Callable[[], Verdict], tell: Callable[[], None],
+                waiting: list[Job]) -> str:
     now = jobs.now()
     told = _told(data)
     due = [f"due {job.id} {job.not_before}" for job in jobs.in_states("resume_ready")
            if job.not_before is not None and jobs.due(job)]
-    captchas = [f"captcha {job.id} {job.updated_at}" for job in on_captcha(jobs) if not job.asked]
+    captchas = [f"captcha {job.id} {job.updated_at}" for job in waiting if not job.asked]
     telling = [key for key in due if key not in told]
     fresh = [key for key in captchas if key not in told or now - told[key] >= RETELL]
     if fresh and (said := verdict()).ask:
@@ -194,7 +207,6 @@ def watch_jobs(jobs: JobsList, data: Path, *, verdict: Callable[[], Verdict], te
         tell()
     # Only what still waits is kept.
     kept = {key: told[key] for key in due + captchas if key in told} | dict.fromkeys(telling, now)
-    data.mkdir(parents=True, exist_ok=True)
     (data / TOLD).write_text(json.dumps({key: when.isoformat() for key, when in kept.items()}) + "\n")
     if not telling:
         return ""

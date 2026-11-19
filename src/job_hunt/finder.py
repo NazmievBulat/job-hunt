@@ -1,4 +1,4 @@
-"""The finder: job alert emails into the jobs list.
+"""The finder: job alert emails, and the job sites' own searches, into the jobs list.
 
 One `claude -p` on Claude Haiku runs the `read-job-alerts` skill, allowed only to read the
 mailbox through the Gmail connector and to write one file:
@@ -12,6 +12,11 @@ mailbox through the Gmail connector and to write one file:
 Everything after that is this script: it drops jobs the list already has, titles that hold
 none of the settings' titles, and jobs the area and remote settings leave out, saves the rest
 as `new`, and saves each one's page as `jobs/<id>/posting.md`.
+
+Then the searches of `search.py` (LinkedIn signed out, and every company's public job board)
+hand their jobs to the same filters and saving; a board's job comes with its description, so
+its page is not read. Each source has its own line and its own time of the last run, and a
+source that fails is named without stopping the others.
 """
 
 from __future__ import annotations
@@ -25,13 +30,16 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, get_args
+from typing import TYPE_CHECKING, Any, get_args
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from job_hunt.jobs import FoundJob, Job, JobsList, Remote, clean_link
 from job_hunt.settings import Settings
+
+if TYPE_CHECKING:
+    from job_hunt.search import Search
 
 MODEL = "claude-haiku-5-5"
 SKILL = "read-job-alerts"
@@ -61,10 +69,15 @@ class Summary:
     emails: int
     jobs: int
     new: int
+    # The alert entries left out, and why.
     problems: list[str] = field(default_factory=list)
+    # One line per source that ran: how many it found and how many were new.
+    lines: list[str] = field(default_factory=list)
+    # Each source that failed, with its error.
+    failed: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
-        return f"{self.emails} emails, {self.jobs} jobs, {self.new} new"
+        return "\n".join(self.lines)
 
 
 def _words(text: str) -> set[str]:
@@ -208,6 +221,11 @@ def _first_text(html: str, places: tuple[Callable[[str, dict[str, str]], bool], 
     return ""
 
 
+def html_text(fragment: str) -> str:
+    """The text of a piece of HTML, as a page's is read: one line per block, lists with dashes."""
+    return _first_text(f"<body>{fragment}</body>", (PAGE_PARTS[1],))
+
+
 def page_text_and_kind(link: str, html: str) -> tuple[str, str]:
     """The description on a fetched page, and whether the job is `easy_apply` or `company_site`."""
     if SIGN_IN.search(urlsplit(link).path):
@@ -317,6 +335,7 @@ def find(
     run: Callable[[list[str]], None],
     fetch: Callable[[str], tuple[str, str]],
     clock: Callable[[], datetime] = _now,
+    search: Search | None = None,
 ) -> Summary:
     # One run at a time: two would write one jobs file, and one could save the other's jobs and
     # move the time the next run reads from past alerts it never saved.
@@ -325,7 +344,7 @@ def find(
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise FinderError("another hunt find is already running") from error
-        return _find(settings, jobs, jobs_folder, found, run=run, fetch=fetch, clock=clock)
+        return _find(settings, jobs, jobs_folder, found, run=run, fetch=fetch, clock=clock, search=search)
 
 
 def _find(
@@ -337,26 +356,55 @@ def _find(
     run: Callable[[list[str]], None],
     fetch: Callable[[str], tuple[str, str]],
     clock: Callable[[], datetime],
+    search: Search | None,
 ) -> Summary:
     started = clock()
+    # The links the jobs met, whose job boards join the company index.
+    met: list[str] = []
+
+    def save(each: FoundJob, description: str | None) -> bool:
+        """Save a job the filters keep, with its page read unless its description came with it;
+        return whether it is new."""
+        if jobs.has(each.link) or not title_matches(each.title, settings.titles) or not place_kept(each, settings):
+            return False
+        if description is not None:
+            return jobs.add(each, description=description, kind="company_site") is not None
+        link = clean_link(each.link)
+        if search is not None and urlsplit(link).netloc.endswith("linkedin.com"):
+            # LinkedIn's pages count as its requests, paced as its searches are.
+            search.pace.wait()
+        ended_at, text, kind, problem = _read_page(link, fetch)
+        met.extend(page for page in (link, ended_at) if page)
+        return jobs.add(each, page_link=ended_at, description=text, kind=kind, problem=problem) is not None
+
+    summary = Summary(0, 0, 0)
+    try:
+        summary.emails, found_jobs, summary.problems = _read_alerts(settings, jobs, found, run, started)
+        summary.jobs = len(found_jobs)
+        summary.new = sum(save(each, None) for each in found_jobs)
+        jobs.finished_run(started)
+        summary.lines.append(f"alert: {summary.emails} emails, {summary.jobs} jobs, {summary.new} new")
+    except FinderError as error:
+        summary.failed.append(f"alert: {error}")
+    if search is not None:
+        lines, failed = search.run(settings, jobs, started, save, met)
+        summary.lines += lines
+        summary.failed += failed
+    # Every new job has its posting, also one whose run stopped after saving it.
+    for job in jobs.all():
+        if job.state == "new" and not (jobs_folder / str(job.id) / "posting.md").exists():
+            _write_posting(job, jobs_folder)
+    return summary
+
+
+def _read_alerts(
+    settings: Settings, jobs: JobsList, found: Path, run: Callable[[list[str]], None], started: datetime
+) -> tuple[int, list[FoundJob], list[str]]:
+    """The alert emails since the alerts' last run, as the skill read them."""
     since = jobs.last_run() or started - FIRST_RUN
     # A file an earlier run left must not pass for this run's.
     found.unlink(missing_ok=True)
     run(skill_command(since, settings.areas, found))
     if not found.exists():
         raise FinderError(f"the {SKILL} run wrote no jobs file ({found})")
-    emails, found_jobs, problems = read_found(found, settings)
-    new = 0
-    for each in found_jobs:
-        if jobs.has(each.link) or not title_matches(each.title, settings.titles) or not place_kept(each, settings):
-            continue
-        ended_at, text, kind, problem = _read_page(clean_link(each.link), fetch)
-        job = jobs.add(each, page_link=ended_at, description=text, kind=kind, problem=problem)
-        if job is not None:
-            new += 1
-    # Every new job has its posting, also one whose run stopped after saving it.
-    for job in jobs.all():
-        if job.state == "new" and not (jobs_folder / str(job.id) / "posting.md").exists():
-            _write_posting(job, jobs_folder)
-    jobs.finished_run(started)
-    return Summary(emails, len(found_jobs), new, problems)
+    return read_found(found, settings)

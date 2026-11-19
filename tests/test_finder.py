@@ -223,7 +223,7 @@ def test_find_saves_the_new_jobs_with_their_pages_and_says_how_many(
     skill = FakeSkill(tmp_path / "data" / "found-jobs.json")
     summary = find(settings, jobs, tmp_path / "jobs", skill.found, run=skill, fetch=_fetch, clock=clock)
     assert (summary.emails, summary.jobs, summary.new) == (4, 8, 4)
-    assert str(summary) == "4 emails, 8 jobs, 4 new"
+    assert str(summary) == "alert: 4 emails, 8 jobs, 4 new"
     saved = {job.title: job for job in jobs.all()}
     # Left out: the product manager and the engineer in test (titles), Austin (no area, on site),
     # and the second alert's copy of the Example Labs job.
@@ -290,9 +290,9 @@ def test_a_run_that_writes_no_file_fails_and_the_next_run_reads_from_the_same_ti
     found = tmp_path / "found-jobs.json"
     # A file left by an earlier run is not read as this run's.
     found.write_text((HERE / "found-jobs.json").read_text())
-    with pytest.raises(FinderError, match="wrote no"):
-        find(settings, jobs, tmp_path / "jobs", found, run=lambda command: None, fetch=_fetch, clock=clock)
-    assert (jobs.last_run(), jobs.all()) == (None, [])
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=lambda command: None, fetch=_fetch, clock=clock)
+    assert len(summary.failed) == 1 and summary.failed[0].startswith("alert: the read-job-alerts run wrote no")
+    assert (summary.lines, jobs.last_run(), jobs.all()) == ([], None, [])
 
 
 def test_hunt_find_prints_one_line_and_a_missing_settings_file_names_setup(
@@ -308,7 +308,7 @@ def test_hunt_find_prints_one_line_and_a_missing_settings_file_names_setup(
     monkeypatch.setattr(cli, "run_skill", FakeSkill(tmp_path / "data" / "found-jobs.json"))
     monkeypatch.setattr(cli, "fetch_page", _fetch)
     assert cli.main(["find"]) == 0
-    assert capsys.readouterr().out == "4 emails, 8 jobs, 4 new\n"
+    assert capsys.readouterr().out == "alert: 4 emails, 8 jobs, 4 new\n"
     assert (tmp_path / "jobs").is_dir()
 
 
@@ -457,7 +457,7 @@ def test_hunt_find_starts_claude_on_haiku_in_the_project_with_only_gmail_reads_a
     fake_claude: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert cli.main(["find"]) == 0
-    assert capsys.readouterr().out == "4 emails, 8 jobs, 4 new\n"
+    assert capsys.readouterr().out == "alert: 4 emails, 8 jobs, 4 new\n"
     started = json.loads((tmp_path / "claude.json").read_text())
     argv = started["argv"]
     assert Path(started["cwd"]) == fake_claude
@@ -475,7 +475,7 @@ def test_hunt_find_says_why_the_skill_run_failed_and_reads_from_the_same_time_ne
     assert cli.main(["find"]) == 1
     printed = capsys.readouterr()
     assert printed.out == ""
-    assert printed.err == "hunt find: the read-job-alerts run failed (1): Not logged in. Run claude to sign in.\n"
+    assert printed.err == "hunt find: alert: the read-job-alerts run failed (1): Not logged in. Run claude to sign in.\n"
     assert JobsList(fake_claude / "data" / "jobs.db").last_run() is None
 
 
@@ -489,7 +489,7 @@ def test_hunt_find_names_what_it_left_out_apart_from_its_one_line(
     monkeypatch.setenv("FAKE_CLAUDE_FOUND", str(bad))
     assert cli.main(["find"]) == 0
     printed = capsys.readouterr()
-    assert printed.out == "4 emails, 7 jobs, 3 new\n"
+    assert printed.out == "alert: 4 emails, 7 jobs, 3 new\n"
     assert printed.err == "hunt find: left out job 2 (SDET II) has remote 'maybe', not one of remote, hybrid, on_site\n"
 
 
@@ -596,7 +596,7 @@ def test_hunt_find_saves_one_job_for_two_links_to_one_page_and_a_job_whose_page_
 
     monkeypatch.setattr(cli, "fetch_page", fetch)
     assert cli.main(["find"]) == 0
-    assert capsys.readouterr().out == "4 emails, 9 jobs, 4 new\n"
+    assert capsys.readouterr().out == "alert: 4 emails, 9 jobs, 4 new\n"
     saved = {job.title: job for job in JobsList(fake_claude / "data" / "jobs.db").all()}
     assert len(saved) == 4
     sdet = saved["SDET II"]

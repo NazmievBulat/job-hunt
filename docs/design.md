@@ -66,23 +66,40 @@ without them.
    "New York City"), remote jobs included, excluded or only, and the lowest salary. These go in
    `data/settings.json`.
 4. It asks the user to turn on job alerts on the boards they use (LinkedIn, Indeed and others)
-   for those searches, since the finder reads the alert emails.
+   for those searches: the finder reads the alert emails besides searching the sites itself,
+   and Indeed and Glassdoor reach it only by alert.
 5. It asks the standing form answers once: work authorization, sponsorship, notice period,
    salary wish, willingness to relocate. These go in the career file's form answers.
 6. It switches on the morning timer.
 
 ## How a day goes
 
-1. **Finder (on a timer).** At the chosen hour one `claude -p` on Claude Haiku reads the job
-   alert emails through the Gmail connector and writes each job's link, title, company and
-   place. The run also says which of the user's areas each job is in. A script drops jobs
-   already in the list, wrong titles, and jobs outside the areas or the remote setting. For each job left it saves the full description from the job page and notes
-   whether it is a LinkedIn Easy Apply or a company site.
+1. **Finder (on a timer).** At the chosen hour, and again at 12:00 and 16:00, `hunt find`
+   gathers the new jobs from every source; a source that fails is named and the others go on.
+   - **Alerts.** One `claude -p` on Claude Haiku reads the job alert emails through the Gmail
+     connector and writes each job's link, title, company and place, and which of the user's
+     areas each job is in.
+   - **LinkedIn, signed out.** Its public guest search, plain HTTP with no cookies and never the
+     user's account: each title in each area, and once per title for remote jobs, over the time
+     since its last run; at most 5 pages a search, 2 to 5 seconds between requests, and a 429
+     or 999 ends LinkedIn for that run.
+   - **Every company's job board.** `data/companies.db` indexes the companies on Greenhouse,
+     Lever, Ashby, Workday, SmartRecruiters and Workable: filled once a week from Common Crawl's
+     public URL index (`hunt companies`), from every link a job leads to a board by, and from
+     the settings' `companies`. The first run of a day reads every board's public JSON, the
+     later runs only the boards that posted in the last week; at most 4 requests at a time to
+     one host. A board that answers 404 twice is dropped.
+   A script drops jobs already in the list (one link is one job, whichever source found it),
+   wrong titles, and jobs outside the areas or the remote setting; a board's or LinkedIn's job
+   gets its area from a table of the cities in each area. For each job left it saves the full
+   description (from the job page, or from the board's answer) and notes whether it is a
+   LinkedIn Easy Apply or a company site, and which source found it.
 2. **Scoring (only when the finder found something).** One `claude -p` reads the new jobs and
    the career file, and gives each a fit score from 1 to 10 with a one-line reason.
 3. **The list reaches the user.** The script opens a Claude Code session named `job-hunt` with
    Remote Control, which shows the numbered list. With nothing new, nothing opens and nothing
-   is spent.
+   is spent. A later run of the day leaves a running session alone, which asks for the new
+   jobs at its next `hunt questions`, and opens one only when none runs.
 4. **The user replies** "apply 1 3 4", "apply all above 7" or "skip 2". The session runs the
    `hunt` command with the picks. That is all it does, so it stays cheap.
 5. **Resumes (in parallel).** One resume worker per pick (see Resume).
@@ -103,10 +120,12 @@ Each piece has one job and talks to the others only through the jobs list and fi
 
 | Piece | Kind | What it does |
 |---|---|---|
-| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`. It is the coordinator. |
-| Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
+| `hunt` | Python command | Every mechanical step: `career`, `resume`, `find`, `companies`, `score`, `list`, `pick`, `apply`, `answer`, `resume-job`, `applied`, `status`, `morning`, `questions`, `notify`, `timer`. It is the coordinator. |
+| Jobs list | SQLite file `data/jobs.db` | One row per job: link, description, kind (Easy Apply or company site), source, score and reason, the user's decision, state, dates, reason for a failure. Only `hunt` writes it. |
+| Company index | SQLite file `data/companies.db` | Every company found on a public job-board system, with its board and when it last posted. Only `hunt` writes it. |
+| Searches | Python (`search.py`) | LinkedIn's guest search and the boards' public JSON, plain HTTP, no model. |
 | Career | `data/career.json` | The user's jobs, schools, certifications, skills, summary and standing form answers. |
-| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the timer's hour. |
+| Settings | `data/settings.json` | Titles, areas by name, remote (include, exclude or only), salary floor, the timer's hour, companies added by hand. |
 | Resume worker | `claude -p` with the `write-resume` skill | Gets the career and one job description and writes `resume-content.json`. |
 | Resume builder | Python (`resume_kit`) | Merges that content with the career, checks it against the resume contract, builds `resume.pdf`. |
 | LinkedIn worker | `claude -p --chrome` with the `apply-linkedin` skill | Opens the job's LinkedIn page, presses Easy Apply, uploads the PDF, answers from the career, submits. |
@@ -181,14 +200,15 @@ PDF and the worker's report. A worker sees only its own folder and the career.
 
 - The resume contract and layouts keep their tests. They test code, not the model, and run in
   seconds.
-- New code gets tests for what it decides: the finder's filters and email parsing, never
-  listing the same job twice, the jobs list's states, the LinkedIn lock and the limit of three.
+- New code gets tests for what it decides: the finder's filters and email parsing, the
+  searches on saved answers (no test calls the network), never listing the same job twice, the jobs list's states, the LinkedIn lock and the limit of three.
 - Nothing tests the model's writing or its scores.
 
 ## Not in the first version
 
 - Weekly statistics.
-- Job sites without alert emails.
+- Indeed and Glassdoor without alert emails: their sites refuse plain HTTP, and the finder does
+  not get past a bot check.
 - Applying without the user's daily pick.
 
 ## Build order

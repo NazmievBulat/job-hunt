@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,21 +17,24 @@ from job_hunt.apply import (
     LINKEDIN_SKILL, RESUME_SKILL, SITE_SKILL, AnswerError, ApplyError, answer, apply, applied, resume_job,
 )
 from job_hunt.career import career_from_export, read_career, write_career
+from job_hunt.companies import Companies, fill_index
 from job_hunt.finder import FinderError, fetch_page, find, run_claude
 from job_hunt.finder import Summary as FindSummary
 from job_hunt.jobs import Job, JobsList, PickError
-from job_hunt.morning import morning, start_session
+from job_hunt.morning import morning, session_running, start_session
 from job_hunt.notify import NotifyError, notify, post_pushover
 from job_hunt.questions import job_line, log_failure, questions, then
 from job_hunt.resume import ContentError, write_pdf
 from job_hunt.scoring import SKILL as SCORE_SKILL, ScoreError, score
 from job_hunt.scoring import Summary as ScoreSummary
+from job_hunt.search import Pace, Search, http_get
 from job_hunt.settings import SettingsError, read_settings
 from job_hunt.timer import TimerError, timer
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
 CAREER = DATA / "career.json"
+SLEEP = time.sleep
 
 
 def _career(args: argparse.Namespace) -> int:
@@ -58,6 +62,11 @@ def run_skill(command: list[str]) -> None:
     run_claude(command, ROOT)
 
 
+def site_search() -> Search | None:
+    """LinkedIn's search and the company boards, over the network."""
+    return Search(get=http_get, pace=Pace(sleep=SLEEP), companies=Companies(DATA / "companies.db"), sleep=SLEEP)
+
+
 def find_step() -> FindSummary:
     summary = find(
         read_settings(DATA / "settings.json"),
@@ -66,26 +75,41 @@ def find_step() -> FindSummary:
         DATA / "found-jobs.json",
         run=run_skill,
         fetch=fetch_page,
+        search=site_search(),
     )
     for problem in summary.problems:
         print(f"hunt find: left out {problem}", file=sys.stderr)
-    print(summary)
+    for failed in summary.failed:
+        print(f"hunt find: {failed}", file=sys.stderr)
+    if summary.lines:
+        print(summary)
     return summary
 
 
 def _find_and_tell() -> None:
-    """For the morning: a job the finder left out is a failure it tells, not only a line."""
+    """For the morning: a job the finder left out, or a source that failed, is a failure it
+    tells, not only a line."""
     summary = find_step()
-    if summary and summary.problems:
-        raise FinderError(f"left out {'; '.join(summary.problems)}")
+    told = [f"left out {'; '.join(summary.problems)}"] if summary and summary.problems else []
+    told += summary.failed if summary else []
+    if told:
+        raise FinderError("; ".join(told))
 
 
 def _find(args: argparse.Namespace) -> int:
     try:
-        find_step()
+        summary = find_step()
     except (SettingsError, FinderError) as error:
         print(f"hunt find: {error}", file=sys.stderr)
         return 1
+    return 1 if summary.failed else 0
+
+
+def _companies(args: argparse.Namespace) -> int:
+    line, problems = fill_index(Companies(DATA / "companies.db"), http_get, sleep=SLEEP)
+    for problem in problems:
+        print(f"hunt companies: {problem}", file=sys.stderr)
+    print(line)
     return 0
 
 
@@ -231,7 +255,7 @@ def _status(args: argparse.Namespace) -> int:
 def _morning(args: argparse.Namespace) -> int:
     try:
         print(morning(JobsList(DATA / "jobs.db"), DATA, find=_find_and_tell, score=_score_every_job,
-                      start=lambda: start_session(ROOT)))
+                      start=lambda: start_session(ROOT), running=session_running))
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         # Today's session did not start, so the next morning's questions tell it.
         log_failure(DATA, "hunt morning", error, lambda: datetime.now(UTC))
@@ -289,10 +313,22 @@ def main(argv: list[str] | None = None) -> int:
     finder = commands.add_parser(
         "find",
         help="read the job alert emails since the last run into data/jobs.db (one claude -p on Haiku with the "
-        "read-job-alerts skill, Gmail read-only), save each new job's page in jobs/<id>/posting.md and "
-        "print how many emails, jobs and new jobs",
+        "read-job-alerts skill, Gmail read-only), search LinkedIn signed out and every company's public job board "
+        "in data/companies.db (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable), save each new job's "
+        "page in jobs/<id>/posting.md and print, for each source, how many jobs it found and how many were new",
+        description="Every source in turn; one that fails is named and the others go on. The alert emails and "
+        "LinkedIn's search (each title in each area, and once remote unless the settings exclude it; at most 5 pages "
+        "a search, 2 to 5 seconds apart, a 429 or 999 ends LinkedIn for the run) read what came since their own "
+        "last run. Every company's public board (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable) is "
+        "read in the first run of a day, and in the later runs only the boards that posted in the last week; at "
+        "most 4 requests at a time to one host. Once a week the company index is filled from Common Crawl first "
+        "(hunt companies), and a board an alert's link leads to joins it.",
     )
     finder.set_defaults(run=_find)
+    indexing = commands.add_parser(
+        "companies", help="fill data/companies.db with every company whose job board on Greenhouse, Lever, Ashby, "
+        "Workday, SmartRecruiters or Workable is in the latest Common Crawl (hunt find does it once a week)")
+    indexing.set_defaults(run=_companies)
     scoring = commands.add_parser(
         "score",
         help="score the new jobs from 1 to 10 with one line of reason (one claude -p on Haiku with the score-jobs "
@@ -336,7 +372,8 @@ def main(argv: list[str] | None = None) -> int:
         "morning",
         help="the timer's run: hunt find, hunt score when anything is new, then, when anything waits for the user, "
         "a fresh job-hunt Claude Code session with Remote Control in tmux (ending yesterday's) that asks the "
-        "questions; a failed step goes to data/morning.log and is told once")
+        "questions; a later run of the day starts one only when none runs; a failed step goes to "
+        "data/morning.log and is told once")
     starting.set_defaults(run=_morning)
     asking = commands.add_parser(
         "questions", help="print what waits for the user, in the order to ask: a morning failure, new jobs "
@@ -348,8 +385,9 @@ def main(argv: list[str] | None = None) -> int:
     pushing.add_argument("text")
     pushing.set_defaults(run=_notify)
     timing = commands.add_parser(
-        "timer", help="turn the morning run on or off at the settings' morning hour (systemd user timer on Linux, "
-        "launchd agent on macOS); without on or off, say its state")
+        "timer", help="turn the morning run on or off at the settings' morning hour, with two later runs at 12:00 "
+        "and 16:00 when they come after it (systemd user timer on Linux, launchd agent on macOS); without on or off, "
+        "say its state")
     timing.add_argument("action", nargs="?", choices=["on", "off"])
     timing.set_defaults(run=_timer)
     args = parser.parse_args(argv)

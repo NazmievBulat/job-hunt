@@ -87,7 +87,11 @@ SEND_GMAIL_TOOLS = (GMAIL_THREAD, "mcp__claude_ai_Gmail__reply", "mcp__claude_ai
 # clicks also types, so the run's hook (`READ_GUARD`, `job_hunt.click_guard`) lets through only
 # its plain clicks, scrolling and looking. A stranger's message, read with nobody watching,
 # cannot make it type or send.
-READ_CHROME_TOOLS = tuple(tool for tool in CHROME_TOOLS if not tool.endswith(("form_input", "file_upload")))
+# Named one by one, not as the apply workers' list less some: a tool added there is not the reader's.
+READ_CHROME_TOOLS = tuple(f"mcp__claude-in-chrome__{name}" for name in (
+    "list_connected_browsers", "select_browser", "tabs_context_mcp", "tabs_create_mcp", "navigate", "read_page",
+    "get_page_text", "find", "computer",
+))
 READ_GUARD = {"hooks": {"PreToolUse": [{"matcher": COMPUTER, "hooks": [
     {"type": "command", "command": f"{shlex.quote(sys.executable)} -I -m job_hunt.click_guard"}]}]}}
 # Sending types and clicks; it uploads only the resume a reply offering times goes out with.

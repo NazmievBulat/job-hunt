@@ -313,3 +313,37 @@ def test_the_name_and_contacts_in_a_word_header_are_read_first(tmp_path: Path) -
 
     assert text.splitlines()[0] == "Ada Example · ada@example.com"
     assert "Durham, NC" in text and "QA Engineer, Acme" in text
+
+
+def test_a_table_in_a_word_header_is_read_first(tmp_path: Path) -> None:
+    from docx import Document
+    from docx.shared import Inches
+
+    from job_hunt.career import resume_text
+
+    document = Document()
+    document.sections[0].header.add_table(rows=1, cols=1, width=Inches(6)).rows[0].cells[0].text = (
+        "Ada Example · ada@example.com")
+    document.add_paragraph("QA Engineer, Acme")
+    document.save(tmp_path / "resume.docx")
+
+    assert resume_text(tmp_path / "resume.docx").splitlines()[0] == "Ada Example · ada@example.com"
+
+
+@pytest.mark.parametrize("damaged", [None, [1], {"ready": [1]}, {"ready": None, "saved": []}])
+def test_damaged_form_answers_of_the_old_career_never_break_saving_the_standing_answers(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damaged: object) -> None:
+    from dataclasses import asdict
+
+    from job_hunt import cli
+
+    career_file = tmp_path / "career.json"
+    career_file.write_text(json.dumps({**asdict(career_from_resume(DRAFT)), "form_answers": damaged}))
+    monkeypatch.setattr(cli, "CAREER", career_file)
+    written = tmp_path / "career-draft.json"
+    written.write_text(json.dumps(DRAFT))
+
+    assert main(["career-from-resume", str(written), "--save"]) == 0
+    assert main(["form-answers", '{"authorized": "yes"}']) == 0
+
+    assert read_career(career_file).form_answers["ready"] == {"authorized": "yes"}

@@ -247,8 +247,16 @@ def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Car
         jobs=jobs,
         education=education,
         certifications=_texts(draft.get("certifications")),
-        form_answers=kept.form_answers if kept is not None else {},
+        form_answers=_form_answers(kept.form_answers) if kept is not None else {},
     )
+
+
+def _form_answers(value: Any) -> dict[str, Any]:
+    """Form answers as the hunt reads them: an object, its `ready` an object too. A damaged
+    `ready` is dropped, and /setup asks the standing answers again."""
+    if not isinstance(value, dict):
+        return {}
+    return {key: answer for key, answer in value.items() if key != "ready" or isinstance(answer, dict)}
 
 
 def with_ready_answers(career: Career, answers: dict[str, Any]) -> Career:
@@ -256,7 +264,8 @@ def with_ready_answers(career: Career, answers: dict[str, Any]) -> Career:
     unknown = sorted(set(answers) - set(STANDING))
     if unknown:
         raise CareerError(f"not a standing answer: {', '.join(unknown)} (they are {', '.join(STANDING)})")
-    ready = {**(career.form_answers.get("ready") or {}), **answers}
+    career.form_answers = _form_answers(career.form_answers)
+    ready = {**career.form_answers.get("ready", {}), **answers}
     try:
         checked = ReadyAnswers.model_validate(ready)
     except ValidationError as error:
@@ -288,6 +297,8 @@ def resume_text(path: Path) -> str:
                           "or paste its text") from None
     # A name and contacts are often in the page header, so it comes first.
     lines = [paragraph.text for section in document.sections for paragraph in section.header.paragraphs]
+    lines += [cell.text for section in document.sections for table in section.header.tables
+              for row in table.rows for cell in row.cells]
     lines += [paragraph.text for paragraph in document.paragraphs]
     lines += [cell.text for table in document.tables for row in table.rows for cell in row.cells]
     lines += [paragraph.text for section in document.sections for paragraph in section.footer.paragraphs]

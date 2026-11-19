@@ -82,3 +82,22 @@ def test_a_file_that_is_not_json_is_refused(tmp_path: Path) -> None:
 def test_only_remote_jobs_needs_no_area_and_the_salary_floor_may_be_left_empty(tmp_path: Path) -> None:
     settings = read_settings(_write(tmp_path, {**GOOD, "areas": [], "remote": "only", "lowest_salary": None}))
     assert (settings.areas, settings.remote, settings.lowest_salary) == ([], "only", None)
+
+
+def test_pushover_keys_are_optional(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).pushover is None
+    keys = {"token": "aExampleAppToken", "user": "uExampleUserKey"}
+
+    settings = read_settings(_write(tmp_path, {**GOOD, "pushover": keys}))
+
+    assert settings.pushover is not None
+    assert (settings.pushover.token, settings.pushover.user) == ("aExampleAppToken", "uExampleUserKey")
+
+
+@pytest.mark.parametrize("pushover", [{"token": "aExampleAppToken"}, {"token": "", "user": "u"}, "keys",
+                                      {"token": "a", "user": "u", "device": "phone"}])
+def test_pushover_keys_need_both_a_token_and_a_user(tmp_path: Path, pushover: object) -> None:
+    with pytest.raises(SettingsError, match="pushover") as refused:
+        read_settings(_write(tmp_path, {**GOOD, "pushover": pushover}))
+    # The keys are never repeated in an error.
+    assert "aExampleAppToken" not in str(refused.value)

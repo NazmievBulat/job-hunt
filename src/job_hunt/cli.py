@@ -4,18 +4,29 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
+import shutil
+import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from job_hunt.apply import (
-    RESUME_SKILL, SITE_SKILL, UNSURE, AnswerError, ApplyError, answer, apply, applied, resume_job,
+    LINKEDIN_SKILL, RESUME_SKILL, SITE_SKILL, AnswerError, ApplyError, answer, apply, applied, resume_job,
 )
 from job_hunt.career import career_from_export, read_career, write_career
 from job_hunt.finder import FinderError, fetch_page, find, run_claude
+from job_hunt.finder import Summary as FindSummary
 from job_hunt.jobs import Job, JobsList, PickError
+from job_hunt.morning import morning, start_session
+from job_hunt.notify import NotifyError, notify, post_pushover
+from job_hunt.questions import job_line, log_failure, questions, then
 from job_hunt.resume import ContentError, write_pdf
 from job_hunt.scoring import SKILL as SCORE_SKILL, ScoreError, score
+from job_hunt.scoring import Summary as ScoreSummary
 from job_hunt.settings import SettingsError, read_settings
+from job_hunt.timer import TimerError, timer
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -47,22 +58,34 @@ def run_skill(command: list[str]) -> None:
     run_claude(command, ROOT)
 
 
-def _find(args: argparse.Namespace) -> int:
-    try:
-        summary = find(
-            read_settings(DATA / "settings.json"),
-            JobsList(DATA / "jobs.db"),
-            ROOT / "jobs",
-            DATA / "found-jobs.json",
-            run=run_skill,
-            fetch=fetch_page,
-        )
-    except (SettingsError, FinderError) as error:
-        print(f"hunt find: {error}", file=sys.stderr)
-        return 1
+def find_step() -> FindSummary:
+    summary = find(
+        read_settings(DATA / "settings.json"),
+        JobsList(DATA / "jobs.db"),
+        ROOT / "jobs",
+        DATA / "found-jobs.json",
+        run=run_skill,
+        fetch=fetch_page,
+    )
     for problem in summary.problems:
         print(f"hunt find: left out {problem}", file=sys.stderr)
     print(summary)
+    return summary
+
+
+def _find_and_tell() -> None:
+    """For the morning: a job the finder left out is a failure it tells, not only a line."""
+    summary = find_step()
+    if summary and summary.problems:
+        raise FinderError(f"left out {'; '.join(summary.problems)}")
+
+
+def _find(args: argparse.Namespace) -> int:
+    try:
+        find_step()
+    except (SettingsError, FinderError) as error:
+        print(f"hunt find: {error}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -70,26 +93,28 @@ def run_scoring(command: list[str]) -> None:
     run_claude(command, ROOT, skill=SCORE_SKILL, error=ScoreError)
 
 
-def _score(args: argparse.Namespace) -> int:
-    try:
-        summary = score(JobsList(DATA / "jobs.db"), ROOT, run=run_scoring)
-    except ScoreError as error:
-        print(f"hunt score: {error}", file=sys.stderr)
-        return 1
+def score_step() -> ScoreSummary:
+    summary = score(JobsList(DATA / "jobs.db"), ROOT, run=run_scoring)
     for job in summary.missing:
         print(f"hunt score: not scored, still new: {job}", file=sys.stderr)
     print(summary)
+    return summary
+
+
+def _score_every_job() -> None:
+    """For the morning: a job the scoring left out is a failure it tells, not only a line."""
+    summary = score_step()
+    if summary and summary.missing:
+        raise ScoreError(f"not scored, still new: {', '.join(summary.missing)}")
+
+
+def _score(args: argparse.Namespace) -> int:
+    try:
+        score_step()
+    except ScoreError as error:
+        print(f"hunt score: {error}", file=sys.stderr)
+        return 1
     return 0
-
-
-KINDS = {"easy_apply": "Easy Apply", "company_site": "company site"}
-
-
-def _where(job: Job) -> str:
-    if job.remote == "remote":
-        return "remote"
-    place = job.place or "place not given"
-    return f"{place}, hybrid" if job.remote == "hybrid" else place
 
 
 def _list(args: argparse.Namespace) -> int:
@@ -97,9 +122,7 @@ def _list(args: argparse.Namespace) -> int:
     if not shown:
         print("No scored jobs wait for your pick.")
     for number, job in enumerate(shown, start=1):
-        kind = KINDS.get(job.kind or "", "way to apply not known")
-        print(f"{number:>2}. {job.score:>2}  {job.title} · {job.company} · {_where(job)} · {kind}")
-        print(f"        {job.score_reason}")
+        print(job_line(number, job))
     return 0
 
 
@@ -138,9 +161,14 @@ def run_site(command: list[str]) -> None:
     run_claude(command, ROOT, skill=SITE_SKILL, error=ApplyError)
 
 
+def run_linkedin(command: list[str]) -> None:
+    run_claude(command, ROOT, skill=LINKEDIN_SKILL, error=ApplyError)
+
+
 def _apply(args: argparse.Namespace) -> int:
     try:
-        summary = apply(JobsList(DATA / "jobs.db"), ROOT, run_resume=run_resume, run_site=run_site)
+        summary = apply(JobsList(DATA / "jobs.db"), ROOT, run_resume=run_resume, run_site=run_site,
+                        run_linkedin=run_linkedin)
     except ApplyError as error:
         print(f"hunt apply: {error}", file=sys.stderr)
         return 1
@@ -172,23 +200,13 @@ def _answer(args: argparse.Namespace) -> int:
     return 0
 
 
-def _then(job: Job) -> str:
-    if job.state_reason and job.state_reason.startswith("an answer to "):
-        return f'hunt answer {job.id} "<the answer>"'
-    if job.state_reason and job.state_reason.startswith(UNSURE):
-        return f"hunt applied {job.id} if it was sent, hunt resume-job {job.id} if not"
-    return f"hunt resume-job {job.id}"
-
-
 def _waits_for(job: Job) -> str:
     if job.state == "picked":
         return "resume not written yet"
     if job.state == "applying":
         return "being applied to"
-    if job.kind == "company_site":
+    if job.kind in ("company_site", "easy_apply"):
         return "resume ready, for the next hunt apply"
-    if job.kind == "easy_apply":
-        return "resume ready, for the LinkedIn worker"
     return "resume ready; the way to apply is not known"
 
 
@@ -196,7 +214,7 @@ def _status(args: argparse.Namespace) -> int:
     jobs = JobsList(DATA / "jobs.db")
     groups = [
         ("Applied", jobs.in_states("applied"), lambda job: ""),
-        ("Paused", jobs.in_states("paused"), lambda job: f": needs {job.state_reason} (then: {_then(job)})"),
+        ("Paused", jobs.in_states("paused"), lambda job: f": needs {job.state_reason} (then: {then(job)})"),
         ("Failed", jobs.in_states("failed"), lambda job: f": {job.state_reason}"),
         ("Waiting", jobs.in_states("picked", "resume_ready", "applying"), lambda job: f": {_waits_for(job)}"),
     ]
@@ -207,6 +225,55 @@ def _status(args: argparse.Namespace) -> int:
             print(f"{name} ({len(listed)}):")
         for job in listed:
             print(f"  {job.id}. {_named(job)}{why(job)}")
+    return 0
+
+
+def _morning(args: argparse.Namespace) -> int:
+    try:
+        print(morning(JobsList(DATA / "jobs.db"), DATA, find=_find_and_tell, score=_score_every_job,
+                      start=lambda: start_session(ROOT)))
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+        # Today's session did not start, so the next morning's questions tell it.
+        log_failure(DATA, "hunt morning", error, lambda: datetime.now(UTC))
+        print(f"hunt morning: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _questions(args: argparse.Namespace) -> int:
+    print(questions(JobsList(DATA / "jobs.db"), DATA), end="")
+    return 0
+
+
+def _notify(args: argparse.Namespace) -> int:
+    try:
+        said = notify(args.text, DATA, post=post_pushover)
+    except (SettingsError, NotifyError) as error:
+        print(f"hunt notify: {error}", file=sys.stderr)
+        return 1
+    if said:
+        print(said)
+    return 0
+
+
+def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(command, capture_output=True, text=True, timeout=60)
+    except FileNotFoundError as missing:
+        raise TimerError(f"{command[0]} is not installed or not on the PATH") from missing
+
+
+def _timer(args: argparse.Namespace) -> int:
+    try:
+        action = args.action or "status"
+        # Turning it off needs no hour, so broken settings never keep the timer running.
+        hour = 0 if action == "off" else read_settings(DATA / "settings.json").morning_hour
+        said = timer(action, platform.system(), Path.home(), ROOT, hour, run=run_command,
+                     uv=shutil.which("uv") or "uv", path=os.environ.get("PATH", ""), uid=os.getuid())
+    except (SettingsError, TimerError) as error:
+        print(f"hunt timer: {error}", file=sys.stderr)
+        return 1
+    print(said)
     return 0
 
 
@@ -245,7 +312,8 @@ def main(argv: list[str] | None = None) -> int:
     applying = commands.add_parser(
         "apply",
         help="write a resume for every picked job (claude -p with the write-resume skill, all at once), then apply "
-        "to the company-site jobs, up to three at once (claude --chrome -p with the apply-site skill)",
+        "to the company-site jobs, up to three at once (claude --chrome -p with the apply-site skill), and to the "
+        "Easy Apply jobs one at a time, three to six minutes apart (claude --chrome -p with the apply-linkedin skill)",
     )
     applying.set_defaults(run=_apply)
     answering = commands.add_parser(
@@ -264,6 +332,26 @@ def main(argv: list[str] | None = None) -> int:
     status = commands.add_parser("status", help="print the picked jobs: applied, paused (what each needs), failed "
                                  "(why) and waiting")
     status.set_defaults(run=_status)
+    starting = commands.add_parser(
+        "morning",
+        help="the timer's run: hunt find, hunt score when anything is new, then, when anything waits for the user, "
+        "a fresh job-hunt Claude Code session with Remote Control in tmux (ending yesterday's) that asks the "
+        "questions; a failed step goes to data/morning.log and is told once")
+    starting.set_defaults(run=_morning)
+    asking = commands.add_parser(
+        "questions", help="print what waits for the user, in the order to ask: a morning failure, new jobs "
+        "(numbered for hunt pick), paused applications")
+    asking.set_defaults(run=_questions)
+    pushing = commands.add_parser(
+        "notify", help="push one question with Pushover, linking to the day's session, when data/settings.json "
+        "has pushover keys")
+    pushing.add_argument("text")
+    pushing.set_defaults(run=_notify)
+    timing = commands.add_parser(
+        "timer", help="turn the morning run on or off at the settings' morning hour (systemd user timer on Linux, "
+        "launchd agent on macOS); without on or off, say its state")
+    timing.add_argument("action", nargs="?", choices=["on", "off"])
+    timing.set_defaults(run=_timer)
     args = parser.parse_args(argv)
     return args.run(args)
 

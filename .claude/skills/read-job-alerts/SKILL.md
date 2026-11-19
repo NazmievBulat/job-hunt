@@ -46,11 +46,12 @@ from recruiters (those are for "Messages"), application receipts, interview invi
 newsletters.
 
 Gmail puts a board's daily alerts, which share a sender and a subject, in one thread, and a
-search result shows at most 5 messages of a thread. When a thread of alerts shows 5 messages, or
-fewer than its `messageCount`, some may be missing: search for that thread's sender again with
-`after:<after> before:<the Unix seconds of the oldest message of it listed so far>` and
-`"view": "THREAD_VIEW_METADATA_ONLY"`, and list the messages it adds. Repeat until a search
-adds no message of that thread. Never open such a thread with `get_thread` to see its messages.
+search result shows at most 5 messages of a thread, which need not be the ones that matched the
+search. When a thread of alerts shows 5 messages, or fewer than its `messageCount`, list all of
+its messages with `get_thread` and `"messageFormat": "METADATA_ONLY"`, which gives each
+message's id and date and none of its text, and keep those that arrived after `after`. Never
+call `get_thread` with another format in this task: an alert's text is larger than a tool's
+answer may be.
 
 Write `out`:
 

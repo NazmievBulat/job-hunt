@@ -75,8 +75,10 @@ MODEL = "claude-haiku-5-5"
 SKILL = "read-job-alerts"
 GMAIL_SEARCH = "mcp__claude_ai_Gmail__search_threads"
 GMAIL_GET_MESSAGE = "mcp__claude_ai_Gmail__get_message"
-# The recruiters' emails are read whole, thread and all; the alerts never are.
-GMAIL_READ_TOOLS = (GMAIL_SEARCH, "mcp__claude_ai_Gmail__get_thread", GMAIL_GET_MESSAGE)
+GMAIL_GET_THREAD = "mcp__claude_ai_Gmail__get_thread"
+# The recruiters' emails are read whole, thread and all; an alert's thread is only listed, by its
+# messages' ids and dates, past the 5 messages a search shows of it.
+GMAIL_READ_TOOLS = (GMAIL_SEARCH, GMAIL_GET_THREAD, GMAIL_GET_MESSAGE)
 # An alert's plain text is a few thousand characters: ten fit a run with room to spare.
 BATCH_EMAILS = 10
 # Every background run: `--allowedTools` only adds to what the person's own settings allow (their
@@ -342,7 +344,7 @@ def skill_command(since: datetime | None, out: Path, messages_after: datetime | 
                                  "since": since.isoformat() if since else None, "out": str(out)}
     if messages_after is not None:
         arguments["messages_after"] = int(messages_after.timestamp())
-    return _command(arguments, GMAIL_READ_TOOLS if messages_after is not None else (GMAIL_SEARCH,), out)
+    return _command(arguments, GMAIL_READ_TOOLS if messages_after is not None else (GMAIL_SEARCH, GMAIL_GET_THREAD), out)
 
 
 def batch_command(email_ids: list[str], areas: list[str], out: Path) -> list[str]:

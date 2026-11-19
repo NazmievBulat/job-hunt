@@ -24,6 +24,7 @@ from job_hunt import cli
 from job_hunt import finder
 from job_hunt.finder import (
     GMAIL_READ_TOOLS,
+    GMAIL_GET_THREAD,
     GMAIL_SEARCH,
     FinderError,
     batch_command,
@@ -212,8 +213,8 @@ def test_the_search_runs_on_haiku_with_only_gmails_search_and_its_one_file(tmp_p
     }
     assert command[command.index("--model") + 1] == "claude-haiku-5-5"
     allowed = command[command.index("--allowedTools") + 1].split(",")
-    # Without messages to read, the search opens no email at all.
-    assert allowed == [GMAIL_SEARCH, f"Edit(/{out})"]
+    # Without messages to read, the search opens no email: `get_thread` lists a long thread of alerts.
+    assert allowed == [GMAIL_SEARCH, GMAIL_GET_THREAD, f"Edit(/{out})"]
     assert_only_named_tools(command)
     with_messages = skill_command(since, out, since)
     assert with_messages[with_messages.index("--allowedTools") + 1].split(",") == [*GMAIL_READ_TOOLS, f"Edit(/{out})"]
@@ -918,10 +919,9 @@ def test_the_skill_searches_a_thread_of_alerts_again_for_the_messages_its_result
     skill = " ".join((Path(cli.ROOT) / ".claude" / "skills" / "read-job-alerts" / "SKILL.md").read_text().split())
     assert "a search result shows at most 5 messages of a thread" in skill
     assert "When a thread of alerts shows 5 messages, or fewer than its `messageCount`" in skill
-    assert ("`after:<after> before:<the Unix seconds of the oldest message of it listed so far>` and "
-            '`"view": "THREAD_VIEW_METADATA_ONLY"`') in skill
-    assert "Repeat until a search adds no message of that thread." in skill
-    assert "Never open such a thread with `get_thread`" in skill
+    assert ("list all of its messages with `get_thread` and `\"messageFormat\": \"METADATA_ONLY\"`, which gives "
+            "each message's id and date and none of its text, and keep those that arrived after `after`") in skill
+    assert "Never call `get_thread` with another format in this task" in skill
 
 
 def test_a_failed_batch_holding_an_email_without_a_date_leaves_the_last_run_where_it_was(

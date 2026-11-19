@@ -120,8 +120,8 @@ Without it the job waits until the user is at the computer, and the other jobs g
    says how many jobs it found and how many were new, and one more line how long each took.
    - **Alerts.** `claude -p` on Claude Haiku reads the job alert emails through the Gmail
      connector, walked by the script: one run only searches and lists the alert emails since
-     the last run (a thread of one board's daily alerts is searched again with `before:` for
-     the messages past the 5 a search result shows), then one run for each batch of at most 10 of them, oldest first, opens only
+     the last run (a thread of one board's daily alerts is listed with `get_thread` by its
+     messages' ids and dates only, for the messages past the 5 a search result shows), then one run for each batch of at most 10 of them, oldest first, opens only
      the emails it is named, in plain text one at a time (an alert's HTML is larger than a
      tool's answer may be), and writes each job's link, title, company and place, and which of
      the user's areas each job is in. A click-tracking link is kept as it is and followed to the

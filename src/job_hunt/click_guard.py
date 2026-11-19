@@ -45,9 +45,10 @@ def _strings(content: Any) -> str:
     return ""
 
 
-def page_reads(transcript: Path, tab: int) -> list[str]:
+def page_reads(transcript: Path, tab: int, pending: object = None) -> list[str]:
     """The text of each read_page and find result of `tab` in the transcript, in order, since the
-    last navigate or click in that tab: a ref read before either may name another element now."""
+    last navigate or click in that tab: a ref read before either may name another element now.
+    `pending` is the id of the click being judged, should the transcript hold it already."""
     calls: dict[str, tuple[str, Any]] = {}
     reads: list[str] = []
     for line in transcript.read_text().splitlines():
@@ -63,7 +64,8 @@ def page_reads(transcript: Path, tab: int) -> list[str]:
                 name, given = str(item.get("name")), item.get("input")
                 given = given if isinstance(given, dict) else {}
                 calls[str(item.get("id"))] = (name, given.get("tabId"))
-                if given.get("tabId") == tab and (name == NAVIGATE or (name == COMPUTER and given.get("action") == "left_click")):
+                changes = name == NAVIGATE or (name == COMPUTER and given.get("action") == "left_click")
+                if changes and given.get("tabId") == tab and item.get("id") != pending:
                     reads.clear()
             elif entry.get("type") == "user" and item.get("type") == "tool_result":
                 name, read_tab = calls.get(str(item.get("tool_use_id")), ("", None))
@@ -111,7 +113,7 @@ def refusal(event: Any) -> str | None:
         return "the LinkedIn reader clicks only by ref, never at a place on the screen"
     transcript, tab = event.get("transcript_path"), call.get("tabId")
     if not isinstance(transcript, str) or not isinstance(tab, int) or \
-            not is_list_item(ref, page_reads(Path(transcript), tab)):
+            not is_list_item(ref, page_reads(Path(transcript), tab, event.get("tool_use_id"))):
         return (f"the LinkedIn reader clicks only a conversation's list item: no read_page or find of tab {tab} "
                 f"since its last navigate or click showed {ref} as a listitem. Read the list of conversations "
                 f"with read_page again and click the ref of the line that says listitem.")

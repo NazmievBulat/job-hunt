@@ -171,6 +171,10 @@ def test_a_read_counts_only_in_its_own_tab_and_until_the_tab_navigates_or_clicks
     other = _transcript(tmp_path, ("read_page", LIST), ("navigate", "ok", {"tabId": 8, "url": "https://example.com"}),
                         ("computer", "clicked", {**click, "tabId": 8}), ("computer", "scrolled", {"tabId": 7, "action": "scroll"}))
     assert refusal(_click("ref_12", other)) is None
+    # The click being judged, should the transcript hold it already, is not a click before it.
+    pending = _transcript(tmp_path, ("read_page", LIST), ("computer", "", {**click, "ref": "ref_12"}))
+    assert refusal({**_click("ref_12", pending), "tool_use_id": "toolu_1"}) is None
+    assert refusal({**_click("ref_12", pending), "tool_use_id": "toolu_9"})
     # A click with no tab is refused.
     assert refusal({**_click("ref_10", _transcript(tmp_path, ("read_page", LIST))), "tool_input": {
         "action": "left_click", "ref": "ref_10"}})

@@ -1,5 +1,5 @@
 ---
-description: Write a resume for each picked job and apply on the company sites, then show where every picked job stands.
+description: Write a resume for each picked job and apply, on the company sites and through LinkedIn Easy Apply, then show where every picked job stands.
 allowed-tools: Bash(uv run hunt apply), Bash(uv run hunt status), Bash(uv run hunt answer:*), Bash(uv run hunt resume-job:*), Bash(uv run hunt applied:*)
 ---
 

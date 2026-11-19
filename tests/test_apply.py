@@ -1040,6 +1040,50 @@ def test_at_most_six_applications_a_day_on_one_host_and_the_rest_wait_for_the_ne
     assert jobs.get(picked[-1]).state == "applied"
 
 
+@pytest.fixture
+def new_york(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    """The computer's own time zone, one whose clocks change."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def _six_on_greenhouse_then_one_more(project: Path, jobs: JobsList, first: datetime, then: datetime) -> int:
+    clock = jobs._clock
+    clock.now = first
+    for number in range(1, 8):
+        job = jobs.add(_found(number, link=f"https://boards.greenhouse.io/example/jobs/{number}"), kind="company_site")
+        jobs.score(job, 8, "Good.")
+        if number < 7:
+            jobs.move(job, "picked")
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project),
+          sleep=Waiting(clock))
+    clock.now = then
+    jobs.move(7, "picked")
+    apply(jobs, project, run_linkedin=no_linkedin, run_resume=Resumes(project), run_site=Sites(project),
+          sleep=Waiting(clock))
+    return 7
+
+
+def test_the_day_of_a_host_s_limit_starts_at_midnight_on_the_day_the_clocks_go_back(
+        project: Path, jobs: JobsList, new_york: None) -> None:
+    # Six from 00:00 EDT on 2026-11-01; at 02:00 EST the same day the seventh still waits.
+    seventh = _six_on_greenhouse_then_one_more(project, jobs, datetime(2026, 11, 1, 4, 0, tzinfo=UTC),
+                                               datetime(2026, 11, 1, 7, 0, tzinfo=UTC))
+    assert jobs.get(seventh).state == "resume_ready"
+    assert datetime.fromisoformat(jobs.get(seventh).not_before) == datetime(2026, 11, 2, 5, 0, tzinfo=UTC)
+
+
+def test_the_day_of_a_host_s_limit_starts_at_midnight_on_the_day_the_clocks_go_forward(
+        project: Path, jobs: JobsList, new_york: None) -> None:
+    # Six from 23:00 EST on 2026-03-07: the next day, at 08:00 EDT, the seventh goes.
+    seventh = _six_on_greenhouse_then_one_more(project, jobs, datetime(2026, 3, 8, 4, 0, tzinfo=UTC),
+                                               datetime(2026, 3, 8, 12, 0, tzinfo=UTC))
+    assert jobs.get(seventh).state == "applied"
+
+
 def test_a_captcha_held_all_day_is_named_in_the_end_of_day_summary(
         hunt: JobsList, project: Path, capsys: pytest.CaptureFixture[str]) -> None:
     job = _pause(project, hunt, {"result": "paused", "needs": "captcha", "tab": "Apply - Example Co 1"})

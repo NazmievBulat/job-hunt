@@ -387,11 +387,17 @@ def host(job: Job) -> str:
     return (urlsplit(job.apply_link or job.page_link or job.link).hostname or "").lower().removeprefix("www.")
 
 
+def _midnight(now: datetime, days: int = 0) -> datetime:
+    """Midnight of the computer's day of `now`, `days` on, at midnight's own offset: on a day the
+    clocks change, it is not the offset of `now`."""
+    return datetime.combine(now.astimezone().date() + timedelta(days=days), datetime.min.time()).astimezone()
+
+
 def _next_site(this: _Run, waiting: list[int]) -> tuple[int | None, float | None]:
     """The first waiting job whose host may be started on now, or None and how many seconds until
     one may. A job whose host had its starts of the day waits for the next day."""
     now = this.clock()
-    day = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    day = _midnight(now)
     soonest = None
     for job in list(waiting):
         # Going on in the tab it paused in, after "done": the same application, and a solved
@@ -400,7 +406,7 @@ def _next_site(this: _Run, waiting: list[int]) -> tuple[int | None, float | None
             return job, None
         on = host(this.jobs.get(job))
         if len(this.jobs.starts_on(on, day, but=job)) >= HOST_DAILY:
-            this.jobs.later(job, day + timedelta(days=1))
+            this.jobs.later(job, _midnight(now, days=1))
             waiting.remove(job)
             this.summary.later += 1
             continue

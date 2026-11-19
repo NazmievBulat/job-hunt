@@ -21,7 +21,7 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
-from resume_kit.contracts.base import CareerDate, dates_in_order
+from resume_kit.contracts.base import CareerDate, TrimmedNonblankStr, dates_in_order
 from resume_kit.contracts.form_answers import ReadyAnswers
 from resume_kit.contracts.printable import as_shown, unprintable_by_location
 from resume_kit.contracts.resume import Person
@@ -197,6 +197,20 @@ def _printable(value: Any, named: str, problems: list[str]) -> None:
                         f"{', '.join(map(as_shown, characters))}")
 
 
+_FIXED_TEXT: TypeAdapter[str] = TypeAdapter(TrimmedNonblankStr)
+
+
+def _fixed(value: str, named: str, problems: list[str]) -> None:
+    """A text the resume prints as the career gives it, so one the resume contract refuses (a
+    control character) is refused here as well as one the PDF cannot print."""
+    if value:
+        try:
+            _FIXED_TEXT.validate_python(value)
+        except ValidationError as error:
+            problems += [f"{named}: {e['msg']}" for e in error.errors()]
+    _printable(value, named, problems)
+
+
 def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Career:
     """The career the read-resume skill wrote from a resume. The jobs get the ids an export's
     jobs get, so the same resume read again keeps them; the form answers of the career it
@@ -231,7 +245,7 @@ def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Car
             problems.append(f"{named} has no title")
         start, end = _dates(entry, named, problems, start_needed=True)
         for field_name, words in (("company", "the employer"), ("title", "the title"), ("location", "the place")):
-            _printable(_text(entry.get(field_name)), f"{named}: {words}", problems)
+            _fixed(_text(entry.get(field_name)), f"{named}: {words}", problems)
         jobs.append(Job(id="", title=title, company=company, location=_text(entry.get("location")) or None,
                         start_date=start, end_date=end, material=_texts(entry.get("material"))))
     education: list[School] = []
@@ -246,12 +260,12 @@ def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Car
         start, end = _dates(entry, named, problems, start_needed=False)
         for field_name, words in (("school", "the school"), ("degree", "the degree"),
                                   ("field_of_study", "the field of study")):
-            _printable(_text(entry.get(field_name)), f"{named}: {words}", problems)
+            _fixed(_text(entry.get(field_name)), f"{named}: {words}", problems)
         education.append(School(school=_text(entry.get("school")), degree=_text(entry.get("degree")),
                                 field_of_study=_text(entry.get("field_of_study")) or None,
                                 start_date=start, end_date=end))
     for number, certification in enumerate(_texts(draft.get("certifications")), start=1):
-        _printable(certification, f"certification {number} ({json.dumps(certification, ensure_ascii=False)})",
+        _fixed(certification, f"certification {number} ({json.dumps(certification, ensure_ascii=False)})",
                    problems)
     if problems:
         raise CareerError("; ".join(problems))
@@ -338,9 +352,10 @@ def _headers(document: Any, kind: str) -> Iterator[Any]:
 
 
 def _lines(part: Any) -> list[str]:
-    """The paragraphs of a document, header or footer, then its table cells, one a line."""
+    """The paragraphs of a document, header, footer or table cell, then its table cells, one a line,
+    with a table inside a cell, as a layout table often holds one."""
     return ([paragraph.text for paragraph in part.paragraphs]
-            + [cell.text for table in part.tables for row in table.rows for cell in row.cells])
+            + [line for table in part.tables for row in table.rows for cell in row.cells for line in _lines(cell)])
 
 
 @contextlib.contextmanager

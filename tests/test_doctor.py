@@ -221,6 +221,18 @@ def test_a_career_with_an_employer_the_resume_pdf_cannot_print_needs_a_fix(tmp_p
     assert "the employer" in said and "cannot print" in said
 
 
+def test_a_career_with_an_employer_the_resume_contract_refuses_needs_a_fix(tmp_path: Path) -> None:
+    machine, _ = everything_ready(tmp_path)
+    career = json.loads((machine.data / "career.json").read_text())
+    career["jobs"][0]["company"] = "Acme\u0000"
+    (machine.data / "career.json").write_text(json.dumps(career))
+
+    said = lines(machine)["career"]
+
+    assert said.startswith("missing: data/career.json needs a fix:")
+    assert "the employer" in said and "cannot contain" in said
+
+
 def test_a_career_that_is_not_json_is_named(tmp_path: Path) -> None:
     machine, _ = everything_ready(tmp_path)
     (machine.data / "career.json").write_text("{")

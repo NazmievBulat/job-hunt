@@ -524,3 +524,33 @@ def test_a_person_with_a_bad_contact_is_still_checked_for_what_the_pdf_cannot_pr
 
     assert "person.links.0.url" in str(refused.value)
     assert "person.name: the resume PDF cannot print 🚀" in str(refused.value)
+
+
+@pytest.mark.parametrize(("changes", "named"), [
+    ({"jobs": [{**DRAFT["jobs"][0], "company": "Acme\u0000"}, DRAFT["jobs"][1]]}, r"job 1 .*: the employer"),
+    ({"jobs": [{**DRAFT["jobs"][0], "title": "QA\u0007 Engineer"}, DRAFT["jobs"][1]]}, r"job 1 .*: the title"),
+    ({"jobs": [{**DRAFT["jobs"][0], "location": "‮Remote"}, DRAFT["jobs"][1]]}, r"job 1 .*: the place"),
+    ({"education": [{**DRAFT["education"][0], "school": "Example\u0000"}]}, r"school 1 .*: the school"),
+    ({"education": [{**DRAFT["education"][0], "degree": "B\u000bS"}]}, r"school 1 .*: the degree"),
+    ({"education": [{**DRAFT["education"][0], "field_of_study": "Phys\u0001ics"}]}, r"school 1 .*: the field"),
+    ({"certifications": ["ISTQB\u0000"]}, r"certification 1"),
+])
+def test_a_character_the_resume_contract_refuses_is_refused_where_it_is(changes: dict, named: str) -> None:
+    # The PDF check lets a control character through, but the resume contract refuses it, so a
+    # career holding one could print no resume.
+    with pytest.raises(CareerError, match=named + r".*cannot contain"):
+        career_from_resume(draft(**changes))
+
+
+def test_a_table_inside_a_word_table_cell_is_read(tmp_path: Path) -> None:
+    from docx import Document
+
+    from job_hunt.career import resume_text
+
+    document = Document()
+    layout = document.add_table(rows=1, cols=1).rows[0].cells[0]
+    layout.paragraphs[0].text = "Ada Example"
+    layout.add_table(rows=1, cols=1).rows[0].cells[0].text = "Acme, 2018-03 to 2020-12"
+    document.save(tmp_path / "resume.docx")
+
+    assert resume_text(tmp_path / "resume.docx").splitlines() == ["Ada Example", "Acme, 2018-03 to 2020-12"]

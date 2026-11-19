@@ -44,6 +44,8 @@ class Steps:
                  score_error: Exception | None = None) -> None:
         self.jobs, self.finds, self.find_error, self.score_error = jobs, finds, find_error, score_error
         self.ran: list[str] = []
+        # Whether the day's session runs, as tmux would say.
+        self.running = False
 
     def find(self) -> None:
         self.ran.append("find")
@@ -64,7 +66,49 @@ class Steps:
 
 
 def _morning(steps: Steps, jobs: JobsList, data: Path, clock: MovableClock) -> str:
-    return morning(jobs, data, find=steps.find, score=steps.score, start=steps.start, clock=clock)
+    return morning(jobs, data, find=steps.find, score=steps.score, start=steps.start,
+                   running=lambda: steps.running, clock=clock)
+
+
+def test_a_later_run_of_the_day_leaves_the_running_session_alone(
+    jobs: JobsList, tmp_path: Path, clock: MovableClock
+) -> None:
+    # Seven on the machine's own clock: the day is the machine's, and five hours later is the same day.
+    clock.now = datetime(2026, 11, 18, 7, 0).astimezone()
+    _morning(Steps(jobs, finds=1), jobs, tmp_path / "data", clock)
+    clock.advance(hours=5)
+    later = Steps(jobs, finds=3)
+    later.running = True
+
+    said = _morning(later, jobs, tmp_path / "data", clock)
+
+    # The new jobs are found and scored; the chat asks for them at its next hunt questions.
+    assert later.ran == ["find", "score"]
+    assert "already runs" in said
+
+
+def test_a_later_run_starts_the_session_when_none_runs(jobs: JobsList, tmp_path: Path, clock: MovableClock) -> None:
+    clock.now = datetime(2026, 11, 18, 7, 0).astimezone()
+    _morning(Steps(jobs), jobs, tmp_path / "data", clock)
+    clock.advance(hours=5)
+    later = Steps(jobs, finds=1)
+
+    _morning(later, jobs, tmp_path / "data", clock)
+
+    assert later.ran == ["find", "score", "start"]
+
+
+def test_the_first_run_of_the_next_day_starts_a_fresh_session(
+    jobs: JobsList, tmp_path: Path, clock: MovableClock
+) -> None:
+    _morning(Steps(jobs, finds=1), jobs, tmp_path / "data", clock)
+    clock.advance(days=1)
+    tomorrow = Steps(jobs)
+    tomorrow.running = True
+
+    _morning(tomorrow, jobs, tmp_path / "data", clock)
+
+    assert tomorrow.ran == ["find", "start"]
 
 
 def test_nothing_new_starts_nothing(jobs: JobsList, tmp_path: Path, clock: MovableClock) -> None:
@@ -317,3 +361,60 @@ def test_jobs_the_finder_left_out_are_logged(tmp_path: Path, monkeypatch: pytest
 
     assert "hunt find: left out entry 1: no title" in (data / "morning.log").read_text()
     assert started == [tmp_path]
+
+
+def test_the_session_runs_when_tmux_has_it_by_its_exact_name() -> None:
+    from job_hunt.morning import session_running
+
+    asked: list[list[str]] = []
+
+    def answer(code: int):
+        def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+            asked.append(command)
+            return subprocess.CompletedProcess(command, code, "", "")
+        return run
+
+    assert session_running(run=answer(0)) is True
+    assert session_running(run=answer(1)) is False
+    assert asked[0] == ["tmux", "has-session", "-t", f"={SESSION}"]
+
+
+def test_a_recruiters_email_found_in_the_morning_is_drafted_and_starts_the_session(
+    jobs: JobsList, tmp_path: Path, clock: MovableClock
+) -> None:
+    from job_hunt.replies import Threads, read_messages
+
+    data = tmp_path / "data"
+    threads = Threads(data / "jobs.db", clock=clock)
+    (message,), _ = read_messages({"recruiter_emails": [{
+        "email_id": "m1", "thread_id": "t1", "from": "Jane Recruiter <jane@example.com>", "text": "Hi Ada"}]})
+    steps = Steps(jobs)
+    drafted: list[int] = []
+
+    def find() -> None:
+        steps.find()
+        threads.save(message, jobs)
+
+    def draft() -> None:
+        for thread in threads.in_states("new"):
+            threads.drafted(thread.id, "Thanks, Jane.", None)
+            drafted.append(thread.id)
+
+    morning(jobs, data, find=find, score=steps.score, start=steps.start, running=lambda: False,
+            clock=clock, threads=threads, draft=draft)
+
+    assert drafted and steps.ran == ["find", "start"]
+
+
+def test_a_session_started_with_a_message_opens_with_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import watch
+
+    tmux = Tmux("https://claude.ai/code/session_01Example")
+    start_session(tmp_path, run=tmux, sleep=lambda seconds: None, message="The day ends")
+    assert [command for command in tmux.commands if command[1] == "new-session"][0][-1] == "The day ends"
+    # The watch starts a session with what it tells, not the morning's first message.
+    started: list[str] = []
+    monkeypatch.setattr(watch, "start_session", lambda root, *, message: started.append(message))
+    watch.tell_session(tmp_path, run=lambda command: subprocess.CompletedProcess(command, 1, "", ""),
+                       text="The day ends")
+    assert started == ["The day ends"]

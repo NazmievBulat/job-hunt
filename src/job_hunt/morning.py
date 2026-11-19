@@ -1,11 +1,20 @@
-"""`hunt morning`: the day's start, run by the timer.
+"""`hunt morning`: the day's start, run by the timer, and its two later runs.
 
-It runs `hunt find`, then `hunt score` when any job is new (one a failed run left new too).
-When anything waits for the person (`questions.anything_waiting`) it ends yesterday's `job-hunt`
-session and starts a fresh interactive Claude Code session of that name with Remote Control,
-in a `tmux` session of the same name; its first message asks it to ask today's questions. With
-nothing waiting it starts nothing. A failed step is written to `data/morning.log` and goes on;
+It runs `hunt find`, then `hunt score` when any job is new (one a failed run left new too),
+and drafts a reply to each recruiter's message the find noted (`hunt draft-replies`) and a
+note to each hiring manager not drafted yet, a poster `hunt apply` stopped before or a failed
+drafting (`hunt draft-notes`).
+When anything waits for the person, notes to hiring managers included,
+(`questions.anything_waiting`) the day's first run ends yesterday's `job-hunt` session and starts
+a fresh interactive Claude Code session of that name with Remote Control, in a `tmux` session of
+the same name; its first message asks it to ask today's questions. A later run of the day leaves
+a running session alone, since the chat asks for the new jobs at its next `hunt questions`, and
+starts one only when none runs. With nothing waiting it starts nothing. The day of the first run
+is kept in `data/morning-day`. A failed step is written to `data/morning.log` and goes on;
 the next `hunt questions` tells it once, so a failure alone also starts the session.
+
+The session alone has a prompt hook (`--settings`), `hunt replied`, which keeps when the person
+last replied (`data/chat-reply`), so `hunt available` knows they are talking to the chat.
 
 Yesterday's session is ended only while no `hunt apply` runs (`jobs/apply.lock`): ending it
 then would stop a worker in the middle of an application.
@@ -16,17 +25,23 @@ from __future__ import annotations
 import fcntl
 import json
 import re
+import shlex
 import subprocess
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from job_hunt.finder import FinderError
 from job_hunt.jobs import JobsList
 from job_hunt.questions import anything_waiting, log_failure
 from job_hunt.scoring import ScoreError
 from job_hunt.settings import SettingsError
+
+if TYPE_CHECKING:
+    from job_hunt.notes import Notes
+    from job_hunt.replies import Threads
 
 __all__ = ["FIRST_MESSAGE", "SESSION", "log_failure", "morning", "start_session"]
 
@@ -63,8 +78,21 @@ def morning(
     find: Callable[[], object],
     score: Callable[[], object],
     start: Callable[[], object],
+    running: Callable[[], bool],
     clock: Callable[[], datetime] = _now,
+    threads: Threads | None = None,
+    draft: Callable[[], object] | None = None,
+    notes: Notes | None = None,
+    notes_daily: int = 15,
+    draft_notes: Callable[[], object] | None = None,
 ) -> str:
+    # The person's own day: the computer's clock, not UTC.
+    today = clock().astimezone().date().isoformat()
+    marked = data / "morning-day"
+    first = not marked.exists() or marked.read_text().strip() != today
+    if first:
+        data.mkdir(parents=True, exist_ok=True)
+        marked.write_text(today + "\n")
     try:
         find()
     except Exception as error:
@@ -74,8 +102,22 @@ def morning(
             score()
         except Exception as error:
             log_failure(data, "hunt score", _said(error), clock)
-    if not anything_waiting(jobs, data):
+    if draft is not None and threads is not None and threads.in_states("new"):
+        try:
+            draft()
+        except Exception as error:
+            log_failure(data, "hunt draft-replies", _said(error), clock)
+    if draft_notes is not None:
+        # A poster a hunt apply stopped before drafting, and a note whose drafting failed, are
+        # drafted now: the step collects the posters first and drafts only the new notes.
+        try:
+            draft_notes()
+        except Exception as error:
+            log_failure(data, "hunt draft-notes", _said(error), clock)
+    if not anything_waiting(jobs, data, threads, notes, notes_daily):
         return "Nothing new and nothing waiting: no session started."
+    if not first and running():
+        return f"The {SESSION} session already runs: it asks for anything new at its next hunt questions."
     start()
     return f"Started the {SESSION} session: tmux attach -t {SESSION}, or the Claude app's Remote Control."
 
@@ -89,15 +131,28 @@ def tmux(command: list[str]) -> subprocess.CompletedProcess[str]:
         raise RuntimeError(f"tmux did not answer in 60 seconds: {' '.join(command[:2])}") from hung
 
 
-def session_command(root: Path) -> list[str]:
+def session_running(*, run: Run = tmux) -> bool:
+    return run(["tmux", "has-session", "-t", TARGET]).returncode == 0
+
+
+def hook_settings(root: Path) -> str:
+    """The session's own settings: its prompt hook. A background worker has none."""
+    command = f"uv run --project {shlex.quote(str(root))} hunt replied"
+    return json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": command,
+                                                                  "timeout": 10}]}]}})
+
+
+def session_command(root: Path, message: str = FIRST_MESSAGE) -> list[str]:
     # The prompt comes last, after an option that takes one value: --allowedTools takes many.
     return ["tmux", "new-session", "-d", "-s", SESSION, "-c", str(root),
-            "claude", "--allowedTools", TOOLS, "--remote-control", SESSION, "--name", SESSION, FIRST_MESSAGE]
+            "claude", "--allowedTools", TOOLS, "--remote-control", SESSION, "--name", SESSION,
+            "--settings", hook_settings(root), message]
 
 
-def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None] = time.sleep) -> None:
-    """End yesterday's session and start today's, then keep its Remote Control link in
-    `data/session.json` for the pushes, when the session shows one within `LINK_SECONDS`."""
+def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None] = time.sleep,
+                  message: str = FIRST_MESSAGE) -> None:
+    """End yesterday's session and start today's with `message`, then keep its Remote Control
+    link in `data/session.json` for the pushes, when the session shows one within `LINK_SECONDS`."""
     data, jobs = root / "data", root / "jobs"
     data.mkdir(exist_ok=True)
     jobs.mkdir(exist_ok=True)
@@ -106,7 +161,7 @@ def start_session(root: Path, *, run: Run = tmux, sleep: Callable[[float], None]
         fcntl.flock(lock, fcntl.LOCK_EX)
         run(["tmux", "kill-session", "-t", TARGET])
         (data / "session.json").unlink(missing_ok=True)
-        started = run(session_command(root))
+        started = run(session_command(root, message))
     if started.returncode != 0:
         said = (started.stderr.strip() or started.stdout.strip() or f"exit {started.returncode}").splitlines()[-1]
         raise RuntimeError(f"tmux could not start the {SESSION} session: {said}")

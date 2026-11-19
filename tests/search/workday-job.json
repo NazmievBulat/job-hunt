@@ -1,0 +1,25 @@
+{
+  "userAuthenticated": false,
+  "hiringOrganization": {
+    "name": "Umbrella Example",
+    "url": ""
+  },
+  "jobPostingInfo": {
+    "id": "c0ffee",
+    "title": "QA Automation Engineer",
+    "jobDescription": "<p>Umbrella Example tests its clinic software.</p><ul><li>Selenium and Python.</li></ul>",
+    "location": "Boston, MA",
+    "additionalLocations": [
+      "Durham, NC"
+    ],
+    "postedOn": "Posted 3 Days Ago",
+    "startDate": "2026-11-15",
+    "timeType": "Full time",
+    "jobReqId": "R100",
+    "jobPostingId": "QA-Automation-Engineer_R100",
+    "jobPostingSiteId": "Careers",
+    "canApply": true,
+    "posted": true,
+    "externalUrl": "https://umbrella.wd5.myworkdayjobs.com/Careers/job/Durham-NC/QA-Automation-Engineer_R100"
+  }
+}

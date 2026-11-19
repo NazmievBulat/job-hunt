@@ -1,0 +1,43 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "bbbb2222-0000-4000-8000-000000000001",
+      "title": " SDET ",
+      "department": "Engineering",
+      "team": "Quality",
+      "employmentType": "FullTime",
+      "location": "Remote (US)",
+      "secondaryLocations": [],
+      "publishedAt": "2026-11-15T12:00:00.000+00:00",
+      "isListed": true,
+      "isRemote": true,
+      "workplaceType": "Remote",
+      "jobUrl": "https://jobs.ashbyhq.com/initech/bbbb2222-0000-4000-8000-000000000001",
+      "applyUrl": "https://jobs.ashbyhq.com/initech/bbbb2222-0000-4000-8000-000000000001/application",
+      "descriptionHtml": "<p>Initech Example is hiring an SDET.</p>",
+      "descriptionPlain": "Initech Example is hiring an SDET."
+    },
+    {
+      "id": "bbbb2222-0000-4000-8000-000000000002",
+      "title": "QA Automation Engineer",
+      "department": "Engineering",
+      "team": "Quality",
+      "employmentType": "FullTime",
+      "location": "London, UK",
+      "secondaryLocations": [
+        {
+          "location": "Chapel Hill, NC"
+        }
+      ],
+      "publishedAt": "2026-11-01T12:00:00.000+00:00",
+      "isListed": true,
+      "isRemote": false,
+      "workplaceType": "OnSite",
+      "jobUrl": "https://jobs.ashbyhq.com/initech/bbbb2222-0000-4000-8000-000000000002",
+      "applyUrl": "https://jobs.ashbyhq.com/initech/bbbb2222-0000-4000-8000-000000000002/application",
+      "descriptionHtml": "<p>Two offices.</p>",
+      "descriptionPlain": "Two offices."
+    }
+  ]
+}

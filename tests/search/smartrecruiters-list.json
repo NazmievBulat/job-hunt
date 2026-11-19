@@ -1,0 +1,43 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "totalFound": 2,
+  "content": [
+    {
+      "id": "744000000000001",
+      "name": "QA Automation Engineer",
+      "company": {
+        "identifier": "ExampleCorp",
+        "name": "Example Corp"
+      },
+      "releasedDate": "2026-11-16T10:00:00.000Z",
+      "location": {
+        "city": "Morrisville",
+        "region": "NC",
+        "country": "us",
+        "remote": false,
+        "hybrid": true,
+        "fullLocation": "Morrisville, NC, United States"
+      },
+      "ref": "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings/744000000000001"
+    },
+    {
+      "id": "744000000000002",
+      "name": "Forklift Driver",
+      "company": {
+        "identifier": "ExampleCorp",
+        "name": "Example Corp"
+      },
+      "releasedDate": "2026-11-16T10:00:00.000Z",
+      "location": {
+        "city": "Morrisville",
+        "region": "NC",
+        "country": "us",
+        "remote": false,
+        "hybrid": false,
+        "fullLocation": "Morrisville, NC, United States"
+      },
+      "ref": "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings/744000000000002"
+    }
+  ]
+}

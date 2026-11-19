@@ -84,6 +84,9 @@ NOT_STARTED: tuple[State, ...] = ("new", "scored", "picked", "skipped", "resume_
 TRACKING = re.compile(
     r"^(utm_.*|trk.*|trackingid|ref|refid|referrer|src|source|gh_src|gclid|fbclid|mc_cid|mc_eid)$", re.IGNORECASE
 )
+# Of those, the ones that only name a campaign, a job board's source tag or an ad's click, never
+# the job a redirect leads to.
+CAMPAIGN = re.compile(r"^(utm_.*|gh_src|gclid|fbclid|mc_cid|mc_eid)$", re.IGNORECASE)
 
 
 class MoveError(ValueError):
@@ -248,25 +251,18 @@ def cleaned_on_purpose(link: str) -> bool:
 
 def job_link(link: str) -> str:
     """The link a job of an alert email is known by: `clean_link`'s, except that a click-tracking
-    address off LinkedIn and Indeed that `clean_link` would leave with no parameter at all is kept
-    as it was given, as two jobs' addresses may differ only there (`/redirect?ref=job123` and
-    `?ref=job456`). A link left with a parameter that names the job (`?reference=JR-1`) is cleaned."""
+    address off LinkedIn and Indeed is kept as it was given when `clean_link` would leave it with
+    no parameter and takes off one that may name where it leads (`/redirect?ref=job123` and
+    `?ref=job456` are two jobs). A link left with a parameter that names the job
+    (`?reference=JR-1`) or carrying only a campaign's (`/careers/1234?utm_source=email`) is cleaned."""
     if cleaned_on_purpose(link):
         return clean_link(link)
     parts = urlsplit(link.strip())
     route_query = parts.fragment.partition("?")[2] if parts.fragment.startswith(("/", "!")) else ""
-    queries = [query for query in (parts.query, route_query) if parse_qsl(query)]
-    if queries and not any(_untracked(query) for query in queries):
+    names = [name for query in (parts.query, route_query) for name, _ in parse_qsl(query)]
+    if names and all(TRACKING.match(name) for name in names) and not all(CAMPAIGN.match(name) for name in names):
         return link.strip()
     return clean_link(link)
-
-
-def _page_of(found: FoundJob, page_link: str | None) -> str | None:
-    """The address a job's page ended at, cleaned, or None when it cleans to the link a tracking
-    address is not known by: a tracker that answers itself ends where it began, and its cleaned
-    link would stand for every job of its board."""
-    page = clean_link(page_link) if page_link else None
-    return None if page == clean_link(found.link) != found.known_by else page
 
 
 def _untracked(query: str) -> str:
@@ -333,16 +329,14 @@ class JobsList:
         return self.job_of_link(link) is not None
 
     def job_of_link(self, link: str) -> int | None:
-        """The job a link is of, by its link, its page link or another link of it, or None; the
-        link is looked up as the job is known by it (`job_link`) and cleaned. A tracking address's
-        cleaned link is never saved, so it finds no other job of that board."""
-        for each in dict.fromkeys((job_link(link), clean_link(link))):
-            row = self._db.execute(
-                "SELECT id FROM jobs WHERE ? IN (link, page_link) UNION ALL SELECT job FROM other_links WHERE link = ?",
-                (each, each)).fetchone()
-            if row:
-                return row[0]
-        return None
+        """The job a link is of, by its link, its page link or another link of it, or None. The
+        link is looked up as a job is known by it (`job_link`): a tracking address only as it was
+        given, as its cleaned link may be that of any job of its board."""
+        link = job_link(link)
+        row = self._db.execute(
+            "SELECT id FROM jobs WHERE ? IN (link, page_link) UNION ALL SELECT job FROM other_links WHERE link = ?",
+            (link, link)).fetchone()
+        return row[0] if row else None
 
     def known_links(self) -> set[str]:
         """Every link, page link and other link of the list, for the searches that run beside this
@@ -369,8 +363,7 @@ class JobsList:
         company board's link becomes where a LinkedIn job without Easy Apply not started yet is
         applied to."""
         first = self.get(job)
-        page = _page_of(found, page_link)
-        links = {found.known_by, *([page] if page else [])} - {first.link}
+        links = {found.known_by, *([clean_link(page_link)] if page_link else [])} - {first.link}
         with self._db:
             self._db.executemany("INSERT OR IGNORE INTO other_links (link, job) VALUES (?, ?)",
                                  [(link, job) for link in sorted(links)])
@@ -395,7 +388,7 @@ class JobsList:
         if found.source not in SOURCES:
             raise ValueError(f"source must be one of {', '.join(SOURCES)}, not {found.source!r}")
         link = found.known_by
-        page = _page_of(found, page_link)
+        page = clean_link(page_link) if page_link else None
         page = None if page == link else page
         if self.has(link):
             return None

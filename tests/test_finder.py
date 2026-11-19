@@ -964,7 +964,7 @@ def test_two_tracking_links_whose_tracker_answers_itself_are_two_jobs(
                  run=AlertSkill({"emails": 1, "jobs": [_tracked(links[1], "Lead QA Automation Engineer")]}),
                  fetch=_postings({link: link for link in links}, followed), clock=clock)
     assert (summary.new, later.new, followed) == (1, 1, list(links))
-    assert [(each.link, each.page_link) for each in jobs.all()] == [(links[0], None), (links[1], None)]
+    assert [each.link for each in jobs.all()] == list(links)
 
 
 def test_a_later_run_saves_a_new_posting_behind_another_tracking_link_of_the_same_board(

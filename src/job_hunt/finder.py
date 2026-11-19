@@ -507,7 +507,7 @@ def _find(
 
     def known(each: FoundJob, page_link: str | None = None) -> bool:
         """Whether the list has the job, by its link or as the same job; under the lock."""
-        if jobs.has(each.link):
+        if jobs.has(each.known_by):
             return True
         if (first := jobs.same_job(each)) is None:
             return False

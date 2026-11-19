@@ -7,7 +7,10 @@ The state is all in `data/`, so a fresh session knows everything by running it:
 2. new jobs, numbered as `hunt list` numbers them, for `hunt pick` and `hunt skip`. Asked again,
    the jobs of the last list keep their numbers, so a reply to it still names the same jobs;
    only a job scored since numbers the whole list anew;
-3. paused applications, each with what it needs and the command after it;
+3. paused applications, each with what it needs and the command after it. One that needs
+   hands in Chrome (a CAPTCHA, a sign-in) carries the Chrome Remote Desktop link when that is
+   set up, so it is done from the phone; without it, it waits until the person is at the
+   computer;
 4. recruiter messages, each with its drafted reply (`replies`), for `hunt send-reply`,
    `hunt edit-reply` and `hunt skip-reply`; one that asks to talk says so (offering times is a
    later step);
@@ -36,6 +39,7 @@ if TYPE_CHECKING:
 LOG = "morning.log"
 TOLD = "morning.told"
 KINDS = {"easy_apply": "Easy Apply", "company_site": "company site"}
+REMOTE_DESKTOP = "https://remotedesktop.google.com/access"
 
 
 def log_failure(data: Path, step: str, error: object, clock: Callable[[], datetime]) -> None:
@@ -172,7 +176,7 @@ def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
 
 
 def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
-              daily: int = 15) -> str:
+              daily: int = 15, *, remote_desktop: bool = False) -> str:
     """The questions as text. Showing them numbers the new jobs and marks the failures told."""
     parts: list[str] = []
     log, told = _told(data)
@@ -198,6 +202,10 @@ def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes:
         parts.append("\n".join([f"Paused applications ({len(paused)}):", *(
             f"  {job.id}. {job.title} at {job.company}: needs {job.state_reason} (then: {then(job)})"
             for job in paused)]))
+        # An answer is typed from anywhere; the rest is done in this computer's Chrome.
+        if any(not (job.state_reason or "").startswith("an answer to ") for job in paused):
+            parts[-1] += ("\n  From your phone: open " + REMOTE_DESKTOP + " and do it in this computer's Chrome."
+                          if remote_desktop else "\n  This waits until you are at the computer; the other jobs go on.")
     if threads is not None and (recruiters := _recruiters(jobs, data, threads)):
         parts.append(recruiters)
     if notes is not None:

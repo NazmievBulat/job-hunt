@@ -221,9 +221,22 @@ def _captchas(jobs: JobsList, waiting: list[Job], verdict: Verdict, remote_deskt
     return "\n".join(lines)
 
 
+def show_picks(jobs: JobsList, auto_from: int) -> str | None:
+    """The jobs picked that wait to start today, numbered for `hunt skip` from now on; None when
+    there are none."""
+    from job_hunt.plan import order
+
+    picks = order([job for job in jobs.in_states("picked", "resume_ready") if jobs.due(job)])
+    if not picks:
+        return None
+    jobs.show(picks)
+    count = f"{len(picks)} jobs" if len(picks) > 1 else "1 job"
+    return "\n".join([f"Applying to {count} today (score {auto_from} and up). Reply skip 3 12 to leave some out.",
+                      *(job_line(number, job) for number, job in enumerate(picks, start=1))])
+
+
 def _picks(jobs: JobsList, data: Path, auto_from: int) -> str | None:
-    """The jobs picked by their score that wait to start today, numbered for `hunt skip`; only
-    when one of them was not told yet."""
+    """`show_picks`, only when one of them was not told yet."""
     from job_hunt.plan import order
 
     picks = order([job for job in jobs.in_states("picked", "resume_ready") if jobs.due(job)])
@@ -234,11 +247,8 @@ def _picks(jobs: JobsList, data: Path, auto_from: int) -> str | None:
         before = set()
     if not picks or {job.id for job in picks} <= before:
         return None
-    jobs.show(picks)
     told.write_text(" ".join(str(job.id) for job in picks) + "\n")
-    count = f"{len(picks)} jobs" if len(picks) > 1 else "1 job"
-    return "\n".join([f"Applying to {count} today (score {auto_from} and up). Reply skip 3 12 to leave some out.",
-                      *(job_line(number, job) for number, job in enumerate(picks, start=1))])
+    return show_picks(jobs, auto_from)
 
 
 def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,

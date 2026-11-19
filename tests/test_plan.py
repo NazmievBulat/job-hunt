@@ -307,6 +307,23 @@ def test_a_ready_job_with_no_way_to_apply_known_ends_the_run(jobs: JobsList, pro
     assert jobs.get(unknown).state == "resume_ready"
 
 
+def test_a_leftover_due_during_the_run_goes_before_todays_picks(jobs: JobsList, project: Path) -> None:
+    clock = _clock(jobs)
+    clock.now = MORNING - timedelta(days=1)
+    left = _picked(jobs, 1)
+    clock.now = MORNING
+    first, second = _picked(jobs, 2), _picked(jobs, 3)
+    for job in (left, first, second):
+        jobs.move(job, "resume_ready")
+        (project / "jobs" / str(job)).mkdir(exist_ok=True)
+        (project / "jobs" / str(job) / "resume.pdf").write_bytes(b"%PDF-1.4 stand-in")
+    jobs.later(left, MORNING + timedelta(minutes=10))
+    sites = Sites(project)
+    _apply(jobs, project, Plan(daily=2), site=sites)
+    assert sites.ran == [first, left]
+    assert jobs.get(second).not_before == (MORNING + timedelta(days=1)).isoformat()
+
+
 def test_nothing_starts_before_the_morning_hour_and_it_waits_for_this_morning(
         jobs: JobsList, project: Path) -> None:
     job = _picked(jobs, 1)
@@ -491,6 +508,13 @@ def test_a_day_with_nothing_says_so(jobs: JobsList) -> None:
     assert today(jobs, jobs.now()).lines() == ["Today: 0 applications sent; 0 failed."]
 
 
+def test_the_jobs_above_the_score_past_the_days_number_count_as_left_for_tomorrow(jobs: JobsList) -> None:
+    for number, score in ((1, 9), (2, 8), (3, 5)):
+        _scored(jobs, number, score)
+    assert today(jobs, jobs.now(), auto_from=7).tomorrow == 2
+    assert today(jobs, jobs.now()).tomorrow == 0
+
+
 def test_hunt_status_today_prints_the_days_summary(
         hunt: JobsList, project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(cli, "JobsList", lambda path: JobsList(path, clock=_clock(hunt)))
@@ -599,6 +623,10 @@ def test_hunt_morning_picks_by_the_settings_score_and_hunt_skip_leaves_one_out(
     assert hunt.get(nine).state == "skipped"
     assert cli.main(["questions"]) == 0
     assert "Applying to" not in capsys.readouterr().out
+    # /jobs shows them again on its own, numbered anew for hunt skip.
+    assert cli.main(["list"]) == 0
+    assert capsys.readouterr().out.startswith(
+        "Applying to 1 job today (score 8 and up). Reply skip 3 12 to leave some out.\n 1. 10  QA Engineer 2")
 
 
 def test_hunt_settings_keeps_the_days_plan_it_was_not_given(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -498,9 +498,15 @@ def _applications(this: _Run, run_site: Run, run_linkedin: Run, linkedin: Linked
         """The jobs ready and due that wait for no worker yet: at the start, and each turn the ones
         a time came for or another command put back."""
         known = {job for line in waiting.values() for job in line} | {job for job, _ in running.values()}
-        for job in order([job for job in jobs.in_states("resume_ready") if jobs.due(job) and job.id not in known]):
-            if job.kind in ("easy_apply", "company_site"):
-                waiting[_skill(job)].append(job.id)
+        new = [job for job in jobs.in_states("resume_ready")
+               if jobs.due(job) and job.id not in known and job.kind in ("easy_apply", "company_site")]
+        if not new:
+            return
+        for job in new:
+            waiting[_skill(job)].append(job.id)
+        # The whole line in the plan's order: a leftover due now goes before today's picks.
+        for skill, line in waiting.items():
+            waiting[skill] = [job.id for job in order([jobs.get(job) for job in line])]
 
     def start(job: int, run: Run) -> None:
         skill = _skill(jobs.get(job))

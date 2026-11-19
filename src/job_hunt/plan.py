@@ -205,7 +205,9 @@ def _waits_for(job: Job) -> str:
     return next((what for what, start in WAITS if reason.startswith(start)), "a look in Chrome")
 
 
-def today(jobs: JobsList, now: datetime) -> Today:
+def today(jobs: JobsList, now: datetime, *, auto_from: int | None = None) -> Today:
+    """With `auto_from`, the scored jobs at or above it count as left for tomorrow too: they wait
+    for the next day's number."""
     day = midnight(now)
     tomorrow = day + timedelta(days=1)
     counted = Today()
@@ -220,4 +222,6 @@ def today(jobs: JobsList, now: datetime) -> Today:
     counted.failed = [job for job in jobs.in_states("failed") if datetime.fromisoformat(job.updated_at) >= day]
     counted.tomorrow = sum(1 for job in jobs.in_states("resume_ready")
                            if job.not_before is not None and datetime.fromisoformat(job.not_before) >= tomorrow)
+    if auto_from is not None:
+        counted.tomorrow += sum(1 for job in jobs.waiting() if job.score is not None and job.score >= auto_from)
     return counted

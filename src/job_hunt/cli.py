@@ -35,7 +35,7 @@ from job_hunt.notes import DRAFT_SKILL as NOTE_DRAFT_SKILL, SEND_SKILL as NOTE_S
 from job_hunt.notes import decide as decide_notes, draft_notes, note_pause, send_notes, stopped_today, went
 from job_hunt.notify import NotifyError, notify, post_pushover
 from job_hunt.plan import Plan, auto_pick, today
-from job_hunt.questions import job_line, log_failure, questions, then
+from job_hunt.questions import job_line, log_failure, questions, show_picks, then
 from job_hunt.replies import (
     DRAFT_SKILL, READ_SKILL, SEND_SKILL, EmailMessages, ReplyError, Threads, draft_replies, edit_reply, hold_times,
     offer_times, read_linkedin, send_reply, skip_reply,
@@ -258,6 +258,11 @@ def _score(args: argparse.Namespace) -> int:
 
 
 def _list(args: argparse.Namespace) -> int:
+    plan = day_plan()
+    if plan is not None and plan.auto_from is not None:
+        # Picked by their score: today's picks, numbered for hunt skip.
+        print(show_picks(JobsList(DATA / "jobs.db"), plan.auto_from) or "No picks wait to start today.")
+        return 0
     shown = JobsList(DATA / "jobs.db").show()
     if not shown:
         print("No scored jobs wait for your pick.")
@@ -505,7 +510,8 @@ def _status(args: argparse.Namespace) -> int:
               lambda job: f": needs {job.state_reason}{_not_asked(job)} (then: {then(job)})")
     if args.today:
         # The day's summary, and what waits for the person with the command after it.
-        for line in today(jobs, jobs.now()).lines():
+        plan = day_plan()
+        for line in today(jobs, jobs.now(), auto_from=plan.auto_from if plan is not None else None).lines():
             print(line)
         name, listed, why = paused
         if listed:
@@ -876,7 +882,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     scoring.set_defaults(run=_score)
     listing = commands.add_parser(
-        "list", help="print the scored jobs not yet picked or skipped, best first, numbered for hunt pick and skip")
+        "list", help="print the scored jobs not yet picked or skipped, best first, numbered for hunt pick and skip; "
+        "when the settings pick by score, today's picks not started yet, numbered for hunt skip")
     listing.set_defaults(run=_list)
     pick = commands.add_parser("pick", help="pick jobs by their number on the last list, or all scored above a score")
     pick.add_argument("numbers", nargs="*", type=int)

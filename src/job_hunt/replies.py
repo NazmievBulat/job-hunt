@@ -64,8 +64,9 @@ UNSURE = "a look whether it was sent"
 GMAIL_THREAD = "mcp__claude_ai_Gmail__get_thread"
 DRAFT_GMAIL_TOOLS = (GMAIL_THREAD, "mcp__claude_ai_Gmail__create_draft")
 SEND_GMAIL_TOOLS = (GMAIL_THREAD, "mcp__claude_ai_Gmail__reply", "mcp__claude_ai_Gmail__delete_draft")
-# Reading LinkedIn types nothing: no form_input, no file_upload.
-READ_CHROME_TOOLS = tuple(tool for tool in CHROME_TOOLS if not tool.endswith(("form_input", "file_upload")))
+# Reading LinkedIn types and clicks nothing: no computer (it types and clicks too), no form_input, no
+# file_upload. A stranger's message, read with nobody watching, cannot make it send.
+READ_CHROME_TOOLS = tuple(tool for tool in CHROME_TOOLS if not tool.endswith(("computer", "form_input", "file_upload")))
 
 Source = Literal["email", "linkedin"]
 State = Literal["new", "drafted", "sending", "sent", "skipped", "unsure", "failed", "replaced"]

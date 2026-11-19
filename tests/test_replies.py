@@ -20,7 +20,7 @@ from job_hunt.linkedin_lock import LinkedInLock
 from job_hunt.questions import anything_waiting, questions
 from job_hunt.replies import (
     DRAFT_SKILL, READ_SKILL, SEND_SKILL, EmailMessages, ReplyError, Threads, draft_command, draft_replies,
-    edit_reply, read_linkedin, read_messages, send_command, send_reply, skip_reply,
+    edit_reply, read_command, read_linkedin, read_messages, send_command, send_reply, skip_reply,
 )
 from job_hunt.settings import Settings
 from job_hunt.watch import linkedin_due, watch
@@ -407,6 +407,15 @@ def test_the_sender_gets_only_the_tools_of_its_channel(project: Path, threads: T
 
 
 # Reading LinkedIn
+
+
+def test_the_linkedin_reader_has_no_tool_that_types_or_clicks(tmp_path: Path) -> None:
+    # It reads strangers' messages with nobody watching: a message must not be able to make it send.
+    command = read_command(datetime(2026, 11, 18, tzinfo=UTC), tmp_path / "out.json")
+    tools = command[command.index("--allowedTools") + 1].split(",")
+    assert "mcp__claude-in-chrome__navigate" in tools
+    assert "mcp__claude-in-chrome__get_page_text" in tools
+    assert not [tool for tool in tools if tool.endswith(("computer", "form_input", "file_upload"))]
 
 
 def test_linkedin_is_read_under_the_lock_and_its_messages_saved_once(

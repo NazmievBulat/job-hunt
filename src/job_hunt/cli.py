@@ -630,11 +630,13 @@ def _settings(args: argparse.Namespace) -> int:
         given = json.loads(args.settings)
         if not isinstance(given, dict):
             raise SettingsError("give the settings as one JSON object")
-        if "pushover" not in given and path.exists():
-            # Keys given once stay: the search is changed without typing them again.
+        if path.exists():
+            # Keys and call hours given once stay: the search is changed without typing them again.
             with contextlib.suppress(json.JSONDecodeError, AttributeError):
-                if (keys := json.loads(path.read_text()).get("pushover")) is not None:
-                    given["pushover"] = keys
+                before = json.loads(path.read_text())
+                for kept in ("pushover", "working_hours", "time_zone"):
+                    if kept not in given and before.get(kept) is not None:
+                        given[kept] = before[kept]
         DATA.mkdir(parents=True, exist_ok=True)
         descriptor, name = tempfile.mkstemp(dir=DATA, prefix=".settings.json.")
         temporary = Path(name)

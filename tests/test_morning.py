@@ -73,6 +73,8 @@ def _morning(steps: Steps, jobs: JobsList, data: Path, clock: MovableClock) -> s
 def test_a_later_run_of_the_day_leaves_the_running_session_alone(
     jobs: JobsList, tmp_path: Path, clock: MovableClock
 ) -> None:
+    # Seven on the machine's own clock: the day is the machine's, and five hours later is the same day.
+    clock.now = datetime(2026, 11, 18, 7, 0).astimezone()
     _morning(Steps(jobs, finds=1), jobs, tmp_path / "data", clock)
     clock.advance(hours=5)
     later = Steps(jobs, finds=3)
@@ -86,6 +88,7 @@ def test_a_later_run_of_the_day_leaves_the_running_session_alone(
 
 
 def test_a_later_run_starts_the_session_when_none_runs(jobs: JobsList, tmp_path: Path, clock: MovableClock) -> None:
+    clock.now = datetime(2026, 11, 18, 7, 0).astimezone()
     _morning(Steps(jobs), jobs, tmp_path / "data", clock)
     clock.advance(hours=5)
     later = Steps(jobs, finds=1)

@@ -152,15 +152,15 @@ def _career(root: Path) -> Path:
 
 def resume_command(job: int, root: Path) -> list[str]:
     folder = _folder(root, job)
-    arguments = {"job": job, "folder": f"jobs/{job}"}
+    arguments = {"job": job, "folder": str(folder), "career": str(_career(root))}
     # A permission rule's path: `//` starts an absolute one. Edit rules cover the Write tool too.
     return [
-        "claude", "-p", f"/{RESUME_SKILL} {json.dumps(arguments)}",
+        "claude", "-p", f"/{RESUME_SKILL} {json.dumps(arguments, ensure_ascii=False)}",
         "--model", MODEL, *ONLY_NAMED_TOOLS,
         "--allowedTools", ",".join([
             f"Read(/{folder}/**)", f"Read(/{_career(root)})", f"Edit(/{folder}/resume-content.json)",
             # This job's build only: another folder's would let it overwrite that job's resume.
-            f"Bash(uv run hunt resume jobs/{job})",
+            f"Bash(uv run hunt resume {folder})",
         ]),
     ]
 

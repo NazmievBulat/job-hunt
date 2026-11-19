@@ -59,12 +59,15 @@ GMAIL_READ_TOOLS = (
 # `Bash`, a plugin's browser, auto mode), so the run loads no user or local settings, and
 # `dontAsk` refuses any tool its command does not name. `dontAsk` still lets WebFetch reach Claude
 # Code's preapproved documentation sites, itself or through a subagent, so those three are taken
-# away. Claude Code still lets any run read the project folder, by Read or a read-only command,
-# without a rule.
+# away. Claude Code lets any run read its working folder, by Read or a read-only command, without
+# a rule, so a run starts in `RUN_FOLDER`, which holds nothing, and every path it is given is
+# absolute.
 ONLY_NAMED_TOOLS = (
     "--setting-sources", "project", "--permission-mode", "dontAsk",
     "--disallowedTools", "WebFetch,WebSearch,Agent",
 )
+# Inside the project, so Claude Code still finds `.claude/skills` above it, and `uv run` the project.
+RUN_FOLDER = ".background"
 FIRST_RUN = timedelta(days=14)
 SKILL_MINUTES = 30
 PAGE_SECONDS = 20
@@ -314,23 +317,30 @@ def skill_command(
                                  "since": since.isoformat() if since else None, "areas": areas, "out": str(out)}
     if messages_after is not None:
         arguments["messages_after"] = int(messages_after.timestamp())
-    # A permission rule's path: `//` starts an absolute one, `./` one in the working folder.
-    # Edit rules cover every tool that writes a file, the Write tool among them.
-    write = f"Edit(/{out})" if out.is_absolute() else f"Edit(./{out})"
+    # A permission rule's path: `//` starts an absolute one. Edit rules cover every tool that
+    # writes a file, the Write tool among them.
     return [
         "claude", "-p", f"/{SKILL} {json.dumps(arguments, ensure_ascii=False)}",
         "--model", MODEL, *ONLY_NAMED_TOOLS,
-        "--allowedTools", ",".join([*GMAIL_READ_TOOLS, write]),
+        "--allowedTools", ",".join([*GMAIL_READ_TOOLS, f"Edit(/{out})"]),
     ]
+
+
+def run_folder(root: Path) -> Path:
+    """Where a background run starts: an empty folder of the project, so the run can read only
+    the files its rules name, the project's own included."""
+    folder = root / RUN_FOLDER
+    folder.mkdir(exist_ok=True)
+    return folder
 
 
 def run_claude(
     command: list[str], folder: Path, *, skill: str = SKILL, error: type[RuntimeError] = FinderError
 ) -> None:
-    """Run a skill in the project folder, where Claude Code finds `.claude/skills`; a run that
-    fails raises `error` saying why."""
+    """Run a skill in the project `folder`'s run folder; a run that fails raises `error` saying why."""
     try:
-        done = subprocess.run(command, cwd=folder, capture_output=True, text=True, timeout=SKILL_MINUTES * 60)
+        done = subprocess.run(command, cwd=run_folder(folder), capture_output=True, text=True,
+                              timeout=SKILL_MINUTES * 60)
     except subprocess.TimeoutExpired as timeout:
         raise error(f"the {skill} run did not finish in {SKILL_MINUTES} minutes") from timeout
     except FileNotFoundError as missing:

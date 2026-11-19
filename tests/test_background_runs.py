@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import ast
 import json
+import sys
 from pathlib import Path
+
+from job_hunt.finder import run_claude
 
 ROOT = Path(__file__).parent.parent
 
@@ -37,3 +40,18 @@ def test_the_project_settings_a_background_run_still_loads_open_no_tool() -> Non
     if settings.exists():
         permissions = json.loads(settings.read_text()).get("permissions", {})
         assert not permissions.get("allow") and "defaultMode" not in permissions
+
+
+def test_a_background_run_starts_in_an_empty_folder_of_the_project(tmp_path: Path) -> None:
+    # Claude Code lets a run read its working folder without a rule: the project's own, with the
+    # career and every job, would be open to each run.
+    project = tmp_path / "project"
+    (project / "data").mkdir(parents=True)
+    seen = tmp_path / "seen.json"
+    look = f"import json, os; json.dump([os.getcwd(), os.listdir()], open({str(seen)!r}, 'w'))"
+    run_claude([sys.executable, "-c", look], project, skill="look")
+    folder, listed = json.loads(seen.read_text())
+    assert Path(folder) == project / ".background"
+    assert listed == []
+    # Ignored, so nothing a run leaves there is committed.
+    assert ".background/" in (ROOT / ".gitignore").read_text().splitlines()

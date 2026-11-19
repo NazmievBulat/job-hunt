@@ -125,13 +125,15 @@ def _no_pause(project: Path) -> LinkedInLock:
 def test_a_resume_worker_reads_only_its_folder_and_the_career_and_runs_only_the_builder(project: Path) -> None:
     command = resume_command(12, project)
     assert command[:2] == ["claude", "-p"]
-    assert json.loads(command[2].removeprefix(f"/{RESUME_SKILL} ")) == {"job": 12, "folder": "jobs/12"}
-    assert command[command.index("--model") + 1] == MODEL
     folder, career = project / "jobs" / "12", project / "data" / "career.json"
+    # Absolute: the run starts in an empty folder, not the project.
+    assert json.loads(command[2].removeprefix(f"/{RESUME_SKILL} ")) == {
+        "job": 12, "folder": str(folder), "career": str(career)}
+    assert command[command.index("--model") + 1] == MODEL
     assert_only_named_tools(command)
     assert command[command.index("--allowedTools") + 1].split(",") == [
         f"Read(/{folder}/**)", f"Read(/{career})",
-        f"Edit(/{folder}/resume-content.json)", "Bash(uv run hunt resume jobs/12)",
+        f"Edit(/{folder}/resume-content.json)", f"Bash(uv run hunt resume {folder})",
     ]
     assert "--chrome" not in command
 
@@ -818,7 +820,7 @@ def test_hunt_applied_takes_any_paused_job(hunt: JobsList, project: Path) -> Non
 def test_a_resume_worker_may_build_only_its_own_jobs_resume(project: Path) -> None:
     tools = resume_command(1, project)[resume_command(1, project).index("--allowedTools") + 1].split(",")
     # A rule ending in `:*` would let job 1's worker build, and overwrite, job 12's resume too.
-    assert [tool for tool in tools if tool.startswith("Bash(")] == ["Bash(uv run hunt resume jobs/1)"]
+    assert [tool for tool in tools if tool.startswith("Bash(")] == [f"Bash(uv run hunt resume {project}/jobs/1)"]
 
 
 SENT_CHECK = {"result": "paused", "needs": "check_sent", "tab": "Thank you - Example Co 1", "tab_id": 7}

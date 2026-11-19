@@ -218,13 +218,13 @@ def fake_claude(project: Path, tmp_path_factory: pytest.TempPathFactory, monkeyp
     return folder / "claude.json"
 
 
-def test_hunt_score_starts_claude_in_the_project_and_prints_one_line(
+def test_hunt_score_starts_claude_in_the_run_folder_and_prints_one_line(
     fake_claude: Path, project: Path, jobs: JobsList, capsys: pytest.CaptureFixture[str]
 ) -> None:
     jobs.add(_found(1))
     assert cli.main(["score"]) == 0
     assert capsys.readouterr().out == "1 jobs scored\n"
-    assert Path(json.loads(fake_claude.read_text())["cwd"]) == project
+    assert Path(json.loads(fake_claude.read_text())["cwd"]) == project / ".background"
     assert jobs.get(1).state == "scored"
 
 

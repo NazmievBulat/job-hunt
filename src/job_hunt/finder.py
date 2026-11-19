@@ -28,11 +28,12 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from html import unescape as html_unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from urllib.request import Request, urlopen
 
 from job_hunt.jobs import FoundJob, Job, JobsList, Remote, clean_link
@@ -246,6 +247,19 @@ def page_text_and_kind(link: str, html: str) -> tuple[str, str]:
     return text, "easy_apply" if linkedin and not offsite else "company_site"
 
 
+def offsite_link(html: str) -> str | None:
+    """The company's own apply address a LinkedIn job page holds, or None. LinkedIn may wrap it
+    in its own redirect (`/jobs/view/externalApply/...?url=...`)."""
+    found = re.search(r'id="applyUrl"[^>]*>\s*<!--\s*"([^"]+)"', html)
+    if found is None:
+        return None
+    link = html_unescape(found.group(1))
+    parts = urlsplit(link)
+    if parts.netloc.lower().endswith("linkedin.com"):
+        link = dict(parse_qsl(parts.query)).get("url", "")
+    return link if link.startswith(("https://", "http://")) else None
+
+
 def fetch_page(link: str) -> tuple[str, str]:
     """The address the page ended at, and its HTML."""
     request = Request(link, headers={"User-Agent": "Mozilla/5.0 (compatible; job-hunt)", "Accept": "text/html"})
@@ -310,16 +324,19 @@ def _write_posting(job: Job, folder: Path) -> None:
     part.replace(folder / "posting.md")
 
 
-def _read_page(link: str, fetch: Callable[[str], tuple[str, str]]) -> tuple[str | None, str | None, str | None, str | None]:
-    """The address the page ended at, its description, the kind and why it could not be read."""
+def _read_page(
+    link: str, fetch: Callable[[str], tuple[str, str]]
+) -> tuple[str | None, str | None, str | None, str | None, str | None]:
+    """The address the page ended at, its description, the kind, why it could not be read, and
+    the company's apply address a LinkedIn page names."""
     try:
         ended_at, html = fetch(link)
         text, kind = page_text_and_kind(ended_at, html)
-        return ended_at, text, kind, None
+        return ended_at, text, kind, None, offsite_link(html)
     except Exception as error:
         # Whatever went wrong with its page, the job is saved with the reason, never dropped.
         problem = str(error) if isinstance(error, PageError) else f"{type(error).__name__}: {error}"
-        return None, None, None if urlsplit(link).netloc.endswith("linkedin.com") else "company_site", problem
+        return None, None, None if urlsplit(link).netloc.endswith("linkedin.com") else "company_site", problem, None
 
 
 def _now() -> datetime:
@@ -377,10 +394,10 @@ def _find(
         if linkedin:
             # LinkedIn's pages count as its requests, paced as its searches are.
             search.pace.wait()
-        ended_at, text, kind, problem = _read_page(link, fetch)
+        ended_at, text, kind, problem, offsite = _read_page(link, fetch)
         if linkedin and problem in ("HTTP 429", "HTTP 999"):
             search.pace.stop(problem.removeprefix("HTTP "))
-        met.extend(page for page in (link, ended_at) if page)
+        met.extend(page for page in (link, ended_at, offsite) if page)
         return jobs.add(each, page_link=ended_at, description=text, kind=kind, problem=problem) is not None
 
     summary = Summary(0, 0, 0)

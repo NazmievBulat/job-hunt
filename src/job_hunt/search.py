@@ -46,14 +46,18 @@ HOST_LIMIT = 4
 WORKERS = 32
 REQUEST_SECONDS = 30
 ANSWER_BYTES = 50_000_000
+# Pages of a board are read up to its total; these only stop a board that pages for ever.
 WORKDAY_PAGE = 20
-WORKDAY_PAGES = 5
+WORKDAY_PAGES = 50
 SMARTRECRUITERS_PAGE = 100
-SMARTRECRUITERS_PAGES = 10
+SMARTRECRUITERS_PAGES = 100
 # A busy board (too many requests, or down for a moment) is asked again after these pauses.
 BUSY = (429, 503)
 BUSY_PAUSES = (5.0, 20.0)
 USER_AGENT = "Mozilla/5.0 (compatible; job-hunt)"
+# LinkedIn counts its window back from each request, which comes minutes after the run started
+# (the alerts, the index); the window reaches this much further back, and duplicates are dropped.
+LINKEDIN_OVERLAP = timedelta(minutes=15)
 
 
 @dataclass(frozen=True)
@@ -96,11 +100,14 @@ def http_get(url: str, body: Any = None) -> Answer:
 
 class Pace:
     """A pause of 2 to 5 seconds before each LinkedIn request but the first, pages included; and
-    why LinkedIn said stop this run, after which no LinkedIn request is made."""
+    why LinkedIn said stop this run, after which no LinkedIn request is made. The searches run
+    in a new order each run (`order`), so a stop does not keep the same ones from ever running."""
 
-    def __init__(self, sleep: Callable[[float], None] = time.sleep, between: Callable[[], float] | None = None) -> None:
+    def __init__(self, sleep: Callable[[float], None] = time.sleep, between: Callable[[], float] | None = None,
+                 order: Callable[[list[Any]], None] = random.shuffle) -> None:
         self.sleep = sleep
         self.between = between or (lambda: random.uniform(*PAUSE_SECONDS))
+        self.order = order
         self._first = True
         self.stopped: str | None = None
 
@@ -174,15 +181,17 @@ def area_of(place: str, areas: list[str]) -> str | None:
 
 def _area_of_one(place: str, areas: list[str]) -> str | None:
     words = _words(place)
-    if not words or any(_holds(words, country) for country in ABROAD):
+    if not words:
         return None
+    abroad = any(_holds(words, country) for country in ABROAD)
     named = _states_named(place, words)
     for area in areas:
         states, cities = AREAS.get(area.casefold(), ((), ()))
         if not any(_holds(words, name) for name in (area, *cities)):
             continue
-        # A city of the same name in another state is not the area.
-        if states and named and not named & set(states):
+        # A city of the same name abroad or in another state is not the area the table knows;
+        # an area it does not know ("London") is matched by its name alone, abroad too.
+        if states and (abroad or (named and not named & set(states))):
             continue
         return area
     return None
@@ -265,8 +274,14 @@ def linkedin_cards(page: str) -> list[Card]:
     cards = []
     for card in parser.cards:
         text = {name: " ".join(value.split()) for name, value in card.items()}
-        if text["link"].startswith("https://") and text["title"]:
-            cards.append(Card(clean_link(text["link"]), text["title"], text["company"], text["place"]))
+        if not (text["link"].startswith("https://") and text["title"]):
+            continue
+        try:
+            link = clean_link(text["link"])
+        except ValueError:
+            # A link that is not one ("https://[bad"): the card is skipped, not the search.
+            continue
+        cards.append(Card(link, text["title"], text["company"], text["place"]))
     return cards
 
 
@@ -285,6 +300,7 @@ def linkedin_search(settings: Settings, since: datetime, now: datetime, get: Get
         searches += [(title, area) for title in settings.titles for area in settings.areas]
     if settings.remote != "exclude":
         searches += [(title, None) for title in settings.titles]
+    pace.order(searches)
     found: dict[str, FoundJob] = {}
     result = LinkedInResult([], stopped=pace.stopped)
     if pace.stopped:
@@ -625,6 +641,8 @@ class Search:
     pace: Pace
     companies: Companies
     sleep: Callable[[float], None] = time.sleep
+    # The time LinkedIn's searches start at; None for the run's start (tests).
+    clock: Callable[[], datetime] | None = None
 
     def run(self, settings: Settings, jobs: JobsList, started: datetime, save: Save, met: list[str]
             ) -> tuple[list[str], list[str]]:
@@ -634,14 +652,14 @@ class Search:
         lines: list[str] = []
         failed: list[str] = []
         self.companies.add(wanted_boards(settings))
-        self.companies.add([board for link in met if (board := board_of(link)) is not None])
         if self.companies.index_due():
             line, problems = fill_index(self.companies, self.get, sleep=self.sleep)
             lines.append(line)
             failed += [f"companies: {problem}" for problem in problems]
 
         since = jobs.last_run("linkedin_search") or started - FIRST_RUN
-        linkedin = linkedin_search(settings, since, started, self.get, self.pace)
+        now = self.clock() if self.clock else started
+        linkedin = linkedin_search(settings, since - LINKEDIN_OVERLAP, now, self.get, self.pace)
         new = sum(save(job, None) for job in linkedin.jobs)
         lines.append(f"linkedin_search: {len(linkedin.jobs)} found, {new} new")
         failed += [f"linkedin_search: {problem}" for problem in linkedin.problems]
@@ -652,6 +670,8 @@ class Search:
         if not stopped and not linkedin.problems:
             jobs.finished_run(started, "linkedin_search")
 
+        # The boards the alerts' and LinkedIn's jobs led to, LinkedIn's saved just above.
+        self.companies.add([board for link in met if (board := board_of(link)) is not None])
         full = self.companies.full_due()
         boards = self.companies.to_sweep(full=full)
         known = jobs.known_links()

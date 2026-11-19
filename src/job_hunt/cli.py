@@ -64,7 +64,8 @@ def run_skill(command: list[str]) -> None:
 
 def site_search() -> Search | None:
     """LinkedIn's search and the company boards, over the network."""
-    return Search(get=http_get, pace=Pace(sleep=SLEEP), companies=Companies(DATA / "companies.db"), sleep=SLEEP)
+    return Search(get=http_get, pace=Pace(sleep=SLEEP), companies=Companies(DATA / "companies.db"), sleep=SLEEP,
+                  clock=lambda: datetime.now(UTC))
 
 
 def find_step() -> FindSummary:

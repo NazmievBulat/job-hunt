@@ -8,6 +8,7 @@ real ones (checked 2026-11-18), served by `Sites` in place of `http_get`.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import threading
 import time
@@ -25,7 +26,7 @@ from job_hunt.companies import (
 from job_hunt.finder import find
 from job_hunt.jobs import JobsList
 from job_hunt.search import (
-    BUSY_PAUSES, LINKEDIN_PAGES, Answer, Gone, Pace, Search, SearchError, area_of, by_host, linkedin_cards,
+    BUSY_PAUSES, LINKEDIN_OVERLAP, LINKEDIN_PAGES, Answer, Gone, Pace, Search, SearchError, area_of, by_host, linkedin_cards,
     linkedin_search, read_board,
 )
 from job_hunt.settings import Settings, SettingsError, read_settings
@@ -78,7 +79,8 @@ def _ok(name: str) -> Answer:
 
 
 def _no_pause() -> Pace:
-    return Pace(sleep=lambda seconds: None, between=lambda: 3.0)
+    # The searches keep the order they are listed in, so a test can say which is asked first.
+    return Pace(sleep=lambda seconds: None, between=lambda: 3.0, order=lambda searches: None)
 
 
 # LinkedIn
@@ -607,7 +609,31 @@ def test_linkedins_time_window_comes_from_its_own_last_run(
     sites = _board_sites()
     _run(tmp_path, settings, clock, sites, jobs=jobs, companies=companies)
     windows = {parse_qs(urlsplit(url).query)["f_TPR"][0] for url in sites.urls(LINKEDIN)}
-    assert windows == {f"r{int((clock.now - first).total_seconds())}"}
+    assert windows == {f"r{int((clock.now - first + LINKEDIN_OVERLAP).total_seconds())}"}
+
+
+def test_linkedins_window_is_counted_back_from_when_its_search_starts(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    # LinkedIn counts f_TPR back from the request; the alerts may have taken an hour before it.
+    _, jobs, companies = _run(tmp_path, settings, clock, _board_sites())
+    first = clock.now
+    clock.advance(hours=5)
+    sites = _board_sites()
+    later = clock.now + timedelta(hours=1)
+    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None, clock=lambda: later)
+    found = tmp_path / "found-jobs.json"
+    find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=_fetch, clock=clock, search=search)
+    windows = {parse_qs(urlsplit(url).query)["f_TPR"][0] for url in sites.urls(LINKEDIN)}
+    assert windows == {f"r{int((later - first + LINKEDIN_OVERLAP).total_seconds())}"}
+    # The next run reads from this run's start, so nothing between the two is left out.
+    assert jobs.last_run("linkedin_search") == clock.now
+
+
+def test_an_area_the_table_does_not_know_is_matched_by_name_abroad_too() -> None:
+    assert area_of("London, United Kingdom", ["London"]) == "London"
+    assert area_of("Durham, England", ["Raleigh-Durham-Chapel Hill"]) is None
+    assert area_of("London, United Kingdom", ["Raleigh-Durham-Chapel Hill", "London"]) == "London"
 
 
 def test_a_linkedin_stop_is_named_and_linkedin_is_read_from_the_same_time_next(
@@ -895,3 +921,79 @@ def test_a_linkedin_page_stop_after_the_searches_is_named_and_keeps_linkedins_wi
     summary = find(settings, jobs, tmp_path / "jobs", found, run=Skill(found), fetch=fetch, clock=clock, search=search)
     assert "linkedin_search: LinkedIn answered 429, so it is not searched again this run" in summary.failed
     assert jobs.last_run("linkedin_search") is None
+
+
+def test_linkedins_searches_run_in_a_new_order_each_run(settings: Settings, clock: MovableClock) -> None:
+    # LinkedIn answers 429 after a few pages; in one fixed order the last searches would never run.
+    orders: list[list[tuple[str, str | None]]] = []
+    pace = Pace(sleep=lambda seconds: None, between=lambda: 3.0, order=lambda searches: (searches.reverse(),
+                                                                                        orders.append(list(searches))))
+    sites = _linkedin_sites([""])
+    linkedin_search(settings, clock.now - timedelta(days=1), clock.now, sites, pace)
+    asked = [parse_qs(urlsplit(url).query) for url in sites.urls(LINKEDIN)]
+    assert [(each["keywords"][0], each.get("location", [None])[0]) for each in asked] == orders[0]
+    assert orders[0][0] == ("SDET", None) and len(orders[0]) == 6
+    from job_hunt.search import random as search_random
+    assert Pace().order is search_random.shuffle
+
+
+def test_a_linkedin_card_whose_link_is_not_one_is_skipped() -> None:
+    page = _saved("linkedin-short-page.html")
+    first = re.search(r'href="(https://[^"]+)"', page)
+    assert first is not None
+    cards = linkedin_cards(page.replace(first.group(1), "https://[bad", 1))
+    assert len(cards) == len(linkedin_cards(page)) - 1 and all(card.link.startswith("https://") for card in cards)
+
+
+def test_workday_pages_past_a_hundred_jobs_to_its_total(settings: Settings, clock: MovableClock) -> None:
+    page = json.loads(_saved("workday-list.json"))
+    full = {**page, "total": 125, "jobPostings": [page["jobPostings"][1]] * 20}
+    api = "https://umbrella.wd5.myworkdayjobs.com/wday/cxs/umbrella/Careers"
+    sites = Sites({f"{api}/jobs": Answer(200, json.dumps(full))})
+    one = replace(settings, titles=["QA Automation Engineer"])
+    read_board(Board("workday", "umbrella/wd5/Careers"), one, sites, _known(), now=clock.now)
+    assert [body["offset"] for url, body in sites.asked if url == f"{api}/jobs"] == [  # type: ignore[index]
+        0, 20, 40, 60, 80, 100, 120]
+
+
+def test_smartrecruiters_pages_past_a_thousand_jobs_to_its_total(settings: Settings) -> None:
+    api = "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings"
+    entries = [{"id": str(each), "name": "Pastry Chef", "company": {"name": "Example Corp"}} for each in range(100)]
+    sites = Sites({api: Answer(200, json.dumps({"totalFound": 1050, "content": entries}))})
+    read_board(Board("smartrecruiters", "ExampleCorp"), settings, sites, _known())
+    offsets = [int(parse_qs(urlsplit(url).query)["offset"][0]) for url in sites.urls(api)]
+    assert offsets == list(range(0, 1100, 100))
+
+
+def test_the_apply_link_on_a_linkedin_page_names_the_companys_own_address() -> None:
+    from job_hunt.finder import offsite_link
+
+    plain = '<code id="applyUrl" style="display: none"><!--"https://jobs.lever.co/hooli-example/1111"--></code>'
+    wrapped = ('<code id="applyUrl" style="display: none"><!--"https://www.linkedin.com/jobs/view/externalApply/41?'
+               'url=https%3A%2F%2Fjobs%2Eashbyhq%2Ecom%2Finitech%2F22&amp;urlHash=x"--></code>')
+    assert offsite_link(plain) == "https://jobs.lever.co/hooli-example/1111"
+    assert offsite_link(wrapped) == "https://jobs.ashbyhq.com/initech/22"
+    assert offsite_link("<html>Easy Apply</html>") is None
+
+
+def test_a_linkedin_searched_jobs_apply_link_adds_its_board_that_same_run(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    page = (FINDER / "pages" / "linkedin-offsite.html").read_text()
+    page = re.sub(r'(id="applyUrl"[^>]*>\s*<!--\s*")[^"]+', r"\1https://jobs.lever.co/hooli-example/1111", page)
+
+    def fetch(link: str) -> tuple[str, str]:
+        return link, page
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    found = tmp_path / "found-jobs.json"
+    sites = Sites({f"{LINKEDIN}?keywords=QA+Automation+Engineer&location=Raleigh": _ok("linkedin-short-page.html"),
+                   LINKEDIN: Answer(200, "")})
+    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    find(settings, jobs, tmp_path / "jobs", found, run=Skill(found, fail=True), fetch=fetch, clock=clock, search=search)
+    assert any(job.source == "linkedin_search" for job in jobs.all())
+    assert Board("lever", "hooli-example") in companies.to_sweep(full=True)
+    # Added before the sweep, so this run's sweep already read it.
+    assert sites.urls("https://api.lever.co/v0/postings/hooli-example")

@@ -17,11 +17,20 @@ Everything after that is this script: it drops jobs the list already has, titles
 none of the settings' titles, and jobs the area and remote settings leave out, saves the rest
 as `new`, and saves each one's page as `jobs/<id>/posting.md`.
 
-Then the searches of `search.py` (LinkedIn signed out, and every company's public job board)
-hand their jobs to the same filters and saving, and so do the public job feeds of `feeds.py`; a
+The searches of `search.py` (LinkedIn signed out, and every company's public job board) hand
+their jobs to the same filters and saving, and so do the public job feeds of `feeds.py`; a
 board's job comes with its description, so its page is not read, as does a feed's but Adzuna's
-and Jooble's. Each source has its own line and its own time of the last run, and a
-source that fails is named without stopping the others.
+and Jooble's. The sources run at once, each in a thread of its own: the alert emails, LinkedIn,
+the boards (with the company index first when it is due) and the feeds. One `save` takes every
+job, holding one lock around the check and the insert, and the jobs list is used under that lock
+only. Once all have ended, the boards their links led to are swept in a second, short pass, and
+then the recruiters' emails are linked to the jobs. Each source has its own line, its own time
+of the last run and how long it took, and a source that fails is named without stopping the
+others.
+
+A job is the same job as one the list has by its link, or by its company and title
+(`JobsList.same_job`); such a one is not saved again, its link is kept as another link of the
+first, and the run says how many there were.
 """
 
 from __future__ import annotations
@@ -30,13 +39,15 @@ import fcntl
 import json
 import re
 import subprocess
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from html import unescape as html_unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, get_args
+from typing import TYPE_CHECKING, Any, Protocol, cast, get_args
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlsplit
 from urllib.request import Request, urlopen
@@ -46,7 +57,7 @@ from job_hunt.settings import Settings
 
 if TYPE_CHECKING:
     from job_hunt.feeds import Feeds
-    from job_hunt.search import Search
+    from job_hunt.search import Search, Sweep
 
 MODEL = "claude-haiku-5-5"
 SKILL = "read-job-alerts"
@@ -411,6 +422,33 @@ def find(
                      messages=messages, feeds=feeds)
 
 
+class _Locked:
+    """The jobs list as the sources' threads see it: one call at a time on its one connection."""
+
+    def __init__(self, jobs: JobsList, lock: threading.RLock) -> None:
+        self._jobs, self._lock = jobs, lock
+
+    def __getattr__(self, name: str) -> Any:
+        attribute = getattr(self._jobs, name)
+        if not callable(attribute):
+            return attribute
+
+        def locked(*args: Any, **kwargs: Any) -> Any:
+            with self._lock:
+                return attribute(*args, **kwargs)
+
+        return locked
+
+
+def took(seconds: float) -> str:
+    """How long a source took, as "1h 2m", "4m 10s" or "45s"."""
+    whole = max(0, round(seconds))
+    hours, minutes, rest = whole // 3600, whole // 60 % 60, whole % 60
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m {rest}s" if minutes else f"{rest}s"
+
+
 def _find(
     settings: Settings,
     jobs: JobsList,
@@ -425,58 +463,122 @@ def _find(
     feeds: Feeds | None,
 ) -> Summary:
     started = clock()
-    # The links the jobs met, whose job boards join the company index.
+    lock = threading.RLock()
+    shared = cast(JobsList, _Locked(jobs, lock))
+    # The links the jobs met, whose job boards join the company index; the links whose pages are
+    # being read; and the jobs another source had already found under another link.
     met: list[str] = []
+    reading: set[str] = set()
+    same: list[str] = []
+
+    def known(each: FoundJob, page_link: str | None = None) -> bool:
+        """Whether the list has the job, by its link or as the same job; under the lock."""
+        if jobs.has(each.link):
+            return True
+        if (first := jobs.same_job(each)) is None:
+            return False
+        jobs.also_link(first, each, page_link)
+        same.append(each.link)
+        return True
 
     def save(each: FoundJob, description: str | None) -> bool:
         """Save a job the filters keep, with its page read unless its description came with it;
-        return whether it is new."""
-        if jobs.has(each.link) or not title_matches(each.title, settings.titles) or not place_kept(each, settings):
+        return whether it is new. Two sources saving one job at once save it once."""
+        if not title_matches(each.title, settings.titles) or not place_kept(each, settings):
             return False
-        if description is not None:
-            return jobs.add(each, description=description, kind="company_site") is not None
         link = clean_link(each.link)
-        linkedin = search is not None and urlsplit(link).netloc.endswith("linkedin.com")
-        if linkedin and search.pace.stopped:
-            # LinkedIn said stop: the job is saved without its page, as one whose page failed.
-            return jobs.add(each, problem=f"not read: {search.pace.stopped}") is not None
-        if linkedin:
-            # LinkedIn's pages count as its requests, paced as its searches are.
-            search.pace.wait()
-        ended_at, text, kind, problem, offsite = _read_page(link, fetch)
-        if linkedin and problem in ("HTTP 429", "HTTP 999"):
-            search.pace.stop(problem.removeprefix("HTTP "))
-        met.extend(page for page in (link, ended_at, offsite) if page)
-        return jobs.add(each, page_link=ended_at, description=text, kind=kind, problem=problem) is not None
+        with lock:
+            if link in reading or known(each):
+                return False
+            if description is not None:
+                return jobs.add(each, description=description, kind="company_site") is not None
+            reading.add(link)
+        try:
+            ended_at, text, kind, problem, offsite = _read(link)
+        finally:
+            with lock:
+                reading.discard(link)
+        with lock:
+            met.extend(page for page in (link, ended_at, offsite) if page)
+            # Another source may have saved the same job, under another link, while the page was read.
+            if known(each, ended_at):
+                return False
+            return jobs.add(each, page_link=ended_at, description=text, kind=kind, problem=problem) is not None
+
+    def _read(link: str) -> tuple[str | None, str | None, str | None, str | None, str | None]:
+        if search is None or not urlsplit(link).netloc.endswith("linkedin.com"):
+            return _read_page(link, fetch)
+        # LinkedIn's pages count as its requests, paced as its searches are, one at a time.
+        with search.pace.turn():
+            if search.pace.stopped:
+                # LinkedIn said stop: the job is saved without its page, as one whose page failed.
+                return None, None, None, f"not read: {search.pace.stopped}", None
+            read = _read_page(link, fetch)
+            if read[3] in ("HTTP 429", "HTTP 999"):
+                search.pace.stop(read[3].removeprefix("HTTP "))
+            return read
+
+    def alerts() -> tuple[int, list[FoundJob], list[str], int]:
+        emails, found_jobs, problems = _read_alerts(settings, shared, found, run, started, messages_after)
+        return emails, found_jobs, problems, sum(save(each, None) for each in found_jobs)
+
+    # Read here: the recruiters' threads are not used from the sources' threads.
+    messages_after = messages.since(started) if messages else None
+    sources: dict[str, Callable[[], Any]] = {"alert": alerts}
+    if search is not None:
+        sources["linkedin_search"] = lambda: search.linkedin(settings, shared, started, save)
+        sources["boards"] = lambda: search.sweep(settings, shared, started, save)
+    if feeds is not None:
+        sources["feeds"] = lambda: feeds.run(settings, shared, started, save)
+    seconds: dict[str, float] = {}
+
+    def timed(name: str) -> Any:
+        begun = clock()
+        try:
+            return sources[name]()
+        except Exception as error:
+            return error
+        finally:
+            seconds[name] = (clock() - begun).total_seconds()
+
+    with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+        ended = dict(zip(sources, pool.map(timed, sources)))
 
     summary = Summary(0, 0, 0)
-    try:
-        summary.emails, found_jobs, summary.problems = _read_alerts(settings, jobs, found, run, started, messages)
+    alert = ended["alert"]
+    if isinstance(alert, FinderError):
+        summary.failed.append(f"alert: {alert}")
+    elif isinstance(alert, Exception):
+        raise alert
+    else:
+        summary.emails, found_jobs, summary.problems, summary.new = alert
         summary.jobs = len(found_jobs)
-        summary.new = sum(save(each, None) for each in found_jobs)
-        # After the jobs: a message about a job of this run is linked to it.
+        # After every source's jobs: a message about a job of this run is linked to it.
         if messages is not None:
             summary.problems += messages.saved(json.loads(found.read_text()), started)
         jobs.finished_run(started)
         summary.lines.append(f"alert: {summary.emails} emails, {summary.jobs} jobs, {summary.new} new")
-    except FinderError as error:
-        summary.failed.append(f"alert: {error}")
     if search is not None:
-        try:
-            lines, failed = search.run(settings, jobs, started, save, met)
-        except Exception as error:
-            # Whatever broke in the searches, the alerts' jobs still get their postings.
-            lines, failed = [], [f"search: {type(error).__name__}: {error}"]
-        summary.lines += lines
-        summary.failed += failed
+        sweep: Sweep | Exception = ended["boards"]
+        if not isinstance(sweep, Exception):
+            summary.lines += sweep.lines
+        _add(summary, "linkedin_search", ended["linkedin_search"])
+        if search.pace.stopped:
+            summary.failed.append(f"linkedin_search: {search.pace.stopped}")
+        if isinstance(sweep, Exception):
+            # Whatever broke in the sweep, the other sources' jobs still get their postings.
+            summary.failed.append(f"boards: {type(sweep).__name__}: {sweep}")
+        else:
+            begun = clock()
+            try:
+                _add(summary, "boards", search.sweep_met(sweep, settings, jobs, started, save, met))
+            except Exception as error:
+                _add(summary, "boards", error)
+            seconds["boards"] += (clock() - begun).total_seconds()
     if feeds is not None:
-        try:
-            lines, failed = feeds.run(settings, jobs, started, save)
-        except Exception as error:
-            # Whatever broke in the feeds, the other sources' jobs still get their postings.
-            lines, failed = [], [f"feeds: {type(error).__name__}: {error}"]
-        summary.lines += lines
-        summary.failed += failed
+        _add(summary, "feeds", ended["feeds"])
+    summary.lines.append(f"same job from two sources: {len(same)}")
+    summary.lines.append("took: " + ", ".join(f"{name} {took(seconds[name])}" for name in sources))
     # Every new job has its posting, also one whose run stopped after saving it.
     for job in jobs.all():
         if job.state == "new" and not (jobs_folder / str(job.id) / "posting.md").exists():
@@ -484,15 +586,24 @@ def _find(
     return summary
 
 
+def _add(summary: Summary, name: str, ended: tuple[list[str], list[str]] | Exception) -> None:
+    """A source's lines and failures, or, when it broke, why."""
+    if isinstance(ended, Exception):
+        summary.failed.append(f"{name}: {type(ended).__name__}: {ended}")
+    else:
+        summary.lines += ended[0]
+        summary.failed += ended[1]
+
+
 def _read_alerts(
     settings: Settings, jobs: JobsList, found: Path, run: Callable[[list[str]], None], started: datetime,
-    messages: Messages | None,
+    messages_after: datetime | None,
 ) -> tuple[int, list[FoundJob], list[str]]:
     """The alert emails since the alerts' last run, as the skill read them."""
     since = jobs.last_run() or started - FIRST_RUN
     # A file an earlier run left must not pass for this run's.
     found.unlink(missing_ok=True)
-    run(skill_command(since, settings.areas, found, messages.since(started) if messages else None))
+    run(skill_command(since, settings.areas, found, messages_after))
     if not found.exists():
         raise FinderError(f"the {SKILL} run wrote no jobs file ({found})")
     return read_found(found, settings)

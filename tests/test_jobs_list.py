@@ -258,3 +258,86 @@ def test_the_file_is_the_users_alone_and_survives_reopening(tmp_path: Path, cloc
         with sqlite3.connect(path) as raw:
             raw.execute("INSERT INTO jobs (link, title, company, board, state, found_at, updated_at)"
                         " VALUES ('https://www.linkedin.com/jobs/view/1', 't', 'c', 'linkedin', 'new', 'x', 'x')")
+
+
+# The same job from two sources
+
+
+def _board_job(link: str = "https://boards.greenhouse.io/examplelabs/jobs/7001", **change: object) -> FoundJob:
+    return _found(link, **{"board": "greenhouse", "source": "greenhouse", "email_id": None, "email_date": None,
+                           **change})
+
+
+@pytest.mark.parametrize("company", [
+    "Example Labs, Inc.", "Example Labs LLC", "Example Labs Ltd", "Example Labs Corp.", "Example Labs Co.",
+    "Example Labs GmbH", "The Example Labs", "EXAMPLE LABS", "Example-Labs", "The Example Labs Co., Ltd.",
+])
+def test_the_same_company_and_title_is_the_same_job_after_folding_case_punctuation_and_endings(
+    jobs: JobsList, company: str
+) -> None:
+    first = jobs.add(_found("https://www.linkedin.com/jobs/view/4012345678"))
+    second = _board_job(company=company, title="senior QA-automation engineer")
+    assert jobs.same_job(second) == first
+    jobs.also_link(first, second)
+    assert jobs.add(second) is None
+    assert len(jobs.all()) == 1
+    # Either link is known from now on, and the searches skip it.
+    assert jobs.has("https://boards.greenhouse.io/examplelabs/jobs/7001/?utm_source=x")
+    assert "https://boards.greenhouse.io/examplelabs/jobs/7001" in jobs.known_links()
+
+
+def test_another_company_or_title_is_another_job(jobs: JobsList) -> None:
+    jobs.add(_found("https://www.linkedin.com/jobs/view/4012345678"))
+    assert jobs.same_job(_board_job(company="Example Labs Robotics")) is None
+    assert jobs.same_job(_board_job(title="QA Automation Engineer")) is None
+    # "Co" is an ending only at the end of the name.
+    assert jobs.same_job(_board_job(company="Co Example Labs")) is None
+
+
+def test_the_same_title_in_two_areas_is_two_jobs_unless_one_is_remote(jobs: JobsList) -> None:
+    first = jobs.add(_found("https://www.linkedin.com/jobs/view/4012345678"))
+    bay = _board_job(place="San Jose, CA", area="San Francisco Bay Area", remote="on_site")
+    assert jobs.same_job(bay) is None
+    assert jobs.same_job(_board_job(place="United States", area=None, remote="remote")) == first
+    remote = jobs.add(_found("https://www.linkedin.com/jobs/view/4099999999", title="SDET", place="United States",
+                             area=None, remote="remote"))
+    assert jobs.same_job(_board_job(title="SDET", place="San Jose, CA", area="San Francisco Bay Area",
+                                    remote="on_site")) == remote
+
+
+def test_a_job_found_more_than_30_days_ago_is_listed_again(jobs: JobsList, clock: MovableClock) -> None:
+    first = jobs.add(_found("https://www.linkedin.com/jobs/view/4012345678"))
+    clock.advance(days=30)
+    assert jobs.same_job(_board_job()) == first
+    clock.advance(seconds=1)
+    assert jobs.same_job(_board_job()) is None
+    assert jobs.add(_board_job()) is not None
+
+
+def test_the_company_boards_link_takes_over_from_a_linkedin_job_without_easy_apply(jobs: JobsList) -> None:
+    linkedin = jobs.add(_found("https://www.linkedin.com/jobs/view/4012345678"), kind="company_site")
+    jobs.also_link(linkedin, _board_job("https://boards.greenhouse.io/examplelabs/jobs/7001?gh_src=mail"))
+    assert jobs.get(linkedin).apply_link == "https://boards.greenhouse.io/examplelabs/jobs/7001"
+    # A LinkedIn job applied to through Easy Apply keeps it; a feed's link is not the company's board.
+    easy = jobs.add(_found("https://www.linkedin.com/jobs/view/4011111111", title="SDET"), kind="easy_apply")
+    jobs.also_link(easy, _board_job(title="SDET"))
+    other = jobs.add(_found("https://www.linkedin.com/jobs/view/4022222222", title="QA Lead"), kind="company_site")
+    jobs.also_link(other, _board_job("https://remotive.com/remote-jobs/qa/qa-lead-1", title="QA Lead",
+                                     board="remotive", source="remotive"))
+    assert (jobs.get(easy).apply_link, jobs.get(easy).kind) == (None, "easy_apply")
+    assert jobs.get(other).apply_link is None
+    # A job a board found first keeps its own link; LinkedIn's is only another link of it.
+    board = jobs.add(_board_job("https://jobs.lever.co/globex/1", title="Test Engineer"), kind="company_site")
+    jobs.also_link(board, _found("https://www.linkedin.com/jobs/view/4033333333", title="Test Engineer"))
+    assert (jobs.get(board).link, jobs.get(board).apply_link) == ("https://jobs.lever.co/globex/1", None)
+    assert jobs.has("https://www.linkedin.com/jobs/view/4033333333")
+
+
+def test_the_jobs_list_can_be_used_from_another_thread(jobs: JobsList) -> None:
+    import threading
+
+    done: list[int | None] = []
+    worker = threading.Thread(target=lambda: done.append(jobs.add(_found("https://www.linkedin.com/jobs/view/1"))))
+    worker.start()
+    worker.join()
+    assert done == [1]

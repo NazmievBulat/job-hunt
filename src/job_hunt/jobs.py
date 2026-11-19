@@ -3,7 +3,11 @@
 A job is the same job when its link is, once the tracking parts are removed (`clean_link`), so
 an alert that sends a job again never lists it twice. The address its page ended at, after the
 redirects of a click-tracking link, is its second link (`page_link`) and counts the same when
-the title and company are the same too. A job moves through the day's states only
+the title and company are the same too. A job from another source with another link is still the
+same job when its company and title are (`same_job`): folded for case, punctuation and the
+company's endings (`COMPANY_ENDINGS`), found in the last `SAME_JOB_DAYS` days, and in the same
+area unless one of them is remote. Its link is kept as another link of the first (`also_link`),
+and a company board's link becomes where a LinkedIn job without Easy Apply is applied to. A job moves through the day's states only
 along `MOVES`; a pause or a failure carries its reason. A worker that fails counts against its
 job (`fail`): the first time the job is tried again, the second time it is `failed`.
 
@@ -31,7 +35,7 @@ import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, fields
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -64,7 +68,14 @@ CAPTCHA_ASKS = 2
 KINDS = ("easy_apply", "company_site")
 SOURCES = ("alert", "linkedin_search", "greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable",
            "remotive", "remoteok", "arbeitnow", "hn_hiring", "usajobs", "adzuna", "jooble")
+BOARDS = ("greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable")
 Remote = Literal["remote", "hybrid", "on_site"]
+# A job found again within this many days, under its company and title, is the same job.
+SAME_JOB_DAYS = 30
+# Words a company's name may end with that do not change which company it is; "the" may start it.
+COMPANY_ENDINGS = {"inc", "llc", "ltd", "corp", "co", "gmbh"}
+# The states in which a job is not started yet, so where it is applied to may still change.
+NOT_STARTED: tuple[State, ...] = ("new", "scored", "picked", "skipped", "resume_ready")
 
 # Query parameters that only say where a click came from. Named one by one: a parameter such
 # as `reference` or `gh_jid` names the job itself.
@@ -172,6 +183,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     picked_at TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_page_link ON jobs (page_link);
+-- The links of the same job that other sources found (`also_link`).
+CREATE TABLE IF NOT EXISTS other_links (
+    link TEXT PRIMARY KEY,
+    job INTEGER NOT NULL REFERENCES jobs (id)
+);
 CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'alert'
@@ -219,12 +235,33 @@ def _untracked(query: str) -> str:
     return urlencode([(name, value) for name, value in parse_qsl(query) if not TRACKING.match(name)])
 
 
+def _folded(text: str) -> list[str]:
+    # Case and punctuation do not count; C++ and C# keep their marks.
+    return re.findall(r"[a-z0-9]+[+#]*", text.casefold())
+
+
+def company_key(company: str) -> str:
+    """The company's name as two sources' names of it are compared: "The Example Labs, Inc." is
+    "example labs"."""
+    words = _folded(company)
+    if words[:1] == ["the"] and len(words) > 1:
+        words = words[1:]
+    while len(words) > 1 and words[-1] in COMPANY_ENDINGS:
+        words.pop()
+    return " ".join(words)
+
+
+def title_key(title: str) -> str:
+    return " ".join(_folded(title))
+
+
 class JobsList:
     def __init__(self, path: Path, clock: Callable[[], datetime] = _now) -> None:
         self._clock = clock
         new = not path.exists()
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path)
+        # The finder's sources use it from threads of their own, one call at a time (`finder`).
+        self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         if new:
             path.chmod(0o600)
@@ -256,12 +293,43 @@ class JobsList:
 
     def has(self, link: str) -> bool:
         link = clean_link(link)
-        return self._db.execute("SELECT 1 FROM jobs WHERE ? IN (link, page_link)", (link,)).fetchone() is not None
+        return self._db.execute(
+            "SELECT 1 FROM jobs WHERE ? IN (link, page_link) UNION ALL SELECT 1 FROM other_links WHERE link = ?",
+            (link, link)).fetchone() is not None
 
     def known_links(self) -> set[str]:
-        """Every link and page link of the list, for the searches that run beside this connection."""
-        rows = self._db.execute("SELECT link FROM jobs UNION SELECT page_link FROM jobs WHERE page_link IS NOT NULL")
+        """Every link, page link and other link of the list, for the searches that run beside this
+        connection."""
+        rows = self._db.execute("SELECT link FROM jobs UNION SELECT page_link FROM jobs WHERE page_link IS NOT NULL"
+                                " UNION SELECT link FROM other_links")
         return {row[0] for row in rows}
+
+    def same_job(self, found: FoundJob) -> int | None:
+        """The job of the list that a job found under another link is, or None: the same company
+        and title, found in the last `SAME_JOB_DAYS` days, in the same area unless either is remote."""
+        company, title = company_key(found.company), title_key(found.title)
+        since = (self._clock() - timedelta(days=SAME_JOB_DAYS)).isoformat()
+        for row in self._db.execute(
+                "SELECT id, title, company, area, remote FROM jobs WHERE found_at >= ? ORDER BY id", (since,)):
+            if (company_key(row["company"]), title_key(row["title"])) != (company, title):
+                continue
+            if row["area"] == found.area or "remote" in (row["remote"], found.remote):
+                return row["id"]
+        return None
+
+    def also_link(self, job: int, found: FoundJob, page_link: str | None = None) -> None:
+        """Keep a link (and the page it ended at) of the same job found by another source; a
+        company board's link becomes where a LinkedIn job without Easy Apply not started yet is
+        applied to."""
+        first = self.get(job)
+        links = {clean_link(found.link), *([clean_link(page_link)] if page_link else [])} - {first.link}
+        with self._db:
+            self._db.executemany("INSERT OR IGNORE INTO other_links (link, job) VALUES (?, ?)",
+                                 [(link, job) for link in sorted(links)])
+            if (first.board == "linkedin" and first.kind == "company_site" and first.apply_link is None
+                    and found.source in BOARDS and first.state in NOT_STARTED):
+                self._db.execute("UPDATE jobs SET apply_link = ? WHERE id = ? AND apply_link IS NULL",
+                                 (clean_link(found.link), job))
 
     def add(
         self,

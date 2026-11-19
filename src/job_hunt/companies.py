@@ -178,7 +178,8 @@ class Companies:
         self._clock = clock
         new = not path.exists()
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path)
+        # The finder's sweep uses it from a thread of its own, then the finder from its own.
+        self._db = sqlite3.connect(path, check_same_thread=False)
         if new:
             path.chmod(0o600)
         self._db.executescript(SCHEMA)

@@ -209,12 +209,16 @@ def read_messages(data: Any) -> tuple[list[Message], list[str]]:
     return found, problems
 
 
-def _when(message: Message) -> datetime | None:
+def _instant(text: str | None) -> datetime | None:
     try:
-        when = datetime.fromisoformat(message.sent_at or "")
+        when = datetime.fromisoformat(text or "")
     except ValueError:
         return None
     return when if when.tzinfo is not None else None
+
+
+def _when(message: Message) -> datetime | None:
+    return _instant(message.sent_at)
 
 
 def chronological(found: list[Message]) -> list[Message]:
@@ -265,12 +269,18 @@ def owe_linkedin(data: Path, now: datetime) -> None:
     (data / OWED).write_text(f"{now.isoformat()}\n")
 
 
-def linkedin_owed(data: Path) -> bool:
-    return (data / OWED).exists()
+def linkedin_owed(data: Path) -> str | None:
+    """The notification owed, or None; `linkedin_paid` is given it back after the read."""
+    try:
+        return (data / OWED).read_text()
+    except FileNotFoundError:
+        return None
 
 
-def linkedin_paid(data: Path) -> None:
-    (data / OWED).unlink(missing_ok=True)
+def linkedin_paid(data: Path, owed: str | None) -> None:
+    """A read worked: what was owed before it is paid, a notification noted meanwhile is not."""
+    if linkedin_owed(data) == owed:
+        (data / OWED).unlink(missing_ok=True)
 
 
 class Threads:
@@ -297,16 +307,24 @@ class Threads:
                                 (message.source, message.key)).fetchone():
                 return None
             marks = ", ".join("?" * len(OPEN))
-            self._db.execute(
-                f"UPDATE threads SET state = 'replaced', updated_at = ? WHERE source = ? AND conversation = ?"
-                f" AND state IN ({marks})", (now, message.source, message.conversation, *OPEN))
+            open_now = self._db.execute(
+                f"SELECT sent_at FROM threads WHERE source = ? AND conversation = ? AND state IN ({marks})",
+                (message.source, message.conversation, *OPEN)).fetchall()
+            sent = _when(message)
+            # An older message read late is kept, but the newer one left open stays the one answered.
+            older = sent is not None and any(
+                (then := _instant(row["sent_at"])) is not None and then > sent for row in open_now)
+            if not older:
+                self._db.execute(
+                    f"UPDATE threads SET state = 'replaced', updated_at = ? WHERE source = ? AND conversation = ?"
+                    f" AND state IN ({marks})", (now, message.source, message.conversation, *OPEN))
             cursor = self._db.execute(
                 "INSERT INTO threads (source, key, conversation, email_id, sender, subject, text, sent_at, job_link,"
                 " company, job, asks_to_talk, state, found_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)",
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (message.source, message.key, message.conversation, message.email_id, message.sender,
                  message.subject, message.text, message.sent_at, message.job_link, message.company, job,
-                 int(message.asks_to_talk), now, now))
+                 int(message.asks_to_talk), "replaced" if older else "new", now, now))
         return cursor.lastrowid
 
     def get(self, thread: int) -> Thread:
@@ -386,7 +404,10 @@ class EmailMessages:
         return new
 
     def saved(self, data: Any, started: datetime) -> list[str]:
-        """Save the emails and LinkedIn's notifications the run noted; return what was left out."""
+        """Save the emails and LinkedIn's notifications the run noted; return what was left out.
+        A file with no list of emails read none: the next run reads from the same time."""
+        if not isinstance(data, dict) or not isinstance(data.get("recruiter_emails"), list):
+            return ["recruiter_emails: the run wrote no list of them; they are read again from the same time"]
         found, problems = read_messages(data)
         self.save_all(found)
         count = data.get("linkedin_notifications") if isinstance(data, dict) else None
@@ -662,6 +683,8 @@ def read_linkedin(threads: Threads, jobs: JobsList, root: Path, *, run: Run, loc
     # Nothing read is not "no messages": the next read starts from the same time again.
     if isinstance(data, dict) and (why := _text(data, "unreachable")):
         raise ReplyError(f"the {READ_SKILL} run could not read LinkedIn: {why}")
+    if not isinstance(data, dict) or not isinstance(data.get("linkedin_messages"), list):
+        raise ReplyError(f"the {READ_SKILL} run wrote no list of linkedin_messages ({out})")
     messages, problems = read_messages(data)
     if problems:
         log_failure(root / "data", "hunt linkedin-messages", "left out " + "; ".join(problems), clock)

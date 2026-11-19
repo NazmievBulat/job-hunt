@@ -919,3 +919,63 @@ def test_two_linkedin_reads_at_once_each_read_their_own_file(
     second[0].join()
 
     assert errors == []
+
+
+# Found by the independent review
+
+
+def test_an_older_message_read_late_does_not_replace_the_newer_one_left_open(
+    threads: Threads, jobs: JobsList
+) -> None:
+    newer, = _saved(threads, jobs, _email(2, thread_id="t1", date="2026-11-18T09:00:00-05:00"))
+    # Gmail showed the 08:00 email only to the next read.
+    older, = _saved(threads, jobs, _email(1, date="2026-11-18T08:00:00-05:00"))
+
+    assert threads.get(newer).state == "new"
+    assert threads.get(older).state == "replaced"
+
+
+@pytest.mark.parametrize("written", [{}, {"emails": 0, "jobs": []}, {"recruiter_emails": "none"}])
+def test_a_check_whose_file_has_no_list_of_messages_keeps_the_time_it_reads_from(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, written: dict
+) -> None:
+    problems = EmailMessages(threads, jobs).saved(written, clock())
+
+    assert threads.last_read("email") is None
+    assert any("recruiter_emails" in problem for problem in problems)
+
+
+@pytest.mark.parametrize("written", [{}, {"linkedin_messages": "none"}, []])
+def test_a_linkedin_read_whose_file_has_no_list_of_messages_fails_and_keeps_its_time(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock, written: object
+) -> None:
+    lock = LinkedInLock(project / "data", pause=lambda: timedelta(0))
+
+    def run(command: list[str]) -> None:
+        Path(_prompt(command, READ_SKILL)["out"]).write_text(json.dumps(written))
+
+    with pytest.raises(ReplyError, match="linkedin_messages"):
+        read_linkedin(threads, jobs, project, run=run, lock=lock, sleep=no_sleep, clock=clock)
+    assert threads.last_read("linkedin") is None
+
+
+def test_a_notification_noted_while_linkedin_is_read_is_still_owed_after_it(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    clock.advance(hours=1)
+    _read_linkedin_today(threads, clock)
+    run = Watch(project, threads, jobs, notifications=1)
+    read = run.read_linkedin
+
+    def read_while_the_finder_notes_another() -> int | None:
+        EmailMessages(threads, jobs).saved({"recruiter_emails": [], "linkedin_notifications": 1},
+                                           clock() + timedelta(minutes=1))
+        return read()
+
+    run.read_linkedin = read_while_the_finder_notes_another  # type: ignore[method-assign]
+    run(clock)
+
+    clock.advance(seconds=20 * 60)
+    again = Watch(project, threads, jobs)
+    again(clock)
+    assert again.linkedin_reads == 1

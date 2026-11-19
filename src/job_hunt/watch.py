@@ -91,10 +91,11 @@ def _watch(threads: Threads, jobs: JobsList, data: Path, settings: Settings, che
     problems = emails.saved(found, now)
     new = emails.new
     # A notification, this run's or the finder's, is owed until a LinkedIn read works.
-    if linkedin_owed(threads.data) or linkedin_due(threads.last_read("linkedin"), now, settings):
+    owed = linkedin_owed(threads.data)
+    if owed is not None or linkedin_due(threads.last_read("linkedin"), now, settings):
         read = read_linkedin()
         if read is not None:
-            linkedin_paid(threads.data)
+            linkedin_paid(threads.data, owed)
             new += read
     if not new and not threads.in_states("new") and not threads.unasked():
         return "; ".join(problems)

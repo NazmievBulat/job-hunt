@@ -579,7 +579,7 @@ def _draft_replies(threads: Threads, root: Path, run: Run, fetch: Callable[[str]
         _write(here / "message.md", _message_file(thread))
         _save_posting(thread, root, fetch)
         (here / "reply.json").unlink(missing_ok=True)
-        booked = talks.booked_in(thread.source, thread.conversation)
+        booked = talks.booked_in(thread.source, thread.conversation, clock())
         held = booked if booked is not None and booked.state == "held" else None
         try:
             if thread.asks_to_talk and booked is None:
@@ -703,8 +703,11 @@ def edit_reply(threads: Threads, root: Path, thread: int, text: str) -> Thread:
 
 
 def skip_reply(threads: Threads, thread: int) -> Thread:
-    _waiting(threads, thread, "new", "drafted", "unsure")
-    threads.move(thread, "skipped")
+    found = _waiting(threads, thread, "new", "drafted", "unsure")
+    # A send that may have gone is skipped once the person saw it went: it was sent, and an
+    # offer it made is held.
+    threads.move(thread, "sent" if found.state == "unsure" else "skipped",
+                 "the person saw it went" if found.state == "unsure" else None)
     return threads.get(thread)
 
 

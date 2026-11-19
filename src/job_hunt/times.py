@@ -46,7 +46,7 @@ HOLD_TOOLS = (f"{CALENDAR}create_event",)
 CONFIRM_TOOLS = (f"{CALENDAR}update_event",)
 UNSURE = "a look in Google Calendar whether it was added"
 
-State = Literal["offered", "holding", "held", "confirmed", "failed", "unsure"]
+State = Literal["offered", "holding", "held", "confirmed", "failed", "unsure", "replaced"]
 Run = Callable[[list[str]], None]
 
 SCHEMA = """
@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS talks (
     conversation TEXT NOT NULL,
     title TEXT NOT NULL,
     offered TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('offered', 'holding', 'held', 'confirmed', 'failed', 'unsure')),
+    state TEXT NOT NULL CHECK (state IN ('offered', 'holding', 'held', 'confirmed', 'failed', 'unsure',
+        'replaced')),
     state_reason TEXT,
     event_id TEXT,
     start TEXT,
@@ -212,12 +213,16 @@ def offer_command(arguments: dict[str, Any], days: list[tuple[datetime, datetime
             "--allowedTools", ",".join(tools)]
 
 
-def event_command(task: Literal["hold", "confirm"], talk: Talk, start: datetime, where: tzinfo, out: Path) -> list[str]:
+def event_command(task: Literal["hold", "confirm"], talk: Talk, start: datetime, where: tzinfo, out: Path,
+                  move: str | None = None) -> list[str]:
+    """Hold a time, or confirm it; `move`, the id of a held event to move instead of adding one."""
     arguments: dict[str, Any] = {"task": task, "title": event_title(talk.title, task), "start": _local(start, where),
                                  "end": _local(start + LENGTH, where), "time_zone": zone_name(where), "out": str(out)}
     if task == "confirm":
         arguments["event_id"] = talk.event_id
-    tools = HOLD_TOOLS if task == "hold" else CONFIRM_TOOLS
+    elif move is not None:
+        arguments["event_id"] = move
+    tools = HOLD_TOOLS if task == "hold" and move is None else CONFIRM_TOOLS
     return ["claude", "-p", f"/{SKILL} {json.dumps(arguments, ensure_ascii=False)}", "--model", MODEL,
             "--allowedTools", ",".join([*tools, f"Edit({_rule(out)})"])]
 
@@ -312,13 +317,25 @@ class Talks:
         rows = self._db.execute(f"SELECT thread FROM talks WHERE state IN ({marks}) ORDER BY thread", states)
         return [talk for row in rows if (talk := self.get(row["thread"])) is not None]
 
-    def booked_in(self, source: str, conversation: str) -> Talk | None:
-        """The latest call of a conversation whose time went to the calendar, or may have: its
-        next message is not offered times again, and may confirm it while it is `held`."""
+    def booked_in(self, source: str, conversation: str, now: datetime) -> Talk | None:
+        """The latest call of a conversation whose time went to the calendar, or may have, and is
+        still to come: its next message is not offered times again, and may confirm it while it
+        is `held`. A call that is over leaves the next round to be offered anew."""
         row = self._db.execute(
             "SELECT thread FROM talks WHERE source = ? AND conversation = ?"
             " AND state IN ('holding', 'held', 'confirmed', 'unsure') ORDER BY thread DESC LIMIT 1",
             (source, conversation)).fetchone()
+        talk = None if row is None else self.get(row["thread"])
+        if talk is None:
+            return None
+        last = datetime.fromisoformat(talk.start) if talk.start else max(talk.times())
+        return talk if last + LENGTH > now else None
+
+    def held_before(self, talk: Talk) -> Talk | None:
+        """An earlier offer of the same conversation still held: a new offer moves its event."""
+        row = self._db.execute(
+            "SELECT thread FROM talks WHERE source = ? AND conversation = ? AND state = 'held' AND thread < ?"
+            " ORDER BY thread DESC LIMIT 1", (talk.source, talk.conversation, talk.thread)).fetchone()
         return None if row is None else self.get(row["thread"])
 
     def _set(self, thread: int, **values: object) -> None:
@@ -347,9 +364,10 @@ def hold(talks: Talks, thread: int, where: tzinfo, out: Path, run: Run) -> Talk:
     if talk is None or not talks.claim(thread):
         raise TimesError(f"thread {thread} has no offer waiting to be held")
     start = talk.times()[0]
+    earlier = talks.held_before(talk)
     out.unlink(missing_ok=True)
     try:
-        run(event_command("hold", talk, start, where, out))
+        run(event_command("hold", talk, start, where, out, move=earlier.event_id if earlier else None))
     except Exception as error:
         # A run that failed may still have added it: never added a second time on its own.
         talks.move(thread, "unsure", f"{UNSURE}: {error}")
@@ -366,6 +384,8 @@ def hold(talks: Talks, thread: int, where: tzinfo, out: Path, run: Run) -> Talk:
         talks.move(thread, "unsure", f"{UNSURE}: the {SKILL} run wrote no report it can be read by")
     else:
         talks.move(thread, "held", event_id=event, start=start.isoformat())
+        if earlier is not None:
+            talks.move(earlier.thread, "replaced", f"moved to the offer of thread {thread}")
     return talks.get(thread) or talk
 
 

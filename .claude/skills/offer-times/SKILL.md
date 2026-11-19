@@ -1,7 +1,7 @@
 ---
 name: offer-times
 description: For a recruiter's request to talk, read the person's free times in Google Calendar and draft the reply offering two or three of them; on the person's yes, add the held event, and when the recruiter picks a time, move it there. Run by `hunt draft-replies`, `hunt offer-times` and `hunt send-reply` as `/offer-times {"task": "offer" | "hold" | "confirm", ...}`.
-argument-hint: '{"task": "offer", "thread": <id>, "source": "email" | "linkedin", "message": "<path>", "posting": "<path>" | null, "career": "<path>", "email_id": "..." | null, "old_draft_id": "..." | null, "time_zone": "America/New_York", "days": [{"day": "2026-11-19", "from": "09:00", "to": "17:00"}], "minutes": 30, "out": "<path>"} or {"task": "hold" | "confirm", "title": "...", "start": "2026-11-19T10:00", "end": "2026-11-19T10:30", "time_zone": "...", "event_id": "..." (confirm only), "out": "<path>"}'
+argument-hint: '{"task": "offer", "thread": <id>, "source": "email" | "linkedin", "message": "<path>", "posting": "<path>" | null, "career": "<path>", "email_id": "..." | null, "old_draft_id": "..." | null, "time_zone": "America/New_York", "days": [{"day": "2026-11-19", "from": "09:00", "to": "17:00"}], "minutes": 30, "out": "<path>"} or {"task": "hold" | "confirm", "title": "...", "start": "2026-11-19T10:00", "end": "2026-11-19T10:30", "time_zone": "...", "event_id": "..." (confirm, and hold moving an earlier event), "out": "<path>"}'
 ---
 
 # Offer times for a call
@@ -70,6 +70,10 @@ the calendar, so nothing else is booked over it: create_event with `summary` set
 `startTime` to `start`, `endTime` to `end` and `timeZone` to `time_zone`. Add no attendees, so
 no invitation goes to anyone. Create it once; never a second time, also when you are not sure
 the first one was made.
+
+When `event_id` is given, the conversation already has a held event from an earlier offer: move
+that one instead of creating another, with update_event, `eventId` set to `event_id` and the
+same `summary`, `startTime`, `endTime` and `timeZone`.
 
 ## task: confirm
 

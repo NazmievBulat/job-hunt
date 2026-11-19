@@ -353,7 +353,8 @@ def _reply(args: argparse.Namespace) -> int:
         print(f"hunt {args.command}: {error}", file=sys.stderr)
         return 1
     if thread.state == "sent":
-        print(f"sent the reply to {thread.sender}")
+        print(f"noted that the reply to {thread.sender} went" if args.command == "skip-reply"
+              else f"sent the reply to {thread.sender}")
         for held in hold_times(threads, ROOT, run=run_draft):
             print(f"held in Google Calendar: {held}")
     elif thread.state == "unsure":
@@ -504,7 +505,8 @@ def main(argv: list[str] | None = None) -> int:
     editing.add_argument("thread", type=int, help="the message's number, as hunt questions prints it")
     editing.add_argument("text")
     editing.set_defaults(run=_reply)
-    skipping = commands.add_parser("skip-reply", help="close a recruiter's message without a reply")
+    skipping = commands.add_parser("skip-reply", help="close a recruiter's message without a reply; for a reply "
+                                     "that may not have gone, note that the person saw it went")
     skipping.add_argument("thread", type=int, help="the message's number, as hunt questions prints it")
     skipping.set_defaults(run=_reply)
     args = parser.parse_args(argv)

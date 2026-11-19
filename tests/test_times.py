@@ -110,8 +110,10 @@ class Calendar:
             if self.hold is not None:
                 out.write_text(json.dumps(self.hold))
                 return
-            self.events["e1"] = {"title": arguments["title"], "start": arguments["start"]}
-            out.write_text(json.dumps({"result": "done", "event_id": "e1"}))
+            # With an event_id it moves that held event; without, it adds one.
+            event = arguments.get("event_id") or f"e{len(self.events) + 1}"
+            self.events[event] = {"title": arguments["title"], "start": arguments["start"]}
+            out.write_text(json.dumps({"result": "done", "event_id": event}))
         elif skill == SKILL and arguments["task"] == "confirm":
             self.events[arguments["event_id"]] = {"title": arguments["title"], "start": arguments["start"]}
             out.write_text(json.dumps({"result": "done", "event_id": arguments["event_id"]}))
@@ -628,3 +630,55 @@ def test_an_offer_on_linkedin_goes_out_with_the_resume_to_upload(
     skill, arguments = _arguments(command)
     assert arguments["resume"] == str(project / "jobs" / "1" / "resume.pdf") and "resume_base64" not in arguments
     assert "mcp__claude-in-chrome__file_upload" in command[command.index("--allowedTools") + 1]
+
+
+def test_a_second_offer_in_a_conversation_moves_its_held_event(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    first, calendar = _held(project, threads, jobs, clock)
+    # None of the times suit: the person asks for new ones on the recruiter's answer.
+    answer, = _saved(threads, jobs, _email(2, text="None of those work, sorry", asks_to_talk=False))
+    draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+    calendar.offer = ["2026-11-24T11:00:00-05:00", "2026-11-25T15:00:00-05:00"]
+    offer_times(threads, project, answer, run=calendar, clock=clock)
+    _send(threads, project, answer, calendar)
+
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+
+    moved = [arguments for skill, arguments in calendar.ran if arguments.get("task") == "hold"][-1]
+    assert moved["event_id"] == "e1"
+    assert calendar.events == {"e1": {"title": "Held: Call with Example Labs about QA Engineer",
+                                      "start": "2026-11-24T11:00"}}
+    talks = Talks(project / "data" / "jobs.db")
+    assert talks.get(first).state == "replaced"
+    assert talks.get(answer).state == "held" and talks.get(answer).event_id == "e1"
+
+
+def test_a_send_the_person_saw_go_is_held(project: Path, threads: Threads, jobs: JobsList, clock: MovableClock) -> None:
+    from job_hunt.replies import skip_reply
+
+    thread = _offered(project, threads, jobs, clock)
+
+    def no_report(command: list[str]) -> None:
+        pass
+
+    send_reply(threads, project, thread, run=no_report, lock=LinkedInLock(project / "data"), sleep=lambda _: None)
+    assert threads.get(thread).state == "unsure"
+    assert skip_reply(threads, thread).state == "sent"
+    calendar = Calendar()
+
+    cli.hold_times(threads, project, run=calendar, clock=clock)
+
+    assert list(calendar.events) == ["e1"]
+
+
+def test_a_call_that_is_over_leaves_the_next_round_to_be_offered(
+    project: Path, threads: Threads, jobs: JobsList, clock: MovableClock
+) -> None:
+    thread, calendar = _held(project, threads, jobs, clock)
+    clock.now = _at(19, 10, 30)
+    _saved(threads, jobs, _email(4, text="Great call! Could we set up a second round?", date="2026-11-19T11:00:00-05:00"))
+
+    draft_replies(threads, project, run=calendar, fetch=no_fetch, clock=clock)
+
+    assert "offer" in calendar.tasks()

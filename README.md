@@ -2,7 +2,9 @@
 
 A job-search assistant that runs on [Claude Code](https://claude.com/claude-code) with your own
 Claude subscription. Each morning, and again at noon and at four, it reads your job alert
-emails and searches LinkedIn and the public job boards of every company it knows itself,
+emails and searches LinkedIn, the public job boards of every company it knows and the public
+job feeds (Remotive, RemoteOK, Arbeitnow, Hacker News' "Who is hiring?"; USAJobs, Adzuna and
+Jooble with a free key of yours) itself,
 scores the new jobs against your career, and sends you one numbered list. You reply with the ones you want ("apply 1 3 4"),
 and it writes a resume for each and applies through your own Chrome. It pauses for what needs
 you: a CAPTCHA, a site sign-in, a question it cannot answer. Every 20 minutes during the day it

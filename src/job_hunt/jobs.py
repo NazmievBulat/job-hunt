@@ -7,8 +7,8 @@ the title and company are the same too. A job moves through the day's states onl
 along `MOVES`; a pause or a failure carries its reason. A worker that fails counts against its
 job (`fail`): the first time the job is tried again, the second time it is `failed`.
 
-Each job keeps its source (`SOURCES`): an alert email, LinkedIn's search or one of the job-board
-systems; each finder run of a source is kept, so the next run of that source reads from when it
+Each job keeps its source (`SOURCES`): an alert email, LinkedIn's search, one of the job-board
+systems or one of the public job feeds; each finder run of a source is kept, so the next run of that source reads from when it
 started.
 
 A job paused for a CAPTCHA or a sign-in is tried again once on its own (`retry`): back to
@@ -58,7 +58,8 @@ TRIES = 2
 # A job still on a CAPTCHA after this many questions is `failed`.
 CAPTCHA_ASKS = 2
 KINDS = ("easy_apply", "company_site")
-SOURCES = ("alert", "linkedin_search", "greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable")
+SOURCES = ("alert", "linkedin_search", "greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable",
+           "remotive", "remoteok", "arbeitnow", "hn_hiring", "usajobs", "adzuna", "jooble")
 Remote = Literal["remote", "hybrid", "on_site"]
 
 # Query parameters that only say where a click came from. Named one by one: a parameter such

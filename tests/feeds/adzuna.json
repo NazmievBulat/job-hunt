@@ -1,0 +1,4 @@
+{"__CLASS__": "Adzuna::API::Response::JobSearchResults", "count": 2, "mean": 130000, "results": [
+  {"__CLASS__": "Adzuna::API::Response::Job", "id": "901", "title": "<strong>QA</strong> <strong>Automation</strong> <strong>Engineer</strong>", "company": {"display_name": "Example Health"}, "location": {"display_name": "Wake County, North Carolina", "area": ["US", "North Carolina", "Wake County"]}, "redirect_url": "https://www.adzuna.com/land/ad/901?se=abc&utm_medium=api&v=XYZ", "description": "Automate the tests of our patient portal…", "created": "2026-11-17T08:00:00Z", "salary_is_predicted": "1"},
+  {"__CLASS__": "Adzuna::API::Response::Job", "id": "902", "title": "Nurse", "company": {"display_name": "Example Health"}, "location": {"display_name": "Raleigh, Wake County"}, "redirect_url": "https://www.adzuna.com/land/ad/902?se=abc", "description": "Care…", "created": "2026-11-17T08:00:00Z"}
+]}

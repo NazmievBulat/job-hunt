@@ -204,3 +204,46 @@ def test_captcha_is_ask_or_skip_and_ask_when_left_out(tmp_path: Path) -> None:
     assert read_settings(_write(tmp_path, {**GOOD, "captcha": "skip"})).captcha == "skip"
     with pytest.raises(SettingsError, match="captcha must be one of ask, skip"):
         read_settings(_write(tmp_path, {**GOOD, "captcha": "solve"}))
+
+
+def test_feed_keys_are_optional_and_never_printed(tmp_path: Path) -> None:
+    assert read_settings(_write(tmp_path, GOOD)).keys == {}
+    keys = {"usajobs": {"email": " ada@example.com ", "key": "uExampleKey"}, "jooble": {"key": "jExampleKey"}}
+
+    settings = read_settings(_write(tmp_path, {**GOOD, "keys": keys}))
+
+    assert settings.keys == {"usajobs": {"email": "ada@example.com", "key": "uExampleKey"},
+                             "jooble": {"key": "jExampleKey"}}
+    assert "ExampleKey" not in repr(settings)
+
+
+@pytest.mark.parametrize(("keys", "said"), [
+    ("uExampleKey", "keys must be an object"),
+    ({"indeed": {"key": "uExampleKey"}}, "keys has 'indeed', which is not one of usajobs, adzuna, jooble"),
+    ({"usajobs": {"key": "uExampleKey"}}, 'keys.usajobs must be {"email": ..., "key": ...}'),
+    ({"adzuna": {"app_id": "uExampleKey", "app_key": " "}}, 'keys.adzuna must be {"app_id": ..., "app_key": ...}'),
+    ({"jooble": "uExampleKey"}, 'keys.jooble must be {"key": ...}'),
+    # A key is sent in a header or an address: a space or a line break in it would end up in an error.
+    ({"usajobs": {"email": "ada@example.com", "key": "uExampleKey\nmore"}}, "keys.usajobs.key has a space"),
+    ({"jooble": {"key": "uExample Key"}}, "keys.jooble.key has a space"),
+])
+def test_feed_keys_must_have_the_fields_of_their_feed(tmp_path: Path, keys: object, said: str) -> None:
+    with pytest.raises(SettingsError) as refused:
+        read_settings(_write(tmp_path, {**GOOD, "keys": keys}))
+    assert said in str(refused.value)
+    # The keys are never repeated in an error.
+    assert "uExample" not in str(refused.value)
+
+
+def test_hunt_settings_keeps_the_feed_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                          capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    keys = {"jooble": {"key": "jExampleKey"}}
+    (tmp_path / "settings.json").write_text(json.dumps({**GOOD, "keys": keys}))
+
+    assert cli.main(["settings", json.dumps({**GOOD, "titles": ["SDET"]})]) == 0
+
+    assert read_settings(tmp_path / "settings.json").keys == keys
+    assert "jExampleKey" not in capsys.readouterr().out

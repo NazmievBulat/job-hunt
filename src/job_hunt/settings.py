@@ -11,7 +11,9 @@
      "linkedin_notes_daily": 15,
      "captcha": "ask",
      "pushover": {"token": "...", "user": "..."},
-     "companies": ["https://jobs.lever.co/example"]}
+     "companies": ["https://jobs.lever.co/example"],
+     "keys": {"usajobs": {"email": "...", "key": "..."}, "adzuna": {"app_id": "...", "app_key": "..."},
+              "jooble": {"key": "..."}}}
 
 Areas are names as a person says them, never distances; the finder's skill says which of them
 a job is in. `remote` is `include` (remote jobs too), `exclude` (no remote jobs) or `only`.
@@ -30,6 +32,11 @@ the public job boards (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Worka
 company in `data/companies.db`, which fills itself from Common Crawl. `companies`, which may be
 left out, adds companies by hand: each the address of the company's board on one of those
 systems.
+
+It reads the public job feeds too (`feeds.py`): Remotive, RemoteOK, Arbeitnow and the monthly
+Hacker News "Who is hiring?" thread need no key; Remotive and RemoteOK list only remote jobs, so
+they are skipped when `remote` is `exclude`. USAJobs, Adzuna and Jooble need a free key of the
+person's own, under `keys`; a feed without one is skipped with one line. Keys are never printed.
 """
 
 from __future__ import annotations
@@ -46,9 +53,11 @@ Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
 OPTIONAL = ("summary_hour", "working_hours", "time_zone", "pushover", "linkedin_notes_daily", "companies",
-            "captcha")
+            "keys", "captcha")
 Captcha = Literal["ask", "skip"]
 CAPTCHA: tuple[Captcha, ...] = ("ask", "skip")
+# The feeds that need a key, and the fields of each one's key.
+FEED_KEYS = {"usajobs": ("email", "key"), "adzuna": ("app_id", "app_key"), "jooble": ("key",)}
 SUMMARY_HOUR = 18
 WORKING_HOURS = (9, 17)
 NOTES_DAILY = 15
@@ -78,6 +87,8 @@ class Settings:
     linkedin_notes_daily: int = NOTES_DAILY
     companies: list[str] = field(default_factory=list)
     captcha: Captcha = "ask"
+    # Each keyed feed's key, by the feed's name (`FEED_KEYS`).
+    keys: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
 
 def _names(data: dict[str, Any], field: str) -> list[str]:
@@ -143,6 +154,28 @@ def _companies(data: dict[str, Any]) -> list[str]:
     return [link.strip() for link in links]
 
 
+def _keys(data: dict[str, Any]) -> dict[str, dict[str, str]]:
+    keys = data.get("keys")
+    if keys is None:
+        return {}
+    if not isinstance(keys, dict):
+        raise SettingsError(f"keys must be an object with a key for any of {', '.join(FEED_KEYS)}, or left out")
+    # The messages name the fields only: the keys are never repeated.
+    for name, key in keys.items():
+        if name not in FEED_KEYS:
+            raise SettingsError(f"keys has {name!r}, which is not one of {', '.join(FEED_KEYS)}")
+        wanted = FEED_KEYS[name]
+        if (not isinstance(key, dict) or set(key) != set(wanted)
+                or not all(isinstance(value, str) and value.strip() for value in key.values())):
+            shape = ", ".join(f'"{each}": ...' for each in wanted)
+            raise SettingsError(f"keys.{name} must be {{{shape}}}, all filled in, or left out")
+        for each, value in key.items():
+            # It is sent in a header or an address, where a space or a line break would fail and be repeated.
+            if any(letter.isspace() or not letter.isprintable() for letter in value.strip()):
+                raise SettingsError(f"keys.{name}.{each} has a space, a line break or a control letter in it")
+    return {name: {each: value.strip() for each, value in key.items()} for name, key in keys.items()}
+
+
 def read_settings(path: Path) -> Settings:
     if not path.exists():
         raise SettingsError(f"{path} is missing: run /setup to make it")
@@ -190,4 +223,5 @@ def read_settings(path: Path) -> Settings:
         linkedin_notes_daily=notes_daily,
         companies=_companies(data),
         captcha=captcha,
+        keys=_keys(data),
     )

@@ -324,6 +324,10 @@ class JobsList:
             raise PickError("no list has been shown yet: run hunt list")
         return {row["number"]: row["job"] for row in self._db.execute("SELECT number, job FROM shown")}
 
+    def last_list(self) -> dict[int, int]:
+        """The numbers of the last list shown and their jobs; empty when none was shown."""
+        return {row["number"]: row["job"] for row in self._db.execute("SELECT number, job FROM shown")}
+
     def numbers_above(self, score: int) -> list[int]:
         """The numbers of the last list whose jobs still wait for a pick and score more than `score`."""
         return self._above(self._shown(), score)

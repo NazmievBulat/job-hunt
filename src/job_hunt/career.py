@@ -8,10 +8,13 @@ employer, title and location. The bullets of all of them are kept as material to
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
 import tempfile
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,6 +23,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from resume_kit.contracts.base import CareerDate, dates_in_order
 from resume_kit.contracts.form_answers import ReadyAnswers
+from resume_kit.contracts.printable import as_shown, unprintable_by_location
 from resume_kit.contracts.resume import Person
 
 # The standing answers /setup asks once; the other ready answers are the settings' to give.
@@ -184,6 +188,15 @@ def _unknown(entry: dict[str, Any], known: set[str], named: str, problems: list[
                         f"(it has {', '.join(sorted(known))})")
 
 
+def _printable(value: Any, named: str, problems: list[str]) -> None:
+    """A text the career gives every resume as it is, so one the PDF cannot print is refused: the
+    resume writer cannot change it."""
+    for location, characters in unprintable_by_location(value):
+        where = ".".join(map(str, location))
+        problems.append(f"{named}{f'.{where}' if where else ''}: the resume PDF cannot print "
+                        f"{', '.join(map(as_shown, characters))}")
+
+
 def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Career:
     """The career the read-resume skill wrote from a resume. The jobs get the ids an export's
     jobs get, so the same resume read again keeps them; the form answers of the career it
@@ -199,6 +212,7 @@ def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Car
         problems += [f"person.{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
     if not _text(person.get("email")):
         problems.append("person has no email: forms and the resume need one")
+    _printable(person, "person", problems)
     entries = draft.get("jobs") if isinstance(draft.get("jobs"), list) else []
     if not entries:
         problems.append("the draft has no jobs: a resume prints at least one")
@@ -215,6 +229,8 @@ def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Car
         if not title:
             problems.append(f"{named} has no title")
         start, end = _dates(entry, named, problems, start_needed=True)
+        for field_name, words in (("company", "the employer"), ("title", "the title"), ("location", "the place")):
+            _printable(_text(entry.get(field_name)), f"{named}: {words}", problems)
         jobs.append(Job(id="", title=title, company=company, location=_text(entry.get("location")) or None,
                         start_date=start, end_date=end, material=_texts(entry.get("material"))))
     education: list[School] = []
@@ -227,9 +243,15 @@ def career_from_resume(draft: dict[str, Any], kept: Career | None = None) -> Car
         if not _text(entry.get("school")) or not _text(entry.get("degree")):
             problems.append(f"{named} needs both its school and its degree")
         start, end = _dates(entry, named, problems, start_needed=False)
+        for field_name, words in (("school", "the school"), ("degree", "the degree"),
+                                  ("field_of_study", "the field of study")):
+            _printable(_text(entry.get(field_name)), f"{named}: {words}", problems)
         education.append(School(school=_text(entry.get("school")), degree=_text(entry.get("degree")),
                                 field_of_study=_text(entry.get("field_of_study")) or None,
                                 start_date=start, end_date=end))
+    for number, certification in enumerate(_texts(draft.get("certifications")), start=1):
+        _printable(certification, f"certification {number} ({json.dumps(certification, ensure_ascii=False)})",
+                   problems)
     if problems:
         raise CareerError("; ".join(problems))
     # Ids from the job alone, never its place in the resume: read again, a job keeps its id.
@@ -296,13 +318,38 @@ def resume_text(path: Path) -> str:
         raise CareerError(f"{path.name} could not be read ({type(error).__name__}): save it again, "
                           "or paste its text") from None
     # A name and contacts are often in the page header, so it comes first.
-    lines = [paragraph.text for section in document.sections for paragraph in section.header.paragraphs]
-    lines += [cell.text for section in document.sections for table in section.header.tables
-              for row in table.rows for cell in row.cells]
-    lines += [paragraph.text for paragraph in document.paragraphs]
-    lines += [cell.text for table in document.tables for row in table.rows for cell in row.cells]
-    lines += [paragraph.text for section in document.sections for paragraph in section.footer.paragraphs]
+    lines = [line for part in _headers(document, "header") for line in _lines(part)]
+    lines += _lines(document)
+    lines += [line for part in _headers(document, "footer") for line in _lines(part)]
     return "\n".join(line for line in lines if line.strip())
+
+
+def _headers(document: Any, kind: str) -> Iterator[Any]:
+    """Each header (or footer) the document prints: the first page's and the even pages' too when
+    a section has them, and one linked to the section before only once, where it is defined."""
+    even = document.settings.odd_and_even_pages_header_footer
+    for number, section in enumerate(document.sections):
+        parts = [getattr(section, f"first_page_{kind}")] if section.different_first_page_header_footer else []
+        parts.append(getattr(section, kind))
+        if even:
+            parts.append(getattr(section, f"even_page_{kind}"))
+        yield from (part for part in parts if number == 0 or not part.is_linked_to_previous)
+
+
+def _lines(part: Any) -> list[str]:
+    """The paragraphs of a document, header or footer, then its table cells, one a line."""
+    return ([paragraph.text for paragraph in part.paragraphs]
+            + [cell.text for table in part.tables for row in table.rows for cell in row.cells])
+
+
+@contextlib.contextmanager
+def career_lock(path: Path) -> Iterator[None]:
+    """Held from reading the career to writing it, by every writer: two at once would each write
+    the career without the other's change. The folder is made, as the first career saved needs."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with (path.parent / "career.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 def write_career(career: Career, path: Path) -> None:

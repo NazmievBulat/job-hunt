@@ -167,8 +167,8 @@ def test_the_command_shows_what_was_read_and_saves_only_when_told(
 
     assert main(["career-from-resume", str(written)]) == 0
     shown = capsys.readouterr().out
-    assert "initech-inc-2021-01: Lead SDET at Initech, Inc., 2021-01 to now (2 lines of what was done)" in shown
-    assert "acme-2018-03: QA Engineer at Acme, Remote, 2018-03 to 2020-12 (1 line of what was done)" in shown
+    assert "initech-inc-2021-01: Lead SDET at Initech, Inc., 2021-01 to now\n" in shown
+    assert "acme-2018-03: QA Engineer at Acme, Remote, 2018-03 to 2020-12\n" in shown
     assert "Bachelor's degree, Physics at Example State University" in shown
     assert "not saved" in shown
     assert not career_file.exists()
@@ -347,3 +347,139 @@ def test_damaged_form_answers_of_the_old_career_never_break_saving_the_standing_
     assert main(["form-answers", '{"authorized": "yes"}']) == 0
 
     assert read_career(career_file).form_answers["ready"] == {"authorized": "yes"}
+
+
+@pytest.mark.parametrize(("changes", "named"), [
+    ({"jobs": [{**DRAFT["jobs"][0], "company": "Acme 🚀"}, DRAFT["jobs"][1]]}, r"job 1 .*: the employer"),
+    ({"jobs": [{**DRAFT["jobs"][0], "title": "QA 🚀"}, DRAFT["jobs"][1]]}, r"job 1 .*: the title"),
+    ({"jobs": [{**DRAFT["jobs"][0], "location": "Remote 🚀"}, DRAFT["jobs"][1]]}, r"job 1 .*: the place"),
+    ({"education": [{**DRAFT["education"][0], "school": "Example 🚀"}]}, r"school 1 .*: the school"),
+    ({"education": [{**DRAFT["education"][0], "degree": "BS 🚀"}]}, r"school 1 .*: the degree"),
+    ({"education": [{**DRAFT["education"][0], "field_of_study": "Physics 🚀"}]}, r"school 1 .*: the field"),
+    ({"certifications": ["ISTQB 🚀"]}, r"certification 1"),
+    ({"person": {**DRAFT["person"], "name": "Ada 🚀"}}, r"person\.name"),
+])
+def test_a_character_the_resume_pdf_cannot_print_is_refused_where_it_is(changes: dict, named: str) -> None:
+    with pytest.raises(CareerError, match=named + r".*cannot print.*🚀"):
+        career_from_resume(draft(**changes))
+
+
+def test_a_draft_the_resume_pdf_cannot_print_leaves_the_career_as_it_was(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    career_file = tmp_path / "career.json"
+    write_career(career_from_resume(DRAFT), career_file)
+    before = career_file.read_text()
+    monkeypatch.setattr(cli, "CAREER", career_file)
+    written = tmp_path / "career-draft.json"
+    written.write_text(json.dumps(draft(jobs=[{**DRAFT["jobs"][0], "company": "Acme 🚀"}])))
+
+    assert main(["career-from-resume", str(written), "--save"]) == 1
+    assert "cannot print" in capsys.readouterr().err
+    assert career_file.read_text() == before
+
+
+def test_each_line_of_what_was_done_is_shown_under_its_job(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from job_hunt import cli
+
+    monkeypatch.setattr(cli, "CAREER", tmp_path / "career.json")
+    written = tmp_path / "career-draft.json"
+    written.write_text(json.dumps(DRAFT))
+
+    assert main(["career-from-resume", str(written)]) == 0
+    shown = capsys.readouterr().out.splitlines()
+
+    at = shown.index("  initech-inc-2021-01: Lead SDET at Initech, Inc., 2021-01 to now")
+    assert shown[at + 1:at + 3] == ["    - Built the test framework.", "    - Ran CI."]
+    at = shown.index("  acme-2018-03: QA Engineer at Acme, Remote, 2018-03 to 2020-12")
+    assert shown[at + 1] == "    - Wrote the first tests."
+
+
+@pytest.mark.parametrize("command", [
+    ["career-from-resume", "DRAFT", "--save"],
+    ["form-answers", '{"authorized": "yes"}'],
+])
+def test_a_career_writer_waits_for_the_career_lock_and_keeps_an_answer_saved_meanwhile(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: list[str]) -> None:
+    import fcntl
+    import threading
+
+    from job_hunt import cli
+
+    career_file = tmp_path / "career.json"
+    write_career(career_from_resume(DRAFT), career_file)
+    monkeypatch.setattr(cli, "CAREER", career_file)
+    written = tmp_path / "career-draft.json"
+    written.write_text(json.dumps(DRAFT))
+    command = [str(written) if part == "DRAFT" else part for part in command]
+
+    with (tmp_path / "career.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        writer = threading.Thread(target=main, args=(command,))
+        writer.start()
+        writer.join(0.5)
+        assert writer.is_alive(), "the command wrote the career without the lock"
+        # What hunt answer does while it holds the lock.
+        career = read_career(career_file)
+        career.form_answers = {**career.form_answers,
+                               "saved": [{"question": "Years of Python?", "answer": "6", "company": "Acme"}]}
+        write_career(career, career_file)
+    writer.join(10)
+
+    assert not writer.is_alive()
+    assert read_career(career_file).form_answers["saved"] == [
+        {"question": "Years of Python?", "answer": "6", "company": "Acme"}]
+
+
+def test_the_contacts_in_a_word_first_page_header_are_read_first(tmp_path: Path) -> None:
+    from docx import Document
+    from docx.shared import Inches
+
+    from job_hunt.career import resume_text
+
+    document = Document()
+    section = document.sections[0]
+    section.different_first_page_header_footer = True
+    section.first_page_header.paragraphs[0].text = "Ada Example · ada@example.com"
+    section.first_page_header.add_table(rows=1, cols=1, width=Inches(6)).rows[0].cells[0].text = "+1 555 010 0000"
+    section.first_page_footer.paragraphs[0].text = "Durham, NC"
+    document.add_paragraph("QA Engineer, Acme")
+    document.save(tmp_path / "resume.docx")
+
+    text = resume_text(tmp_path / "resume.docx").splitlines()
+
+    assert text[:2] == ["Ada Example · ada@example.com", "+1 555 010 0000"]
+    assert "Durham, NC" in text and "QA Engineer, Acme" in text
+
+
+def test_the_even_page_header_is_read_when_the_document_uses_one(tmp_path: Path) -> None:
+    from docx import Document
+
+    from job_hunt.career import resume_text
+
+    document = Document()
+    document.settings.odd_and_even_pages_header_footer = True
+    document.sections[0].header.paragraphs[0].text = "Ada Example"
+    document.sections[0].even_page_header.paragraphs[0].text = "ada@example.com"
+    document.add_paragraph("QA Engineer, Acme")
+    document.save(tmp_path / "resume.docx")
+
+    assert resume_text(tmp_path / "resume.docx").splitlines()[:2] == ["Ada Example", "ada@example.com"]
+
+
+def test_a_header_linked_to_the_section_before_is_read_once(tmp_path: Path) -> None:
+    from docx import Document
+    from docx.enum.section import WD_SECTION
+
+    from job_hunt.career import resume_text
+
+    document = Document()
+    document.sections[0].header.paragraphs[0].text = "Ada Example · ada@example.com"
+    document.add_paragraph("QA Engineer, Acme")
+    document.add_section(WD_SECTION.NEW_PAGE)
+    document.add_paragraph("Example State University")
+    document.save(tmp_path / "resume.docx")
+
+    assert resume_text(tmp_path / "resume.docx").splitlines().count("Ada Example · ada@example.com") == 1

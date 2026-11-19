@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from job_hunt.career import read_career, write_career
+from job_hunt.career import career_lock, read_career, write_career
 from job_hunt.jobs import Job, JobsList, State
 from job_hunt.linkedin_lock import LinkedInLock
 from resume_kit.contracts.form_answers import asks_self_identification
@@ -427,8 +427,7 @@ def answer(jobs: JobsList, root: Path, job: int, text: str) -> Job:
     if not (text := " ".join(text.split())):
         raise AnswerError("the answer is empty")
     # One answer at a time: two read at once would each write the career without the other's.
-    with (root / "data" / "career.lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with career_lock(_career(root)):
         career = read_career(_career(root))
         saved = [entry for entry in career.form_answers.get("saved") or []
                  if entry.get("question", "").casefold() != report.question.casefold()]

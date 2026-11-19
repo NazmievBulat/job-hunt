@@ -18,8 +18,8 @@ from job_hunt.apply import (
     LINKEDIN_SKILL, RESUME_SKILL, SITE_SKILL, AnswerError, ApplyError, answer, apply, applied, resume_job,
 )
 from job_hunt.career import (
-    STANDING, Career, CareerError, career_from_export, career_from_resume, read_career, resume_text,
-    with_ready_answers, write_career,
+    STANDING, Career, CareerError, career_from_export, career_from_resume, career_lock, read_career,
+    resume_text, with_ready_answers, write_career,
 )
 from job_hunt.doctor import Machine, doctor, remote_desktop_ready
 from job_hunt.finder import FinderError, fetch_page, find, run_claude
@@ -58,8 +58,9 @@ def _shown(career: Career) -> list[str]:
     lines.append(f"Jobs ({len(career.jobs)}):")
     for job in career.jobs:
         where = f", {job.location}" if job.location else ""
-        lines.append(f"  {job.id}: {job.title} at {job.company}{where}, {job.start_date} to {job.end_date or 'now'}"
-                     f" ({len(job.material)} {'line' if len(job.material) == 1 else 'lines'} of what was done)")
+        lines.append(f"  {job.id}: {job.title} at {job.company}{where}, {job.start_date} to {job.end_date or 'now'}")
+        # Every later resume is written from these, so each is shown to be checked.
+        lines += [f"    - {line}" for line in job.material]
     lines.append(f"Schools ({len(career.education)}):")
     for school in career.education:
         degree = f"{school.degree}, {school.field_of_study}" if school.field_of_study else school.degree
@@ -94,17 +95,19 @@ def _kept_career() -> Career | None:
 def _career_from_resume(args: argparse.Namespace) -> int:
     try:
         draft = json.loads(Path(args.draft).read_text())
-        career = career_from_resume(draft, kept=_kept_career())
+        if not args.save:
+            print("\n".join(_shown(career_from_resume(draft, kept=_kept_career()))))
+            print("not saved yet: run it again with --save once it is right")
+            return 0
+        # The form answers kept are read under the lock, so one hunt answer saves meanwhile stays.
+        with career_lock(CAREER):
+            career = career_from_resume(draft, kept=_kept_career())
+            write_career(career, CAREER)
     except (OSError, json.JSONDecodeError, CareerError) as error:
         print(f"hunt career-from-resume: {error}", file=sys.stderr)
         return 1
     print("\n".join(_shown(career)))
-    if args.save:
-        CAREER.parent.mkdir(parents=True, exist_ok=True)
-        write_career(career, CAREER)
-        print(f"saved to {CAREER}")
-    else:
-        print("not saved yet: run it again with --save once it is right")
+    print(f"saved to {CAREER}")
     return 0
 
 
@@ -113,11 +116,12 @@ def _form_answers(args: argparse.Namespace) -> int:
         answers = json.loads(args.answers)
         if not isinstance(answers, dict):
             raise CareerError("give the answers as one JSON object")
-        career = with_ready_answers(read_career(CAREER), answers)
+        with career_lock(CAREER):
+            career = with_ready_answers(read_career(CAREER), answers)
+            write_career(career, CAREER)
     except (OSError, json.JSONDecodeError, CareerError) as error:
         print(f"hunt form-answers: {error}", file=sys.stderr)
         return 1
-    write_career(career, CAREER)
     ready = career.form_answers["ready"]
     print("standing answers: " + ", ".join(f"{key} {ready[key]}" for key in STANDING if key in ready))
     return 0

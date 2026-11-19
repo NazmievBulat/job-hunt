@@ -1,0 +1,49 @@
+[
+  {
+    "id": "aaaa1111-0000-4000-8000-000000000001",
+    "text": "Senior QA Automation Engineer",
+    "categories": {
+      "commitment": "Full-time",
+      "location": "San Francisco, CA",
+      "team": "Quality",
+      "allLocations": [
+        "San Francisco, CA",
+        "Remote"
+      ]
+    },
+    "workplaceType": "hybrid",
+    "country": "US",
+    "createdAt": 1795000000000,
+    "hostedUrl": "https://jobs.lever.co/globex/aaaa1111-0000-4000-8000-000000000001",
+    "applyUrl": "https://jobs.lever.co/globex/aaaa1111-0000-4000-8000-000000000001/apply",
+    "descriptionPlain": "Globex Example tests rockets.\n",
+    "description": "<div>Globex Example tests rockets.</div>",
+    "lists": [
+      {
+        "text": "What you will do",
+        "content": "<li>Automate the launch checks.</li><li>Review test plans.</li>"
+      }
+    ],
+    "additionalPlain": "We hire everywhere in the Bay Area.",
+    "additional": "<div>We hire everywhere in the Bay Area.</div>"
+  },
+  {
+    "id": "aaaa1111-0000-4000-8000-000000000002",
+    "text": "Office Manager",
+    "categories": {
+      "commitment": "Full-time",
+      "location": "San Francisco, CA",
+      "team": "Operations"
+    },
+    "workplaceType": "onsite",
+    "country": "US",
+    "createdAt": 1795000000000,
+    "hostedUrl": "https://jobs.lever.co/globex/aaaa1111-0000-4000-8000-000000000002",
+    "applyUrl": "https://jobs.lever.co/globex/aaaa1111-0000-4000-8000-000000000002/apply",
+    "descriptionPlain": "Run the office.",
+    "description": "<div>Run the office.</div>",
+    "lists": [],
+    "additionalPlain": "",
+    "additional": ""
+  }
+]

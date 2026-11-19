@@ -1,4 +1,6 @@
-"""`hunt timer on|off`, `hunt timer`: `hunt morning` every day at the settings' morning hour.
+"""`hunt timer on|off`, `hunt timer`: `hunt morning` every day at the settings' morning hour,
+and again at 12:00 and at 16:00 when those come after it (`hours`), so a day's new jobs are
+found three times; `hunt morning` itself tells the day's first run from the later ones.
 
 On Linux a systemd user timer (`~/.config/systemd/user/job-hunt-morning.{service,timer}`), on
 macOS a launchd agent (`~/Library/LaunchAgents/com.job-hunt.morning.plist`). Both run the
@@ -7,6 +9,10 @@ and `claude` are found. The session `hunt morning` starts must outlive the run: 
 kills only its own process (`KillMode=process`), and the agent leaves its process group alone.
 A missed morning (the computer asleep) runs when it wakes. The hour is written when the timer
 is turned on; after the settings' hour changes, `hunt timer on` again.
+
+Next to it, `hunt watch` every 20 minutes from the morning hour to the summary hour
+(`job-hunt-watch`, `com.job-hunt.watch`): a recruiter gets an answer within the hour. A missed
+watch is not run on waking; the next one reads from where the last ended.
 """
 
 from __future__ import annotations
@@ -19,6 +25,10 @@ from pathlib import Path
 
 UNIT = "job-hunt-morning"
 LABEL = "com.job-hunt.morning"
+LATER = (12, 16)
+WATCH_UNIT = "job-hunt-watch"
+WATCH_LABEL = "com.job-hunt.watch"
+WATCH_MINUTES = (0, 20, 40)
 
 Run = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
@@ -42,6 +52,16 @@ def _word(value: object) -> str:
     return _quoted(value).replace("$", "$$")
 
 
+def hours(morning: int) -> list[int]:
+    """The hours of the day's runs: the morning, then the later hours after it."""
+    return [morning, *(hour for hour in LATER if hour > morning)]
+
+
+def _said(runs: list[int]) -> str:
+    later = [f"{each:02d}:00" for each in runs[1:]]
+    return f"every day at {runs[0]:02d}:00" + (f", then at {' and '.join(later)}" if later else "")
+
+
 def systemd_units(root: Path, hour: int, uv: str, path: str) -> tuple[str, str]:
     service = f"""[Unit]
 Description=The job hunt's morning run
@@ -54,11 +74,10 @@ ExecStart={_word(uv)} run --project {_word(root)} hunt morning
 KillMode=process
 """
     timer = f"""[Unit]
-Description=The job hunt's morning run at {hour:02d}:00
+Description=The job hunt's runs, {_said(hours(hour))}
 
 [Timer]
-OnCalendar=*-*-* {hour:02d}:00:00
-Persistent=true
+{"".join(f"OnCalendar=*-*-* {each:02d}:00:00{chr(10)}" for each in hours(hour))}Persistent=true
 Unit={UNIT}.service
 
 [Install]
@@ -67,25 +86,58 @@ WantedBy=timers.target
     return service, timer
 
 
-def launchd_plist(root: Path, hour: int, uv: str, path: str) -> str:
+def watch_units(root: Path, hour: int, until: int, uv: str, path: str) -> tuple[str, str]:
+    service = f"""[Unit]
+Description=The job hunt's watch for recruiters' messages
+
+[Service]
+Type=oneshot
+WorkingDirectory={_literal(root)}
+Environment={_quoted(f"PATH={path}")}
+ExecStart={_word(uv)} run --project {_word(root)} hunt watch
+KillMode=process
+"""
+    timer = f"""[Unit]
+Description=The job hunt's watch, every 20 minutes from {hour:02d}:00 to {until:02d}:00
+
+[Timer]
+OnCalendar=*-*-* {hour:02d}..{until - 1:02d}:00/20:00
+Unit={WATCH_UNIT}.service
+
+[Install]
+WantedBy=timers.target
+"""
+    return service, timer
+
+
+def _plist(label: str, command: str, when: object, root: Path, uv: str, path: str) -> str:
     return plistlib.dumps({
-        "Label": LABEL,
-        "ProgramArguments": [uv, "run", "--project", str(root), "hunt", "morning"],
+        "Label": label,
+        "ProgramArguments": [uv, "run", "--project", str(root), "hunt", command],
         "WorkingDirectory": str(root),
         "EnvironmentVariables": {"PATH": path},
-        "StartCalendarInterval": {"Hour": hour, "Minute": 0},
+        "StartCalendarInterval": when,
         "AbandonProcessGroup": True,
-        "StandardOutPath": str(root / "data" / "morning.out"),
-        "StandardErrorPath": str(root / "data" / "morning.out"),
+        "StandardOutPath": str(root / "data" / f"{command}.out"),
+        "StandardErrorPath": str(root / "data" / f"{command}.out"),
     }).decode()
+
+
+def launchd_plist(root: Path, hour: int, uv: str, path: str) -> str:
+    return _plist(LABEL, "morning", [{"Hour": each, "Minute": 0} for each in hours(hour)], root, uv, path)
+
+
+def watch_plist(root: Path, hour: int, until: int, uv: str, path: str) -> str:
+    when = [{"Hour": each, "Minute": minute} for each in range(hour, until) for minute in WATCH_MINUTES]
+    return _plist(WATCH_LABEL, "watch", when, root, uv, path)
 
 
 def _units(home: Path) -> Path:
     return home / ".config" / "systemd" / "user"
 
 
-def _agent(home: Path) -> Path:
-    return home / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+def _agent(home: Path, label: str = LABEL) -> Path:
+    return home / "Library" / "LaunchAgents" / f"{label}.plist"
 
 
 def _must(run: Run, command: list[str]) -> None:
@@ -95,19 +147,26 @@ def _must(run: Run, command: list[str]) -> None:
         raise TimerError(f"{' '.join(command)} failed: {said}")
 
 
-def _written_hour(system: str, home: Path) -> int | None:
+def _written_hours(system: str, home: Path) -> list[int] | None:
+    """The hours of the runs written, the morning's first; None when no timer is written."""
     if system == "Linux":
         timer = _units(home) / f"{UNIT}.timer"
-        found = re.search(r"^OnCalendar=\*-\*-\* (\d\d):", timer.read_text(), re.M) if timer.exists() else None
-        return int(found.group(1)) if found else None
+        found = re.findall(r"^OnCalendar=\*-\*-\* (\d\d):", timer.read_text(), re.M) if timer.exists() else []
+        return [int(hour) for hour in found] or None
     agent = _agent(home)
-    return plistlib.loads(agent.read_bytes())["StartCalendarInterval"]["Hour"] if agent.exists() else None
+    if not agent.exists():
+        return None
+    runs = plistlib.loads(agent.read_bytes())["StartCalendarInterval"]
+    # An agent written before the later runs has one run, not a list of them.
+    return [run["Hour"] for run in (runs if isinstance(runs, list) else [runs])] or None
 
 
 def timer(
-    action: str, system: str, home: Path, root: Path, hour: int, *, run: Run, uv: str, path: str, uid: int = 0
+    action: str, system: str, home: Path, root: Path, hour: int, *, run: Run, uv: str, path: str, uid: int = 0,
+    watch_until: int | None = None,
 ) -> str:
-    """Turn the timer on or off, or say its state ("status"); return what to print."""
+    """Turn the timer on or off, or say its state ("status"); return what to print. With
+    `watch_until`, the summary hour, `on` turns the watch on too; `off` turns both off."""
     if system not in ("Linux", "Darwin"):
         raise TimerError(f"the morning timer runs on Linux or macOS, not {system}")
     if action == "status":
@@ -119,13 +178,21 @@ def timer(
             service, timer_unit = systemd_units(root, hour, uv, path)
             (units / f"{UNIT}.service").write_text(service)
             (units / f"{UNIT}.timer").write_text(timer_unit)
+            if watch_until is not None:
+                service, timer_unit = watch_units(root, hour, watch_until, uv, path)
+                (units / f"{WATCH_UNIT}.service").write_text(service)
+                (units / f"{WATCH_UNIT}.timer").write_text(timer_unit)
             _must(run, ["systemctl", "--user", "daemon-reload"])
             _must(run, ["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"])
-        elif (units / f"{UNIT}.timer").exists():
-            # The units stay while systemd refuses: removed, nothing would show it still runs.
-            _must(run, ["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
-            for name in (f"{UNIT}.service", f"{UNIT}.timer"):
-                (units / name).unlink(missing_ok=True)
+            if watch_until is not None:
+                _must(run, ["systemctl", "--user", "enable", "--now", f"{WATCH_UNIT}.timer"])
+        else:
+            for unit in (UNIT, WATCH_UNIT):
+                if (units / f"{unit}.timer").exists():
+                    # The units stay while systemd refuses: removed, nothing would show it still runs.
+                    _must(run, ["systemctl", "--user", "disable", "--now", f"{unit}.timer"])
+                    for name in (f"{unit}.service", f"{unit}.timer"):
+                        (units / name).unlink(missing_ok=True)
     else:
         agent = _agent(home)
         # An agent loaded before is unloaded first; one that was not is no error.
@@ -140,18 +207,37 @@ def timer(
             _must(run, ["launchctl", "bootstrap", f"gui/{uid}", str(agent)])
         else:
             agent.unlink(missing_ok=True)
-    return f"the morning run is on, every day at {hour:02d}:00" if action == "on" else "the morning run is off"
+        watching = _agent(home, WATCH_LABEL)
+        if watching.exists() or (action == "on" and watch_until is not None):
+            unloaded = run(["launchctl", "bootout", f"gui/{uid}/{WATCH_LABEL}"])
+            said = f"{unloaded.stderr} {unloaded.stdout}"
+            # Kept while launchd refuses: removed, nothing would show it still runs.
+            if unloaded.returncode != 0 and action == "off" and not any(
+                    gone in said for gone in ("No such process", "Could not find")):
+                raise TimerError(f"launchctl bootout failed: {said.strip().splitlines()[-1] if said.strip() else 'no message'}")
+            if action == "on" and watch_until is not None:
+                watching.write_text(watch_plist(root, hour, watch_until, uv, path))
+                _must(run, ["launchctl", "bootstrap", f"gui/{uid}", str(watching)])
+            else:
+                watching.unlink(missing_ok=True)
+    if action == "off":
+        return "the morning run is off"
+    said = f"the morning run is on, {_said(hours(hour))}"
+    if watch_until is not None:
+        said += f"; recruiters' messages are watched every 20 minutes from {hour:02d}:00 to {watch_until:02d}:00"
+    return said
 
 
 def _status(system: str, home: Path, hour: int, run: Run, uid: int) -> str:
-    written = _written_hour(system, home)
+    written = _written_hours(system, home)
     if written is None:
         return "the morning run is off (hunt timer on turns it on)"
     if system == "Linux":
         active = run(["systemctl", "--user", "is-active", f"{UNIT}.timer"]).stdout.strip() == "active"
     else:
         active = run(["launchctl", "print", f"gui/{uid}/{LABEL}"]).returncode == 0
-    said = f"the morning run is {'on' if active else 'written but not running'}, every day at {written:02d}:00"
-    if written != hour or not active:
-        said += f"; hunt timer on sets it to the settings' {hour:02d}:00 and turns it on"
+    said = f"the morning run is {'on' if active else 'written but not running'}, {_said(written)}"
+    # A timer written before the later runs, or at another hour, is written again.
+    if written != hours(hour) or not active:
+        said += f"; hunt timer on sets it to {_said(hours(hour))} and turns it on"
     return said

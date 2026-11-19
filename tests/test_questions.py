@@ -167,11 +167,43 @@ def test_an_approved_application_left_unfinished_waits(jobs: JobsList, tmp_path:
     assert "Unfinished applications (1): run hunt apply" in questions(jobs, tmp_path / "data")
 
 
-def test_an_easy_apply_resume_waiting_for_the_linkedin_worker_does_not(jobs: JobsList, tmp_path: Path) -> None:
-    job = jobs.add(_found(1), kind="easy_apply")
+@pytest.mark.parametrize("kind", ["company_site", "easy_apply"])
+def test_an_approved_application_with_its_resume_ready_waits(jobs: JobsList, tmp_path: Path, kind: str) -> None:
+    # hunt apply applies to both kinds, the Easy Apply ones through the LinkedIn worker.
+    job = jobs.add(_found(1), kind=kind)
     assert job is not None
     jobs.score(job, 7, "A reason.")
     jobs.move(job, "picked")
     jobs.move(job, "resume_ready")
 
-    assert not anything_waiting(jobs, tmp_path / "data")
+    assert anything_waiting(jobs, tmp_path / "data")
+    assert "Unfinished applications (1): run hunt apply" in questions(jobs, tmp_path / "data")
+
+
+def test_a_pause_that_needs_chrome_carries_the_remote_desktop_link_when_it_is_set_up(
+        jobs: JobsList, tmp_path: Path) -> None:
+    _paused(jobs, 1, "SDET")
+
+    text = questions(jobs, tmp_path / "data", remote_desktop=True)
+
+    assert "From your phone: open https://remotedesktop.google.com/access and do it in this computer's Chrome" in text
+
+
+def test_without_remote_desktop_a_pause_that_needs_chrome_waits_for_the_computer(
+        jobs: JobsList, tmp_path: Path) -> None:
+    _paused(jobs, 1, "SDET")
+
+    text = questions(jobs, tmp_path / "data")
+
+    assert "remotedesktop.google.com" not in text
+    assert "This waits until you are at the computer; the other jobs go on." in text
+
+
+def test_a_pause_for_an_answer_alone_needs_no_computer(jobs: JobsList, tmp_path: Path) -> None:
+    job = _paused(jobs, 1, "SDET")
+    jobs.move(job, "applying")
+    jobs.move(job, "paused", 'an answer to "Notice period?", in the Chrome tab "Apply · Example Labs"')
+
+    for ready in (True, False):
+        text = questions(jobs, tmp_path / "data", remote_desktop=ready)
+        assert "remotedesktop" not in text and "at the computer" not in text

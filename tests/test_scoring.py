@@ -18,6 +18,7 @@ from job_hunt import cli
 from job_hunt.jobs import FoundJob, JobsList
 from job_hunt.scoring import MODEL, SKILL, ScoreError, read_scores, score, skill_command
 from movable_clock import MovableClock
+from only_named_tools import assert_only_named_tools
 
 
 def _found(number: int, **change: object) -> FoundJob:
@@ -63,6 +64,7 @@ def test_the_skill_reads_only_the_job_folders_and_the_career_and_writes_only_its
         "out": str(project / "jobs" / "scores.json"),
     }
     assert command[command.index("--model") + 1] == MODEL == "claude-haiku-5-5"
+    assert_only_named_tools(command)
     assert command[command.index("--allowedTools") + 1].split(",") == [
         f"Read(/{project}/jobs/**)",
         f"Read(/{project}/data/career.json)",

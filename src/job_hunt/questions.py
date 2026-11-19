@@ -7,12 +7,19 @@ The state is all in `data/`, so a fresh session knows everything by running it:
 2. new jobs, numbered as `hunt list` numbers them, for `hunt pick` and `hunt skip`. Asked again,
    the jobs of the last list keep their numbers, so a reply to it still names the same jobs;
    only a job scored since numbers the whole list anew;
-3. paused applications, each with what it needs and the command after it;
-4. recruiter messages and 5. requests to talk, once the jobs list keeps them.
+3. paused applications, each with what it needs and the command after it. One that needs
+   hands in Chrome (a CAPTCHA, a sign-in) carries the Chrome Remote Desktop link when that is
+   set up, so it is done from the phone; without it, it waits until the person is at the
+   computer;
+4. recruiter messages, each with its drafted reply (`replies`), for `hunt send-reply`,
+   `hunt edit-reply` and `hunt skip-reply`; one that asks to talk shows the times its reply
+   offers, the resume it goes out with on LinkedIn, and the time held in the calendar on yes;
+5. notes to hiring managers after LinkedIn applications (`notes`), one question for all of them,
+   for `hunt send-notes` and `hunt skip-notes`.
 
 Before them comes work the person already approved and that stopped before its end (a picked
-job, one left `applying`): it asks nothing, the chat runs `hunt apply` for it. A company-site
-job whose resume is ready is that too; an Easy Apply one waits for the LinkedIn worker.
+job, one whose resume is ready, one left `applying`): it asks nothing, the chat runs
+`hunt apply` for it. So do approved notes that may go today: the chat runs `hunt send-notes`.
 """
 
 from __future__ import annotations
@@ -20,13 +27,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from job_hunt.apply import UNSURE
 from job_hunt.jobs import Job, JobsList
 
+if TYPE_CHECKING:
+    from job_hunt.notes import Notes
+    from job_hunt.replies import Threads
+
 LOG = "morning.log"
 TOLD = "morning.told"
 KINDS = {"easy_apply": "Easy Apply", "company_site": "company site"}
+REMOTE_DESKTOP = "https://remotedesktop.google.com/access"
 
 
 def log_failure(data: Path, step: str, error: object, clock: Callable[[], datetime]) -> None:
@@ -59,12 +72,31 @@ def untold_failures(data: Path) -> list[str]:
 
 
 def unfinished(jobs: JobsList) -> list[Job]:
-    return [job for job in jobs.in_states("picked", "resume_ready", "applying")
-            if not (job.state == "resume_ready" and job.kind == "easy_apply")]
+    return jobs.in_states("picked", "resume_ready", "applying")
 
 
-def anything_waiting(jobs: JobsList, data: Path) -> bool:
-    return bool(untold_failures(data) or jobs.waiting() or jobs.in_states("paused") or unfinished(jobs))
+def _notes_to_send(notes: Notes | None, data: Path, daily: int) -> int:
+    if notes is None:
+        return 0
+    # Imported here: `notes` uses this module's `log_failure`.
+    from job_hunt.notes import recover_sends, sendable
+
+    recover_sends(notes, data)
+    return len(sendable(notes, data, daily, notes.now()))
+
+
+def anything_waiting(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
+                     daily: int = 15) -> bool:
+    if notes is not None and (_notes_to_send(notes, data, daily) or notes.in_states("drafted", "unsure")):
+        return True
+    if threads is not None:
+        # Imported here: `replies` uses this module's `log_failure`.
+        from job_hunt.replies import recover_sends
+
+        # A send a dead run left is asked about, so it starts the session too.
+        recover_sends(threads, data)
+    return bool(untold_failures(data) or jobs.waiting() or jobs.in_states("paused") or unfinished(jobs)
+                or (threads is not None and threads.in_states("drafted", "unsure")))
 
 
 def where(job: Job) -> str:
@@ -98,7 +130,66 @@ def _failure(line: str) -> str:
     return f"  {said} (at {when})"
 
 
-def questions(jobs: JobsList, data: Path) -> str:
+def _indented(text: str, first: str) -> list[str]:
+    lines = text.strip().splitlines() or [""]
+    return [f"     {first}{lines[0]}", *(f"       {line}" for line in lines[1:])]
+
+
+DESCRIPTION_CHARACTERS = 600
+
+
+def _recruiters(jobs: JobsList, data: Path, threads: Threads) -> str | None:
+    # Imported here: `replies` uses this module's `log_failure`.
+    from job_hunt.replies import posting_path, recover_sends, resume_of
+    from job_hunt.settings import SettingsError, read_settings
+    from job_hunt.times import Talks, zone
+
+    recover_sends(threads, data)
+    waiting = threads.in_states("drafted", "unsure")
+    if not waiting:
+        return None
+    lines = [f"Recruiter messages ({len(waiting)}):"]
+    for thread in waiting:
+        channel = "Email" if thread.source == "email" else "LinkedIn message"
+        about = []
+        if thread.job is not None:
+            job = jobs.get(thread.job)
+            about.append(f"about job {job.id}: {job.title} at {job.company}")
+        if thread.asks_to_talk:
+            about.append("asks to talk")
+        subject = f', "{thread.subject}"' if thread.subject else ""
+        lines.append(f"  {thread.id}. {channel} from {thread.sender}{subject}"
+                     + (f" ({'; '.join(about)})" if about else ""))
+        lines += _indented(thread.text, "Message: ")
+        if (posting := posting_path(thread, data.parent)) is not None:
+            text = posting.read_text()
+            cut = text if len(text) <= DESCRIPTION_CHARACTERS else text[:DESCRIPTION_CHARACTERS].rstrip() + " …"
+            lines += _indented(cut, f"Job description ({posting}): ")
+        lines += _indented(thread.reply or "", "Reply: ")
+        if (talk := Talks(data / "jobs.db").of_reply(thread.id, thread.reply)) is not None and talk.state == "offered":
+            try:
+                where = zone(read_settings(data / "settings.json"))
+            except SettingsError:
+                where = talk.times()[0].tzinfo
+            times = [when.astimezone(where) for when in talk.times()]
+            offered = [when.strftime("%a %d %b %H:%M") for when in times]
+            lines.append(f"     Times offered: {', '.join(offered)} ({times[0].tzname()})")
+            if (resume := resume_of(thread, data.parent)) is not None:
+                lines.append(f"     Resume attached: {resume}")
+            lines.append(f'     On yes, "Held: {talk.title}" is added to Google Calendar at {offered[0]}')
+        if thread.state == "unsure":
+            lines.append(f"     Needs {thread.state_reason} (then: hunt skip-reply {thread.id} if it went, "
+                         f"hunt send-reply {thread.id} to send it again)")
+        else:
+            if thread.state_reason:
+                lines.append(f"     The last send did not go out: {thread.state_reason}")
+            lines.append(f'     (then: hunt send-reply {thread.id}, hunt edit-reply {thread.id} "<the reply>", '
+                         f"hunt offer-times {thread.id}, hunt skip-reply {thread.id})")
+    return "\n".join(lines)
+
+
+def questions(jobs: JobsList, data: Path, threads: Threads | None = None, notes: Notes | None = None,
+              daily: int = 15, *, remote_desktop: bool = False) -> str:
     """The questions as text. Showing them numbers the new jobs and marks the failures told."""
     parts: list[str] = []
     log, told = _told(data)
@@ -109,6 +200,8 @@ def questions(jobs: JobsList, data: Path) -> str:
     if left:
         parts.append("\n".join([f"Unfinished applications ({len(left)}): run hunt apply", *(
             f"  {job.id}. {job.title} at {job.company}" for job in left)]))
+    if to_send := _notes_to_send(notes, data, daily):
+        parts.append(f"Approved notes to hiring managers not sent yet ({to_send}): run hunt send-notes")
     waiting = {job.id: job for job in jobs.waiting()}
     kept = {number: waiting[job] for number, job in sorted(jobs.last_list().items()) if job in waiting}
     if waiting and len(kept) == len(waiting):
@@ -122,6 +215,17 @@ def questions(jobs: JobsList, data: Path) -> str:
         parts.append("\n".join([f"Paused applications ({len(paused)}):", *(
             f"  {job.id}. {job.title} at {job.company}: needs {job.state_reason} (then: {then(job)})"
             for job in paused)]))
+        # An answer is typed from anywhere; the rest is done in this computer's Chrome.
+        if any(not (job.state_reason or "").startswith("an answer to ") for job in paused):
+            parts[-1] += ("\n  From your phone: open " + REMOTE_DESKTOP + " and do it in this computer's Chrome."
+                          if remote_desktop else "\n  This waits until you are at the computer; the other jobs go on.")
+    if threads is not None and (recruiters := _recruiters(jobs, data, threads)):
+        parts.append(recruiters)
+    if notes is not None:
+        from job_hunt.notes import ask
+
+        if (asked := ask(notes, jobs)) is not None:
+            parts.append(asked)
     if failures:
         # Up to what was read: a failure logged meanwhile is told next time.
         (data / TOLD).write_text(f"{len(log)}\n")

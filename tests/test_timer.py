@@ -166,3 +166,67 @@ def test_paths_with_spaces_and_percent_signs_are_quoted(tmp_path: Path) -> None:
     assert f'WorkingDirectory={str(root).replace("%", "%%")}' in service
     assert f'ExecStart="/opt/my tools/uv" run --project "{str(root).replace("%", "%%")}" hunt morning' in service
     assert 'Environment="PATH=/opt/my tools:/usr/bin"' in service
+
+
+class Refusing(Runner):
+    """A scheduler that refuses to stop the timer."""
+
+    def __init__(self, said: str) -> None:
+        super().__init__()
+        self.said = said
+
+    def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        self.commands.append(command)
+        refused = command[:3] == ["systemctl", "--user", "disable"] or command[1] == "bootout"
+        return subprocess.CompletedProcess(command, 5 if refused else 0, "", self.said if refused else "")
+
+
+def test_a_timer_systemd_will_not_stop_is_not_called_off(tmp_path: Path) -> None:
+    home, root = tmp_path / "home", tmp_path / "project"
+    timer("on", "Linux", home, root, 7, run=Runner(), uv="uv", path="/usr/bin")
+
+    with pytest.raises(TimerError, match="Access denied"):
+        timer("off", "Linux", home, root, 7, run=Refusing("Access denied"), uv="uv", path="/usr/bin")
+
+    assert (home / ".config" / "systemd" / "user" / f"{UNIT}.timer").exists()
+
+
+def test_off_when_already_off_runs_nothing(tmp_path: Path) -> None:
+    runner = Runner()
+
+    said = timer("off", "Linux", tmp_path, tmp_path, 7, run=runner, uv="uv", path="/usr/bin")
+
+    assert runner.commands == [] and "off" in said
+
+
+def test_a_macos_agent_launchd_will_not_unload_is_not_called_off(tmp_path: Path) -> None:
+    home, root = tmp_path / "home", tmp_path / "project"
+    timer("on", "Darwin", home, root, 7, run=Runner(), uv="uv", path="/usr/bin", uid=501)
+
+    with pytest.raises(TimerError, match="Operation not permitted"):
+        timer("off", "Darwin", home, root, 7, run=Refusing("Operation not permitted"), uv="uv", path="/usr/bin",
+              uid=501)
+    assert (home / "Library" / "LaunchAgents" / f"{LABEL}.plist").exists()
+
+
+def test_a_macos_agent_not_loaded_is_still_turned_off(tmp_path: Path) -> None:
+    home, root = tmp_path / "home", tmp_path / "project"
+    timer("on", "Darwin", home, root, 7, run=Runner(), uv="uv", path="/usr/bin", uid=501)
+
+    timer("off", "Darwin", home, root, 7, run=Refusing("Boot-out failed: 3: No such process"), uv="uv",
+          path="/usr/bin", uid=501)
+
+    assert not (home / "Library" / "LaunchAgents" / f"{LABEL}.plist").exists()
+
+
+def test_hunt_timer_off_needs_no_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "settings.json").write_text("{broken")
+    monkeypatch.setattr(cli, "DATA", tmp_path / "data")
+    monkeypatch.setattr(cli.Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(cli.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(cli, "run_command", Runner())
+
+    assert cli.main(["timer", "off"]) == 0

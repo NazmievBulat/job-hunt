@@ -116,14 +116,19 @@ def timer(
             (units / f"{UNIT}.timer").write_text(timer_unit)
             _must(run, ["systemctl", "--user", "daemon-reload"])
             _must(run, ["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"])
-        else:
-            run(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
+        elif (units / f"{UNIT}.timer").exists():
+            # The units stay while systemd refuses: removed, nothing would show it still runs.
+            _must(run, ["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
             for name in (f"{UNIT}.service", f"{UNIT}.timer"):
                 (units / name).unlink(missing_ok=True)
     else:
         agent = _agent(home)
         # An agent loaded before is unloaded first; one that was not is no error.
-        run(["launchctl", "bootout", f"gui/{uid}/{LABEL}"])
+        unloaded = run(["launchctl", "bootout", f"gui/{uid}/{LABEL}"])
+        said = f"{unloaded.stderr} {unloaded.stdout}"
+        if unloaded.returncode != 0 and action == "off" and not any(
+                gone in said for gone in ("No such process", "Could not find")):
+            raise TimerError(f"launchctl bootout failed: {said.strip().splitlines()[-1] if said.strip() else 'no message'}")
         if action == "on":
             agent.parent.mkdir(parents=True, exist_ok=True)
             agent.write_text(launchd_plist(root, hour, uv, path))

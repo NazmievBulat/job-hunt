@@ -15,6 +15,7 @@ from pathlib import Path
 from job_hunt.apply import RESUME_SKILL, SITE_SKILL, AnswerError, ApplyError, answer, apply, applied, resume_job
 from job_hunt.career import career_from_export, read_career, write_career
 from job_hunt.finder import FinderError, fetch_page, find, run_claude
+from job_hunt.finder import Summary as FindSummary
 from job_hunt.jobs import Job, JobsList, PickError
 from job_hunt.morning import morning, start_session
 from job_hunt.notify import NotifyError, notify, post_pushover
@@ -55,7 +56,7 @@ def run_skill(command: list[str]) -> None:
     run_claude(command, ROOT)
 
 
-def find_step() -> None:
+def find_step() -> FindSummary:
     summary = find(
         read_settings(DATA / "settings.json"),
         JobsList(DATA / "jobs.db"),
@@ -67,6 +68,14 @@ def find_step() -> None:
     for problem in summary.problems:
         print(f"hunt find: left out {problem}", file=sys.stderr)
     print(summary)
+    return summary
+
+
+def _find_and_tell() -> None:
+    """For the morning: a job the finder left out is a failure it tells, not only a line."""
+    summary = find_step()
+    if summary and summary.problems:
+        raise FinderError(f"left out {'; '.join(summary.problems)}")
 
 
 def _find(args: argparse.Namespace) -> int:
@@ -216,7 +225,7 @@ def _status(args: argparse.Namespace) -> int:
 
 def _morning(args: argparse.Namespace) -> int:
     try:
-        print(morning(JobsList(DATA / "jobs.db"), DATA, find=find_step, score=_score_every_job,
+        print(morning(JobsList(DATA / "jobs.db"), DATA, find=_find_and_tell, score=_score_every_job,
                       start=lambda: start_session(ROOT)))
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         # Today's session did not start, so the next morning's questions tell it.
@@ -251,8 +260,10 @@ def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 def _timer(args: argparse.Namespace) -> int:
     try:
-        hour = read_settings(DATA / "settings.json").morning_hour
-        said = timer(args.action or "status", platform.system(), Path.home(), ROOT, hour, run=run_command,
+        action = args.action or "status"
+        # Turning it off needs no hour, so broken settings never keep the timer running.
+        hour = 0 if action == "off" else read_settings(DATA / "settings.json").morning_hour
+        said = timer(action, platform.system(), Path.home(), ROOT, hour, run=run_command,
                      uv=shutil.which("uv") or "uv", path=os.environ.get("PATH", ""), uid=os.getuid())
     except (SettingsError, TimerError) as error:
         print(f"hunt timer: {error}", file=sys.stderr)

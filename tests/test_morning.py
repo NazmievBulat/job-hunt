@@ -289,3 +289,21 @@ def test_jobs_the_scoring_left_out_are_logged(tmp_path: Path, monkeypatch: pytes
     assert "hunt score: not scored, still new: job 1 (QA Automation Engineer at Example Labs)" in (
         data / "morning.log").read_text()
     assert started == [tmp_path]
+
+
+def test_jobs_the_finder_left_out_are_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_hunt import cli
+    from job_hunt.finder import Summary as Found
+
+    data = tmp_path / "data"
+    monkeypatch.setattr(cli, "DATA", data)
+    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    monkeypatch.setattr(cli, "find_step", lambda: Found(1, 1, 0, ["entry 1: no title"]))
+    monkeypatch.setattr(cli, "score_step", lambda: None)
+    started: list[Path] = []
+    monkeypatch.setattr(cli, "start_session", started.append)
+
+    assert cli.main(["morning"]) == 0
+
+    assert "hunt find: left out entry 1: no title" in (data / "morning.log").read_text()
+    assert started == [tmp_path]

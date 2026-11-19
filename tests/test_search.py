@@ -1178,6 +1178,104 @@ def test_a_board_an_alerts_link_leads_to_is_swept_in_the_same_run(
     assert any(job.source == "lever" and job.company == "Hooli Example" for job in jobs.all())
 
 
+def test_an_alerts_run_that_breaks_unexpectedly_is_named_and_the_others_finish(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    def alerts(command: list[str]) -> None:
+        raise PermissionError("claude: Permission denied")
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    companies.add([Board("greenhouse", "examplelabs")])
+    search = Search(get=_board_sites(), pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", tmp_path / "found-jobs.json", run=alerts, fetch=_fetch,
+                   clock=clock, search=search)
+    assert summary.failed == ["alert: PermissionError: claude: Permission denied"]
+    assert "greenhouse: 3 found, 2 new (1 board)" in str(summary).splitlines()
+    new = [job for job in jobs.all() if job.state == "new"]
+    assert new and all((tmp_path / "jobs" / str(job.id) / "posting.md").exists() for job in new)
+
+
+def test_a_board_met_through_the_same_job_under_another_link_is_swept_in_the_same_run(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    # LinkedIn listed the job yesterday; today an alert brings it again, on the company's Lever board.
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    jobs.add(FoundJob(link="https://www.linkedin.com/jobs/view/4199999999", title="QA Automation Engineer",
+                      company="Hooli Example", place="Durham, NC", remote="on_site", board="linkedin", email_id=None,
+                      email_date=None, area="Raleigh-Durham-Chapel Hill", source="linkedin_search"),
+             description="Test the clinic software.", kind="company_site")
+    found = tmp_path / "found-jobs.json"
+
+    def alerts(command: list[str]) -> None:
+        found.write_text(json.dumps({"emails": 1, "jobs": [{
+            "link": "https://jobs.lever.co/hooli-example/2222", "title": "QA Automation Engineer",
+            "company": "Hooli Example, Inc.", "place": "Durham, NC", "remote": "on_site", "board": "lever",
+            "email_id": "18c0ffee00000009", "email_date": "2026-11-18T06:00:00+00:00",
+            "area": "Raleigh-Durham-Chapel Hill"}]}))
+
+    sites = _board_sites()
+    sites.answers["https://api.lever.co/v0/postings/hooli-example?mode=json"] = _ok("lever.json")
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    search = Search(get=sites, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    summary = find(settings, jobs, tmp_path / "jobs", found, run=alerts, fetch=_fetch, clock=clock, search=search)
+    assert "same job from two sources: 1" in str(summary).splitlines()
+    assert sites.urls("https://api.lever.co/v0/postings/hooli-example")
+
+
+def test_a_page_an_alert_leads_to_shares_its_hosts_limit_with_the_boards(
+    tmp_path: Path, settings: Settings, clock: MovableClock
+) -> None:
+    lock = threading.Lock()
+    running = [0]
+    most = [0]
+
+    def on_workable(ask: Callable[[], Any]) -> Any:
+        with lock:
+            running[0] += 1
+            most[0] = max(most[0], running[0])
+        try:
+            time.sleep(0.2)
+            return ask()
+        finally:
+            with lock:
+                running[0] -= 1
+
+    sites = _board_sites()
+
+    def get(url: str, body: object = None) -> Answer:
+        if url.startswith("https://apply.workable.com/"):
+            return on_workable(lambda: Answer(200, '{"jobs": []}'))
+        return sites(url, body)
+
+    found = tmp_path / "found-jobs.json"
+
+    def alerts(command: list[str]) -> None:
+        # The alert's page is read while the boards hold the host's four requests.
+        _wait_for(lambda: running[0] == 4)
+        found.write_text(json.dumps({"emails": 1, "jobs": [{
+            "link": "https://apply.workable.com/hooli/j/AB12CD34EF/", "title": "QA Automation Engineer",
+            "company": "Hooli Example", "place": "Durham, NC", "remote": "on_site", "board": "workable",
+            "email_id": "18c0ffee00000009", "email_date": "2026-11-18T06:00:00+00:00",
+            "area": "Raleigh-Durham-Chapel Hill"}]}))
+
+    def fetch(link: str) -> tuple[str, str]:
+        if urlsplit(link).hostname == "apply.workable.com":
+            return on_workable(lambda: _fetch(link))
+        return _fetch(link)
+
+    jobs = JobsList(tmp_path / "jobs.db", clock=clock)
+    companies = _companies(tmp_path, clock)
+    companies.indexed()
+    companies.add([Board("workable", f"example-{number}") for number in range(8)])
+    search = Search(get=get, pace=_no_pause(), companies=companies, sleep=lambda seconds: None)
+    find(settings, jobs, tmp_path / "jobs", found, run=alerts, fetch=fetch, clock=clock, search=search)
+    assert jobs.has("https://apply.workable.com/hooli/j/AB12CD34EF/")
+    assert most[0] == 4
+
+
 def test_hunt_find_help_says_the_sources_run_at_once_and_a_job_from_two_is_listed_once(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

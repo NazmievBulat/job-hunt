@@ -133,6 +133,23 @@ class Pace:
             yield
 
 
+class Hosts:
+    """At most `HOST_LIMIT` requests at a time to one host, whichever thread makes them: the
+    boards' and the job pages the alerts and the feeds lead to."""
+
+    def __init__(self, limit: int = HOST_LIMIT) -> None:
+        self.limit = limit
+        self._slots: dict[str, threading.BoundedSemaphore] = {}
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def slot(self, host: str) -> Iterator[None]:
+        with self._lock:
+            slot = self._slots.setdefault(host.lower(), threading.BoundedSemaphore(self.limit))
+        with slot:
+            yield
+
+
 # Areas
 
 # Each area's states and the cities in it. `/setup` adds the areas a person names.
@@ -676,6 +693,8 @@ class Search:
     sleep: Callable[[float], None] = time.sleep
     # The time LinkedIn's searches start at; None for the run's start (tests).
     clock: Callable[[], datetime] | None = None
+    # Each host's requests at once, shared with the job pages the other sources read.
+    hosts: Hosts = field(default_factory=Hosts)
 
     def linkedin(self, settings: Settings, jobs: JobsList, started: datetime, save: Save
                  ) -> tuple[list[str], list[str]]:
@@ -724,9 +743,12 @@ class Search:
     def _read(self, boards: list[Board], done: Sweep, settings: Settings, jobs: JobsList, started: datetime,
               save: Save) -> None:
         known = jobs.known_links()
-        read = by_host([(api_host(board), lambda board=board: read_board(board, settings, self.get, known, now=started,
-                                                                           sleep=self.sleep))
-                        for board in boards])
+
+        def read(board: Board) -> BoardRead:
+            with self.hosts.slot(api_host(board)):
+                return read_board(board, settings, self.get, known, now=started, sleep=self.sleep)
+
+        read = by_host([(api_host(board), lambda board=board: read(board)) for board in boards])
         for board, result in zip(boards, read):
             done.swept.add(board)
             counted = done.tally[board.system]

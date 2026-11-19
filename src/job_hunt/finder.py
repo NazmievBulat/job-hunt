@@ -479,6 +479,8 @@ def _find(
             return False
         jobs.also_link(first, each, page_link)
         same.append(each.link)
+        # Its board may be one the index does not have yet.
+        met.extend(page for page in (each.link, page_link) if page)
         return True
 
     def save(each: FoundJob, description: str | None) -> bool:
@@ -506,8 +508,12 @@ def _find(
             return jobs.add(each, page_link=ended_at, description=text, kind=kind, problem=problem) is not None
 
     def _read(link: str) -> tuple[str | None, str | None, str | None, str | None, str | None]:
-        if search is None or not urlsplit(link).netloc.endswith("linkedin.com"):
+        if search is None:
             return _read_page(link, fetch)
+        if not urlsplit(link).netloc.endswith("linkedin.com"):
+            # A board's host takes no more requests at once than the sweep gives it.
+            with search.hosts.slot(urlsplit(link).hostname or ""):
+                return _read_page(link, fetch)
         # LinkedIn's pages count as its requests, paced as its searches are, one at a time.
         with search.pace.turn():
             if search.pace.stopped:
@@ -549,7 +555,8 @@ def _find(
     if isinstance(alert, FinderError):
         summary.failed.append(f"alert: {alert}")
     elif isinstance(alert, Exception):
-        raise alert
+        # Whatever broke in the alerts, the other sources' jobs still get their postings.
+        summary.failed.append(f"alert: {type(alert).__name__}: {alert}")
     else:
         summary.emails, found_jobs, summary.problems, summary.new = alert
         summary.jobs = len(found_jobs)

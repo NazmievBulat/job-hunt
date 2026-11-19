@@ -4,27 +4,36 @@
      "areas": ["Raleigh-Durham-Chapel Hill", "New York City"],
      "remote": "include",
      "lowest_salary": 120000,
-     "morning_hour": 7}
+     "morning_hour": 7,
+     "pushover": {"token": "...", "user": "..."}}
 
 Areas are names as a person says them, never distances; the finder's skill says which of them
 a job is in. `remote` is `include` (remote jobs too), `exclude` (no remote jobs) or `only`.
-`lowest_salary` may be null.
+`lowest_salary` may be null. `pushover`, the keys `hunt notify` pushes the chat's questions
+with, may be left out; they are never printed.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 Remote = Literal["include", "exclude", "only"]
 REMOTE: tuple[Remote, ...] = ("include", "exclude", "only")
 FIELDS = ("titles", "areas", "remote", "lowest_salary", "morning_hour")
+OPTIONAL = ("pushover",)
 
 
 class SettingsError(ValueError):
     """Why the settings cannot be used, in words that say what to change."""
+
+
+@dataclass(frozen=True)
+class Pushover:
+    token: str = field(repr=False)
+    user: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -34,6 +43,7 @@ class Settings:
     remote: Remote
     lowest_salary: int | None
     morning_hour: int
+    pushover: Pushover | None = None
 
 
 def _names(data: dict[str, Any], field: str) -> list[str]:
@@ -52,6 +62,17 @@ def _whole_number(data: dict[str, Any], field: str, low: int, high: int | None =
     return value
 
 
+def _pushover(data: dict[str, Any]) -> Pushover | None:
+    keys = data.get("pushover")
+    if keys is None:
+        return None
+    # The message names the fields only: the keys are never repeated.
+    if (not isinstance(keys, dict) or set(keys) != {"token", "user"}
+            or not all(isinstance(key, str) and key.strip() for key in keys.values())):
+        raise SettingsError('pushover must be {"token": ..., "user": ...}, both filled in, or left out')
+    return Pushover(token=keys["token"].strip(), user=keys["user"].strip())
+
+
 def read_settings(path: Path) -> Settings:
     if not path.exists():
         raise SettingsError(f"{path} is missing: run /setup to make it")
@@ -62,7 +83,7 @@ def read_settings(path: Path) -> Settings:
     if not isinstance(data, dict):
         raise SettingsError(f"{path} must hold one object")
     missing = [field for field in FIELDS if field not in data]
-    unknown = sorted(set(data) - set(FIELDS))
+    unknown = sorted(set(data) - set(FIELDS) - set(OPTIONAL))
     if missing:
         raise SettingsError(f"{path} has no {', '.join(missing)}: run /setup to add it")
     if unknown:
@@ -83,4 +104,5 @@ def read_settings(path: Path) -> Settings:
         remote=remote,
         lowest_salary=lowest_salary,
         morning_hour=_whole_number(data, "morning_hour", 0, 23),
+        pushover=_pushover(data),
     )
